@@ -1,0 +1,153 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://paw.dev/schemas/subagent-contract.schema.json",
+  "title": "Paw Sub-Agent Output Contract",
+  "description": "Canonical machine-readable output every sub-agent (scout/planner/worker/reviewer) MUST return. Validated at runtime by the orchestrator. Invalid -> one retry -> status 'blocked'. The orchestrator never crashes on a bad response. SPEC §14.1.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "status",
+    "confidence",
+    "agent",
+    "session_id",
+    "artifact_ref",
+    "changed_files",
+    "inspected_files",
+    "risks",
+    "next_actions",
+    "tokens_used",
+    "usd_cost",
+    "degraded"
+  ],
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["pass", "fail", "blocked", "needs_user_decision"],
+      "description": "Terminal status of this sub-agent run."
+    },
+    "confidence": {
+      "type": "string",
+      "enum": ["low", "medium", "high"]
+    },
+    "agent": {
+      "type": "string",
+      "enum": ["scout", "planner", "worker", "reviewer"],
+      "description": "Which sub-agent produced this report."
+    },
+    "session_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Owning task/session id (ADR-16)."
+    },
+    "slice_id": {
+      "type": ["string", "null"],
+      "description": "Slice this run belongs to, if any (ADR-19). Null for scout/planner."
+    },
+    "artifact_ref": {
+      "type": "string",
+      "pattern": "^\\.paw/artifacts/.+/(scout|planner|worker|reviewer)/report\\.md$",
+      "description": "Path to the full human-readable report. The orchestrator drills down here on demand instead of inlining detail."
+    },
+    "changed_files": {
+      "type": "array",
+      "description": "Files written by this run (worker only; empty for R0 agents).",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "change_type", "content_hash"],
+        "properties": {
+          "path": { "type": "string", "minLength": 1 },
+          "change_type": { "type": "string", "enum": ["create", "modify", "delete", "rename"] },
+          "content_hash": { "type": "string", "description": "Post-change content hash for idempotency (ADR-21)." },
+          "apply_method": { "type": "string", "enum": ["diff", "fuzzy_diff", "full_file"], "description": "How the edit was applied (SPEC §9.2)." }
+        }
+      }
+    },
+    "inspected_files": {
+      "type": "array",
+      "description": "Files/spans inspected. Use ranked file:line spans, never whole-file dumps (SPEC §8.1).",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path"],
+        "properties": {
+          "path": { "type": "string", "minLength": 1 },
+          "line_span": { "type": "string", "pattern": "^[0-9]+-[0-9]+$", "description": "e.g. '42-87'" },
+          "rationale": { "type": "string", "maxLength": 200, "description": "One-line reason this span is relevant." },
+          "rank": { "type": "number" },
+          "required": { "type": "boolean", "description": "If true and dropped by a bounded handoff, MUST escalate with drilldown (recall guard, SPEC §8.1)." }
+        }
+      }
+    },
+    "plan_slices": {
+      "type": "array",
+      "description": "Planner only: ordered vertical slices (ADR-19).",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["slice_id", "title", "order"],
+        "properties": {
+          "slice_id": { "type": "string" },
+          "title": { "type": "string" },
+          "order": { "type": "integer", "minimum": 0 },
+          "target_files": { "type": "array", "items": { "type": "string" } },
+          "max_risk_level": { "type": "string", "pattern": "^R[0-7]$" },
+          "acceptance": { "type": "string", "description": "Measurable acceptance for this slice." }
+        }
+      }
+    },
+    "risks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["description", "severity"],
+        "properties": {
+          "description": { "type": "string" },
+          "severity": { "type": "string", "enum": ["low", "medium", "high", "critical"] }
+        }
+      }
+    },
+    "next_actions": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "blocked_reason": {
+      "type": ["object", "null"],
+      "description": "Required when status is 'blocked' or 'needs_user_decision'. Human-readable reason + suggested action (liveness invariant, SPEC §8.7).",
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "type": "string",
+          "enum": [
+            "NEEDS_USER_DECISION", "BUDGET_EXCEEDED", "TEST_FAILURE", "BUILD_FAILURE",
+            "TOOL_PERMISSION", "CONTEXT_MISSING", "PROVIDER_UNAVAILABLE",
+            "SANDBOX_UNAVAILABLE", "PATCH_APPLY_FAILED"
+          ]
+        },
+        "message": { "type": "string" },
+        "suggested_action": { "type": "string" }
+      }
+    },
+    "tokens_used": { "type": "integer", "minimum": 0 },
+    "usd_cost": { "type": "number", "minimum": 0 },
+    "degraded": {
+      "type": "boolean",
+      "description": "True if this run used a lower model tier due to failover (T2<->T4 honesty, SPEC §9.4). MUST surface in final report."
+    },
+    "model_used": {
+      "type": ["string", "null"],
+      "description": "Resolved model id actually used (for audit/degraded reporting)."
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "status": { "enum": ["blocked", "needs_user_decision"] } } },
+      "then": { "required": ["blocked_reason"], "properties": { "blocked_reason": { "type": "object" } } }
+    },
+    {
+      "if": { "properties": { "agent": { "const": "planner" }, "status": { "const": "pass" } } },
+      "then": { "required": ["plan_slices"] }
+    }
+  ]
+}

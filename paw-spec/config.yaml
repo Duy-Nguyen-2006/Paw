@@ -1,0 +1,200 @@
+# Paw — default runtime configuration (v0.4 FINAL)
+# Single source of runtime defaults. Numbers are adaptive starting defaults
+# tuned by the eval harness (SPEC §19). Model names are NEVER hardcoded in code;
+# they are resolved here via the ModelProvider abstraction (ADR-6, ADR-14).
+
+version: 1
+
+# ---------------------------------------------------------------------------
+# Providers & model routing (ADR-6, ADR-14)
+# Tier names are stable; concrete model ids are config and may change anytime.
+# ---------------------------------------------------------------------------
+providers:
+  primary:   { adapter: hosted_a, base_url_env: PAW_PROVIDER_A_URL, api_key_env: PAW_PROVIDER_A_KEY }
+  secondary: { adapter: hosted_b, base_url_env: PAW_PROVIDER_B_URL, api_key_env: PAW_PROVIDER_B_KEY }
+  local:     { adapter: ollama, base_url: "http://localhost:11434", optional: true }
+
+model_tiers:
+  cheap:  { provider: primary,   model: "<configured-fast-model>",     thinking: false }
+  mid:    { provider: primary,   model: "<configured-mid-model>",      thinking: false }
+  strong: { provider: primary,   model: "<configured-strong-model>",   thinking: true  }
+  # failover targets, tried in order on 429/5xx after retries (sets degraded=true on lower tier)
+  failover_order: [ secondary, local ]
+
+# Per-role tier assignment (ADR-14)
+role_routing:
+  classify:        cheap
+  extract:         cheap
+  format:          cheap
+  schema_validate: cheap
+  summarize:       cheap
+  scout_rank:      mid
+  worker_simple:   mid
+  planner:         strong   # extended thinking
+  reviewer:        strong   # extended thinking
+  worker_highrisk: strong
+
+# extended/deep thinking is gated (ADR-14)
+thinking:
+  enabled_for_classes: [ high_risk ]
+  enabled_for_roles:   [ planner, reviewer ]
+
+# ---------------------------------------------------------------------------
+# Context discipline (ADR-13, SPEC §8.1-8.2) — adaptive, NOT flat
+# window target = min(model_context_limit * 0.5, class_cap_tokens)
+# ---------------------------------------------------------------------------
+context:
+  class_cap_tokens:
+    trivial:   16000
+    standard:  48000
+    high_risk: 96000
+  subagent_handoff_max_tokens:
+    scout:    4000
+    planner:  3000
+    worker:   2000
+    reviewer: 2500
+  tool_output_max_tokens: 1500       # stdout/logs truncated head+tail beyond this
+  file_read_max_bytes:    262144     # >256KB or binary => metadata only, never inline
+  drilldown:              by_artifact_ref
+  eviction_order:         [ L7_runtime_evidence, L8_session_summary ]   # never evict L0-L3
+  assembly_order:         [ L0_system, L5_rules, L6_memories, L2_spec, L3_plan, L4_scout, L1_intent, L7_evidence, L8_summary ]
+  required_span_recall_min: 0.95     # KPI guard against harmful truncation
+
+# Prompt caching is ADVISORY only — never a CI gate (SPEC §8.2)
+prompt_cache:
+  enabled: true
+  assemble_most_stable_first: true
+  advisory_target_hit_rate: 0.70     # dashboard goal, hosted multi-turn only
+  applies_to: [ primary, secondary ] # local (Ollama) excluded -> KPI N/A
+
+# ---------------------------------------------------------------------------
+# Budgets — per class & per slice (ADR-10, ADR-16, SPEC §8.6) — NOT flat
+# ---------------------------------------------------------------------------
+budget:
+  per_task:
+    trivial:   { max_usd: 0.10, max_tokens: 40000,   warn_at_pct: 70 }
+    standard:  { max_usd: 0.75, max_tokens: 250000,  warn_at_pct: 70 }
+    high_risk: { max_usd: 3.00, max_tokens: 1200000, warn_at_pct: 60 }
+  per_slice:
+    soft_fraction_of_task: 0.40      # a single slice should not silently eat the task budget
+  on_exceed:
+    interactive:     confirm         # ask user to continue
+    non_interactive: abort           # fail-closed (ADR-17); override via --budget-on-exceed=block
+
+# ---------------------------------------------------------------------------
+# Resilience & liveness (ADR-15, SPEC §8.7)
+# ---------------------------------------------------------------------------
+resilience:
+  llm_call:  { timeout_sec: 60,  retries: 3, backoff: exponential_jitter, on_5xx_or_429: failover_model }
+  tool_call: { timeout_sec: 120, kill_on_timeout: true }
+  subagent:  { wall_clock_sec: 180, on_timeout: blocked }
+  loop_caps: { max_subagent_iterations: 6 }   # planner<->reviewer disagreement -> escalate / fail-closed
+  active_time_clock:
+    enabled: true
+    pause_states: [ BLOCKED_NEEDS_USER_DECISION ]  # human wait excluded from SLA latency
+
+# ---------------------------------------------------------------------------
+# Complexity routing & classifier (SPEC §6.2)
+# ---------------------------------------------------------------------------
+routing:
+  classifier_conservative_bias: true
+  trivial_requires_all:
+    max_files: 1
+    cross_layer: false
+    max_risk_level: R2
+    security_path: false
+  clarify_questions:
+    trivial:   { min: 0, max: 2 }
+    standard:  { min: 3, max: 8 }
+    high_risk: { min: 3, max: 20 }
+
+# ---------------------------------------------------------------------------
+# Approval / permission model (ADR-8, ADR-17, SPEC §7, §9.6)
+# ---------------------------------------------------------------------------
+approval:
+  default_mode: balanced            # strict | balanced | autonomous
+  risk_levels:
+    R0: read
+    R1: safe_write
+    R2: build_test
+    R3: dep_install
+    R4: migration
+    R5: deploy
+    R6: destructive_fs
+    R7: secrets_auth_payment
+  matrix:
+    auto:               [ R0, R1, R2 ]
+    require_approval:    [ R3, R4, R5, R6 ]
+    always_human_never_auto: [ R7 ]   # cannot be pre-authorized by any flag/mode
+  non_interactive:                   # ADR-17 — fail-closed by default
+    product_approval: fail_closed
+    engineering_R3_R6: require_explicit_allow_flag   # --allow R3,R4
+    R7: fail_closed_always
+    on_loop_cap: fail_closed_with_both_positions
+
+# ---------------------------------------------------------------------------
+# Sandbox & security (ADR-18, SPEC §11, §14.2)
+# ---------------------------------------------------------------------------
+sandbox:
+  preferred: [ bubblewrap_landlock, bubblewrap_only, userns_only ]
+  on_unavailable: refuse_write       # force --read-only; require --no-sandbox-i-understand to override
+  fs_allowlist: [ "<repo_root>" ]
+  network: default_deny
+  egress_allowlist:                  # hosts allowed despite default-deny
+    - provider_hosts                 # resolved from providers.*.base_url
+    - package_registries             # npm / pypi mirrors in use
+    - "localhost"                     # local model
+secrets:
+  read_plane_exclude: [ ".env*", "**/secrets/**", "**/*.pem", "**/*.key", "id_rsa*" ]
+  redact_at_io_write: true
+  redact_patterns: [ env_values, api_keys, tokens, cookies, auth_headers, private_keys ]
+  flag_high_entropy: true
+injection:
+  untrusted_sources: [ web, readme, issues, comments, logs, browser ]
+  handling: read_only_subagent_structured_summary_only   # never executable instructions
+  redteam_block_target: 1.0          # 100% (KPI, PR hard gate)
+
+# ---------------------------------------------------------------------------
+# Edit strategy (ADR-21, SPEC §8.5, §9.2)
+# ---------------------------------------------------------------------------
+edit:
+  strategy: diff_first
+  fuzzy_apply_retries: 2
+  full_file_rewrite_max_lines: 400   # beyond this, BLOCKED_PATCH_APPLY_FAILED
+  idempotency: content_hash_compare  # skip if change already present; re-derive if base drifted
+
+# ---------------------------------------------------------------------------
+# Persistence (ADR-5, SPEC §12)
+# ---------------------------------------------------------------------------
+persistence:
+  atomic_writes: write_temp_rename
+  locks:
+    heartbeat_ttl_sec: 120           # stale lock (dead pid OR expired heartbeat) -> auto-reclaim
+  retention:
+    keep_last_sessions: 20
+    artifact_days: 7
+  gitignore:
+    commit:   [ config.yaml, version, memory/memories.yaml, rules/, decisions/ ]
+    ignore:   [ sessions/, artifacts/, cache/, logs/, memory/pending.yaml, memory/rejected.yaml ]
+
+# ---------------------------------------------------------------------------
+# Verification gates (SPEC §16) — v1
+# ---------------------------------------------------------------------------
+verify:
+  v1_gates: [ working_tree_baseline, dep_diff, tsc, eslint_ruff, unit_tests, build, reviewer_diff, a11y_lint_light ]
+  parallel_native: true
+  summary_max_tokens: 1500
+  v2_optin_gates: [ browser_verifier, sonarqube, design_layer_a ]
+
+# ---------------------------------------------------------------------------
+# SLA / KPI targets (SPEC §19) — active machine-time, human wait excluded
+# ---------------------------------------------------------------------------
+sla:
+  trivial:   { max_latency_sec: 30,  max_usd: 0.10 }
+  standard:  { max_latency_sec: 120, max_usd: 0.75 }
+  high_risk: { max_latency_sec: 600, max_usd: 3.00 }
+kpi:
+  pr_hard_gates: [ schema_validation, redteam_injection, secret_leak, liveness_resume, budget_timeout_enforcement ]
+  advisory_only: [ cache_hit_rate, pass_first_try_rate, accepted_without_edit_rate ]
+  live_eval_schedule: nightly
+  live_eval_pinned_snapshots: true
