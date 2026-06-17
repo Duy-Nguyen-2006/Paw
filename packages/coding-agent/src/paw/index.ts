@@ -213,6 +213,17 @@ export {
 	evaluatePawVerifyGate,
 } from "./resilience-policy.ts";
 export type {
+	PawResumeCommandInput,
+	PawResumeCommandInvalidSessionResult,
+	PawResumeCommandLockedResult,
+	PawResumeCommandMissingProjectResult,
+	PawResumeCommandMissingSessionResult,
+	PawResumeCommandReadyResult,
+	PawResumeCommandReclaimedLock,
+	PawResumeCommandResult,
+} from "./resume-command.ts";
+export { createPawResumeCommandResult, formatPawResumeCommandResult, runPawResumeCommand } from "./resume-command.ts";
+export type {
 	PawRetentionArtifactRecord,
 	PawRetentionConfig,
 	PawRetentionPlan,

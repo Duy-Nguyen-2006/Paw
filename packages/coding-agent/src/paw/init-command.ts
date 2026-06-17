@@ -5,12 +5,14 @@ import { loadDefaultPawRuntimeConfig } from "./config.ts";
 import { runPawDoctorCommand } from "./doctor-command.ts";
 import { initializePawProject } from "./persistence.ts";
 import { runPawReportCommand } from "./report-command.ts";
+import { runPawResumeCommand } from "./resume-command.ts";
 import { runPawStatusCommand } from "./status-command.ts";
 
 function printPawHelp(): void {
 	console.log(`Usage:
   ${APP_NAME} paw init
   ${APP_NAME} paw status
+  ${APP_NAME} paw resume <session-id>
   ${APP_NAME} paw report <session-id>
   ${APP_NAME} paw clean --dry-run
   ${APP_NAME} paw doctor
@@ -22,6 +24,8 @@ Commands:
   ${APP_NAME} paw init --help   Show init help
   ${APP_NAME} paw status        Show read-only Paw project and session summary
   ${APP_NAME} paw status --help Show status help
+  ${APP_NAME} paw resume <session-id> Show resumable session state and lock status
+  ${APP_NAME} paw resume --help Show resume help
   ${APP_NAME} paw report <session-id> Show persisted final report markdown
   ${APP_NAME} paw report --help Show report help
   ${APP_NAME} paw clean --dry-run Show read-only Paw retention plan
@@ -93,6 +97,11 @@ export async function handlePawCommand(args: string[]): Promise<boolean> {
 
 	if (subcommand === "report") {
 		await runPawReportCommand(rest);
+		return true;
+	}
+
+	if (subcommand === "resume") {
+		await runPawResumeCommand(rest);
 		return true;
 	}
 
