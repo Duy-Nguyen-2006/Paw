@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { hostname, tmpdir } from "node:os";
@@ -64,6 +65,10 @@ function baseCliArgs(sessionId: string): string[] {
 		"--changed-file",
 		"src/deleted.ts=null",
 	];
+}
+
+function hashContent(content: string | Uint8Array): string {
+	return `sha256:${createHash("sha256").update(content).digest("hex")}`;
 }
 
 async function writeLock(repoRoot: string, sessionId: string, lock: PawSessionLock): Promise<void> {
@@ -260,6 +265,32 @@ describe("Paw prepare-checkpoint command", () => {
 		expect(await getPawSessionLockStatus(projectRoot, "session-1", { nowMs: 2_500 })).toEqual({
 			status: "unlocked",
 		});
+	});
+
+	test("fails closed for a non-UTF-8 changed file instead of writing inconsistent restore metadata", async () => {
+		const projectRoot = await createTempProject();
+		process.chdir(projectRoot);
+		await mkdir(join(projectRoot, "src"), { recursive: true });
+		const binaryContent = Uint8Array.from([0xff, 0xfe, 0x00, 0x61]);
+		await writeFile(join(projectRoot, "src", "binary.bin"), binaryContent);
+		await writePawSessionState(projectRoot, createSliceSelectState("session-1", "slice-1"));
+
+		await expect(
+			createPawPrepareCheckpointCommandResult(
+				projectRoot,
+				"session-1",
+				{
+					baseTree: "tree:abc123",
+					shortId: "abc123",
+					timestamp,
+					changedFiles: [{ path: "src/binary.bin", content_hash: hashContent(binaryContent) }],
+				},
+				{ lockOptions: { nowMs: 2_000, ttlSec: 120 } },
+			),
+		).rejects.toThrow("file content is not valid UTF-8 and cannot be represented safely in restore metadata");
+		await expect(
+			readPawCheckpointMetadata(projectRoot, "session-1", "20260616T030405Z-slice-1-abc123"),
+		).rejects.toThrow("ENOENT");
 	});
 
 	test("reports missing project or missing session without creating state", async () => {

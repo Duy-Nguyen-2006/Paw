@@ -1,9 +1,12 @@
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 import {
 	createPawCheckpointName,
+	createPawRestorableFileSnapshots,
 	type PawCheckpointMetadata,
 	readPawCheckpointMetadata,
 	resolvePawCheckpointPaths,
@@ -17,6 +20,10 @@ async function createTempRepo(): Promise<string> {
 	const root = await mkdtemp(join(tmpdir(), "paw-checkpoints-"));
 	tempRoots.push(root);
 	return root;
+}
+
+function hashContent(content: string | Uint8Array): string {
+	return `sha256:${createHash("sha256").update(content).digest("hex")}`;
 }
 
 function createMetadata(overrides: Partial<PawCheckpointMetadata> = {}): PawCheckpointMetadata {
@@ -230,5 +237,104 @@ describe("Paw checkpoints", () => {
 			ok: false,
 			issues: [{ path: "/slice_id", message: "Expected null for task_start checkpoint scope." }],
 		});
+	});
+
+	test("creates restorable snapshots from current on-disk content and deleted paths", async () => {
+		const repoRoot = await createTempRepo();
+		await mkdir(join(repoRoot, "src"), { recursive: true });
+		await writeFile(join(repoRoot, "src", "changed.ts"), "current worktree content\n", "utf-8");
+
+		const snapshots = await createPawRestorableFileSnapshots({
+			repoRoot,
+			changedFiles: [{ path: "src/changed.ts" }, { path: "src/deleted.ts" }],
+		});
+
+		expect(snapshots).toEqual([
+			{
+				path: "src/changed.ts",
+				paw_owned: true,
+				restore_content: "current worktree content\n",
+				current_content_hash: hashContent("current worktree content\n"),
+			},
+			{
+				path: "src/deleted.ts",
+				paw_owned: true,
+				restore_content: null,
+				current_content_hash: null,
+			},
+		]);
+	});
+
+	test("creates restorable safety hashes that block stale rollback mutations", async () => {
+		const repoRoot = await createTempRepo();
+		await mkdir(join(repoRoot, "src"), { recursive: true });
+		await writeFile(join(repoRoot, "src", "changed.ts"), "checkpoint content\n", "utf-8");
+
+		const [snapshot] = await createPawRestorableFileSnapshots({
+			repoRoot,
+			changedFiles: [{ path: "src/changed.ts" }],
+		});
+		expect(snapshot).toEqual({
+			path: "src/changed.ts",
+			paw_owned: true,
+			restore_content: "checkpoint content\n",
+			current_content_hash: hashContent("checkpoint content\n"),
+		});
+
+		await writeFile(join(repoRoot, "src", "changed.ts"), "later user content\n", "utf-8");
+		expect(hashContent(await readFile(join(repoRoot, "src", "changed.ts")))).not.toBe(snapshot?.current_content_hash);
+	});
+
+	test("rejects non-UTF-8 snapshots instead of writing impossible rollback metadata", async () => {
+		const repoRoot = await createTempRepo();
+		await mkdir(join(repoRoot, "src"), { recursive: true });
+		const binaryContent = Uint8Array.from([0xff, 0xfe, 0x00, 0x61]);
+		await writeFile(join(repoRoot, "src", "binary.bin"), binaryContent);
+
+		await expect(
+			createPawRestorableFileSnapshots({
+				repoRoot,
+				changedFiles: [{ path: "src/binary.bin" }],
+			}),
+		).rejects.toThrow("file content is not valid UTF-8 and cannot be represented safely in restore metadata");
+	});
+
+	test("rejects unsafe, secret, duplicate, out-of-repo, and symlinked snapshot paths", async () => {
+		const repoRoot = await createTempRepo();
+		const externalRoot = await mkdtemp(join(tmpdir(), "paw-checkpoints-external-"));
+		tempRoots.push(externalRoot);
+		await symlink(externalRoot, join(repoRoot, "link"), "dir");
+
+		await expect(
+			createPawRestorableFileSnapshots({
+				repoRoot,
+				changedFiles: [{ path: "../outside.ts" }],
+			}),
+		).rejects.toThrow("Path must not traverse outside the repository root.");
+		await expect(
+			createPawRestorableFileSnapshots({
+				repoRoot,
+				changedFiles: [{ path: "/tmp/outside.ts" }],
+			}),
+		).rejects.toThrow("Path must be relative to the repository root.");
+		await expect(
+			createPawRestorableFileSnapshots({
+				repoRoot,
+				changedFiles: [{ path: ".env" }],
+			}),
+		).rejects.toThrow("Path must not target secret or credential files.");
+		await expect(
+			createPawRestorableFileSnapshots({
+				repoRoot,
+				changedFiles: [{ path: "src/file.ts" }, { path: "src/file.ts" }],
+			}),
+		).rejects.toThrow("Path is declared more than once.");
+		await expect(
+			createPawRestorableFileSnapshots({
+				repoRoot,
+				changedFiles: [{ path: "link/victim.txt" }],
+			}),
+		).rejects.toThrow("Path has a symlinked ancestor and cannot be snapshotted safely.");
+		expect(existsSync(join(externalRoot, "victim.txt"))).toBe(false);
 	});
 });

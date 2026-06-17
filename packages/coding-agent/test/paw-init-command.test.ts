@@ -89,7 +89,7 @@ describe("Paw init command", () => {
 		await expect(handlePawCommand(["paw", "build"])).resolves.toBe(true);
 
 		const stderr = errorSpy.mock.calls.map(([message]) => String(message)).join("\n");
-		expect(stderr).toContain("Unknown Paw command: build");
+		expect(stderr).toContain('Missing required session id for "paw build"');
 		expect(process.exitCode).toBe(1);
 	});
 

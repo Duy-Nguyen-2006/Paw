@@ -1,6 +1,7 @@
 import { hostname } from "node:os";
 import {
 	createPawCheckpointName,
+	createPawRestorableFileSnapshots,
 	type PawCheckpointChangedFile,
 	type PawCheckpointMetadata,
 	type PawCheckpointPaths,
@@ -22,6 +23,7 @@ export interface PawSliceCheckpointInput {
 	baseTree: string;
 	changedFiles: readonly PawCheckpointChangedFile[];
 	restoreFiles?: readonly PawCheckpointRestorableFile[];
+	captureRestoreFiles?: boolean;
 	shortId: string;
 	timestamp: Date | string;
 	notes?: string;
@@ -138,6 +140,11 @@ export async function preparePawSliceCheckpoint(input: PawSliceCheckpointInput):
 	};
 	if (input.restoreFiles !== undefined) {
 		metadata.restore_files = input.restoreFiles.map((file) => ({ ...file }));
+	} else if (input.captureRestoreFiles === true) {
+		metadata.restore_files = await createPawRestorableFileSnapshots({
+			repoRoot: input.repoRoot,
+			changedFiles: input.changedFiles,
+		});
 	}
 	if (input.notes !== undefined) {
 		metadata.notes = input.notes;

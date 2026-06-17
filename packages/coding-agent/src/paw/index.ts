@@ -62,10 +62,12 @@ export type {
 	PawCheckpointNameInput,
 	PawCheckpointPaths,
 	PawCheckpointRestorableFile,
+	PawCheckpointRestorableFileSnapshotInput,
 	PawCheckpointScope,
 } from "./checkpoints.ts";
 export {
 	createPawCheckpointName,
+	createPawRestorableFileSnapshots,
 	readPawCheckpointMetadata,
 	resolvePawCheckpointPaths,
 	validatePawCheckpointMetadata,
@@ -659,6 +661,12 @@ export type {
 	PawTaskSessionStartResult,
 } from "./task-session.ts";
 export { advancePawTaskSession, startPawTaskSession } from "./task-session.ts";
+export type {
+	PawLocalSubprocessFileChangeDetector,
+	PawLocalSubprocessFileChangeDetectorInput,
+	PawLocalSubprocessToolExecutorOptions,
+} from "./tool-executor.ts";
+export { createPawLocalSubprocessToolExecutor } from "./tool-executor.ts";
 export type {
 	PawToolExecutionAuthorization,
 	PawToolExecutionAuthorizationSource,

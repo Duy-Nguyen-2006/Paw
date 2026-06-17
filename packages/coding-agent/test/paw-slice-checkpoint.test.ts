@@ -1,4 +1,4 @@
-import { mkdtemp, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
@@ -260,5 +260,83 @@ describe("preparePawSliceCheckpoint", () => {
 			changed_files: changedFiles,
 		});
 		expect("notes" in result.metadata).toBe(false);
+	});
+
+	test("captures restore files from current content when requested", async () => {
+		const repoRoot = await createTempRepo();
+		await mkdir(join(repoRoot, "src"), { recursive: true });
+		await writeFile(join(repoRoot, "src", "example.ts"), "current\n", "utf-8");
+		await writePawSessionState(repoRoot, createSelectedSliceState("session-1", "slice-3"));
+		await writeCurrentLock(repoRoot, "session-1", 1_000);
+
+		const result = await preparePawSliceCheckpoint({
+			repoRoot,
+			sessionId: "session-1",
+			baseTree: "tree:ghi789",
+			changedFiles,
+			captureRestoreFiles: true,
+			shortId: "ghi789",
+			timestamp,
+			lockOptions: { nowMs: 2_000, ttlSec: 120 },
+		});
+
+		expect(result.status).toBe("prepared");
+		if (result.status !== "prepared") return;
+		expect(result.metadata.restore_files).toEqual([
+			{
+				path: "src/example.ts",
+				paw_owned: true,
+				restore_content: "current\n",
+				current_content_hash: "sha256:48aa6cae8c70abdb28631d22b316e6d9f9d0768ec2911de7090e248b2afe6ca1",
+			},
+			{
+				path: "src/deleted.ts",
+				paw_owned: true,
+				restore_content: null,
+				current_content_hash: null,
+			},
+		]);
+		await expect(readPawCheckpointMetadata(repoRoot, "session-1", result.metadata.checkpoint_name)).resolves.toEqual(
+			result.metadata,
+		);
+		expect(await readFile(join(repoRoot, "src", "example.ts"), "utf-8")).toBe("current\n");
+	});
+
+	test("preserves explicitly injected restore files when capture is requested", async () => {
+		const repoRoot = await createTempRepo();
+		await mkdir(join(repoRoot, "src"), { recursive: true });
+		await writeFile(join(repoRoot, "src", "example.ts"), "current\n", "utf-8");
+		await writePawSessionState(repoRoot, createSelectedSliceState("session-1", "slice-4"));
+		await writeCurrentLock(repoRoot, "session-1", 1_000);
+
+		const result = await preparePawSliceCheckpoint({
+			repoRoot,
+			sessionId: "session-1",
+			baseTree: "tree:jkl012",
+			changedFiles,
+			restoreFiles: [
+				{
+					path: "src/example.ts",
+					paw_owned: true,
+					restore_content: "injected\n",
+					current_content_hash: "sha256:injected",
+				},
+			],
+			captureRestoreFiles: true,
+			shortId: "jkl012",
+			timestamp,
+			lockOptions: { nowMs: 2_000, ttlSec: 120 },
+		});
+
+		expect(result.status).toBe("prepared");
+		if (result.status !== "prepared") return;
+		expect(result.metadata.restore_files).toEqual([
+			{
+				path: "src/example.ts",
+				paw_owned: true,
+				restore_content: "injected\n",
+				current_content_hash: "sha256:injected",
+			},
+		]);
 	});
 });

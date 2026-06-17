@@ -4,6 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+const repoRoot = join(__dirname, "../../../../..");
+const tsxImportPath = join(repoRoot, "node_modules", "tsx", "dist", "loader.mjs");
+const tsconfigPath = join(repoRoot, "tsconfig.json");
+
 /**
  * Regression test for https://github.com/earendil-works/pi-mono/issues/2791
  *
@@ -87,10 +91,10 @@ process.exit(0);
 		let stderr = "";
 		let exitCode: number;
 		try {
-			_stdout = execFileSync(process.execPath, [scriptPath], {
+			_stdout = execFileSync(process.execPath, ["--import", tsxImportPath, scriptPath], {
 				timeout: 10000,
 				encoding: "utf-8",
-				env: { ...process.env, PI_CODING_AGENT_DIR: agentDir },
+				env: { ...process.env, PI_CODING_AGENT_DIR: agentDir, TSX_TSCONFIG_PATH: tsconfigPath },
 				stdio: ["pipe", "pipe", "pipe"],
 			});
 			exitCode = 0;

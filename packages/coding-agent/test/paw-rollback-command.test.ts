@@ -51,7 +51,7 @@ function createSessionState(sessionId: string): PawSessionState {
 	};
 }
 
-function hashContent(content: string): string {
+function hashContent(content: string | Uint8Array): string {
 	return `sha256:${createHash("sha256").update(content).digest("hex")}`;
 }
 
@@ -248,6 +248,41 @@ describe("Paw rollback command", () => {
 		expect(formatPawRollbackCommandResult(result)).toContain("Rollback executed for declared Paw-owned files only.");
 		await expect(readPawSessionState(projectRoot, "session-1")).resolves.toEqual(initialState);
 		expect(await getPawSessionLockStatus(projectRoot, "session-1", { nowMs: 2_000 })).toEqual({ status: "unlocked" });
+	});
+
+	test("deletes a declared binary file only when the raw-byte safety hash matches", async () => {
+		const projectRoot = await createTempProject();
+		process.chdir(projectRoot);
+		await expect(handlePawCommand(["paw", "init"])).resolves.toBe(true);
+		await writePawSessionState(projectRoot, createSessionState("session-1"));
+		await mkdir(join(projectRoot, "src"), { recursive: true });
+		const binaryContent = Uint8Array.from([0xff, 0xfe, 0x00, 0x61]);
+		await writeFile(join(projectRoot, "src", "binary.bin"), binaryContent);
+		await writePawCheckpointMetadata(
+			projectRoot,
+			createCheckpointMetadata({
+				changed_files: [{ path: "src/binary.bin", content_hash: hashContent(binaryContent) }],
+				restore_files: [
+					{
+						path: "src/binary.bin",
+						paw_owned: true,
+						restore_content: null,
+						current_content_hash: hashContent(binaryContent),
+					},
+				],
+			}),
+		);
+
+		const result = await createPawRollbackCommandResult(projectRoot, "session-1", {
+			dryRun: false,
+			checkpointName: "20260617T010203Z-slice-1-abc123",
+		});
+
+		expect(result.status).toBe("restored");
+		if (result.status !== "restored") return;
+		expect(result.filesChanged).toBe(true);
+		expect(result.deletedFiles).toEqual([{ path: "src/binary.bin" }]);
+		expect(existsSync(join(projectRoot, "src", "binary.bin"))).toBe(false);
 	});
 
 	test("blocks restore through a symlinked ancestor before creating external files", async () => {

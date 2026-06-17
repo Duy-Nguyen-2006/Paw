@@ -1,4 +1,7 @@
-import { join } from "node:path";
+import { createHash } from "node:crypto";
+import { lstat, readFile } from "node:fs/promises";
+import { dirname, join, resolve } from "node:path";
+import { TextDecoder } from "node:util";
 import type { PawValidationIssue, PawValidationResult } from "./contracts.ts";
 import { readPawJson, resolvePawProjectPaths, writePawJsonAtomic } from "./persistence.ts";
 import { resolvePawSessionPaths } from "./session-store.ts";
@@ -43,6 +46,11 @@ export interface PawCheckpointPaths {
 	metadataFile: string;
 }
 
+export interface PawCheckpointRestorableFileSnapshotInput {
+	repoRoot: string;
+	changedFiles: readonly { path: string }[];
+}
+
 const CHECKPOINT_NAME_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/;
 const CHECKPOINT_SCOPES: readonly PawCheckpointScope[] = ["task_start", "slice"];
 const CHECKPOINT_METADATA_KEYS = new Set([
@@ -59,6 +67,7 @@ const CHECKPOINT_METADATA_KEYS = new Set([
 const CHECKPOINT_CHANGED_FILE_KEYS = new Set(["path", "content_hash"]);
 const CHECKPOINT_RESTORABLE_FILE_KEYS = new Set(["path", "paw_owned", "restore_content", "current_content_hash"]);
 const MAX_CHECKPOINT_SEGMENT_LENGTH = 48;
+const UTF8_DECODER = new TextDecoder("utf-8", { fatal: true });
 
 export function createPawCheckpointName(input: PawCheckpointNameInput): string {
 	const timestamp = formatCheckpointTimestamp(input.timestamp);
@@ -151,6 +160,50 @@ export async function readPawCheckpointMetadata(
 		throw new Error(formatCheckpointValidationIssues("Invalid Paw checkpoint metadata", validation.issues));
 	}
 	return validation.value;
+}
+
+export async function createPawRestorableFileSnapshots(
+	input: PawCheckpointRestorableFileSnapshotInput,
+): Promise<PawCheckpointRestorableFile[]> {
+	const issues: PawValidationIssue[] = [];
+	validateCheckpointFilePaths(input.changedFiles, "/changed_files", issues);
+	if (issues.length > 0) {
+		throw new Error(formatCheckpointValidationIssues("Invalid Paw checkpoint snapshot paths", issues));
+	}
+
+	const repoRoot = resolve(input.repoRoot);
+	const seenPaths = new Set<string>();
+	const snapshots: PawCheckpointRestorableFile[] = [];
+	for (const [index, file] of input.changedFiles.entries()) {
+		if (seenPaths.has(file.path)) {
+			throw new Error(
+				`Invalid Paw checkpoint snapshot paths: /changed_files/${index}/path Path is declared more than once.`,
+			);
+		}
+		seenPaths.add(file.path);
+
+		const targetPath = resolveCheckpointTargetPath(repoRoot, file.path);
+		if (targetPath === null) {
+			throw new Error(
+				`Invalid Paw checkpoint snapshot paths: /changed_files/${index}/path Path must be relative to the repository root.`,
+			);
+		}
+		if (await hasSymlinkedCheckpointAncestor(repoRoot, targetPath)) {
+			throw new Error(
+				`Invalid Paw checkpoint snapshot paths: /changed_files/${index}/path Path has a symlinked ancestor and cannot be snapshotted safely.`,
+			);
+		}
+
+		const current = await readCheckpointCurrentContent(targetPath);
+		snapshots.push({
+			path: file.path,
+			paw_owned: true,
+			restore_content: current.content,
+			current_content_hash: current.hash,
+		});
+	}
+
+	return snapshots;
 }
 
 function formatCheckpointTimestamp(timestamp: Date | string): string {
@@ -457,12 +510,82 @@ function isSecretCheckpointPath(path: string): boolean {
 	);
 }
 
+function resolveCheckpointTargetPath(repoRoot: string, path: string): string | null {
+	const target = resolve(repoRoot, path);
+	if (target !== repoRoot && !target.startsWith(`${repoRoot}/`)) {
+		return null;
+	}
+	return target;
+}
+
+async function hasSymlinkedCheckpointAncestor(repoRoot: string, targetPath: string): Promise<boolean> {
+	let currentPath = targetPath;
+	for (;;) {
+		if (currentPath === repoRoot) {
+			return false;
+		}
+
+		try {
+			if ((await lstat(currentPath)).isSymbolicLink()) {
+				return true;
+			}
+		} catch (error) {
+			if (!isFileSystemError(error) || error.code !== "ENOENT") {
+				throw error;
+			}
+		}
+
+		const parentPath = dirname(currentPath);
+		if (parentPath === currentPath) {
+			return true;
+		}
+		currentPath = parentPath;
+	}
+}
+
+async function readCheckpointCurrentContent(path: string): Promise<{ content: string | null; hash: string | null }> {
+	try {
+		const content = await readFile(path);
+		return { content: decodeCheckpointContent(path, content), hash: hashCheckpointContent(content) };
+	} catch (error) {
+		if (isFileSystemError(error) && error.code === "ENOENT") {
+			return { content: null, hash: null };
+		}
+		throw error;
+	}
+}
+
+function decodeCheckpointContent(path: string, content: Uint8Array): string {
+	try {
+		return UTF8_DECODER.decode(content);
+	} catch (error) {
+		if (error instanceof TypeError) {
+			throw new Error(
+				`Cannot create Paw checkpoint snapshot for ${path}: file content is not valid UTF-8 and cannot be represented safely in restore metadata.`,
+			);
+		}
+		throw error;
+	}
+}
+
+function hashCheckpointContent(content: Uint8Array): string {
+	return `sha256:${createHash("sha256").update(content).digest("hex")}`;
+}
+
 function isCheckpointScope(value: string): value is PawCheckpointScope {
 	return CHECKPOINT_SCOPES.includes(value as PawCheckpointScope);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+interface FileSystemError extends Error {
+	code?: string;
+}
+
+function isFileSystemError(error: unknown): error is FileSystemError {
+	return error instanceof Error;
 }
 
 function formatCheckpointValidationIssues(prefix: string, issues: readonly PawValidationIssue[]): string {

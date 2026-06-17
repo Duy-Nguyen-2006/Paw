@@ -277,6 +277,7 @@ export async function createPawPrepareCheckpointCommandResult(
 		sessionId,
 		baseTree: input.baseTree,
 		changedFiles: input.changedFiles,
+		captureRestoreFiles: true,
 		shortId: input.shortId,
 		timestamp: input.timestamp,
 		notes: input.notes,
