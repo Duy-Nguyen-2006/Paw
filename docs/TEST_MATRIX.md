@@ -63,6 +63,7 @@ tests, validation evidence, or docs-only acceptance evidence exist.
 | US-044 | Paw verifier blocked state persistence | yes | yes | no | yes | implemented | Focused Paw verifier-blocked-result, verifier-result, state, and task-session tests plus Harness story verification and root `npm run check` passed; see `docs/stories/epics/E01-paw-foundation/US-044-paw-verifier-blocked-state-persistence/validation.md`. Verifier retry policy and CLI resume routing remain future work. |
 | US-045 | Paw CLI report read-only summary | yes | yes | no | yes | implemented | Focused Paw report-command test, Harness story verification, and root `npm run check` passed; see `docs/stories/epics/E01-paw-foundation/US-045-paw-cli-report-read-only-summary/validation.md`. Final report emission and full orchestrator routing remain future work. |
 | US-046 | Paw CLI resume lock-state foundation | yes | yes | no | yes | implemented | Focused Paw resume-command test, Harness story verification, adjacent CLI tests, and root `npm run check` passed; see `docs/stories/epics/E01-paw-foundation/US-046-paw-cli-resume-lock-state-foundation/validation.md`. Full orchestrator resume execution remains future work. |
+| US-047 | Paw CLI verify foundation | yes | yes | no | yes | implemented | Focused Paw verify-command test, Harness story verification, adjacent verifier/CLI tests, and root `npm run check` passed; see `docs/stories/epics/E01-paw-foundation/US-047-paw-cli-verify-foundation/validation.md`. Native verifier command execution remains future work. |
 
 ## Evidence Rules
 

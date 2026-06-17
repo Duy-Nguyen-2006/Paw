@@ -444,6 +444,17 @@ export type {
 	PawVerificationResult,
 } from "./verifier-result.ts";
 export { completePawVerification } from "./verifier-result.ts";
+export type {
+	PawVerifyCommandCompletedResult,
+	PawVerifyCommandInput,
+	PawVerifyCommandInvalidStateResult,
+	PawVerifyCommandInvalidVerificationResult,
+	PawVerifyCommandLockedResult,
+	PawVerifyCommandMissingProjectResult,
+	PawVerifyCommandMissingSessionResult,
+	PawVerifyCommandResult,
+} from "./verify-command.ts";
+export { createPawVerifyCommandResult, formatPawVerifyCommandResult, runPawVerifyCommand } from "./verify-command.ts";
 
 export type {
 	PawWorkerBlockedCompletedResult,
