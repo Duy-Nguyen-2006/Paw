@@ -282,6 +282,32 @@ export type {
 } from "./retention-policy.ts";
 export { createPawRetentionPlan } from "./retention-policy.ts";
 export type {
+	PawBlockReviewerCommandBlockedResult,
+	PawBlockReviewerCommandInput,
+	PawBlockReviewerCommandInvalidBlockedReasonResult,
+	PawBlockReviewerCommandInvalidOutputFileResult,
+	PawBlockReviewerCommandInvalidReviewerOutputResult,
+	PawBlockReviewerCommandInvalidStateResult,
+	PawBlockReviewerCommandInvalidTransitionResult,
+	PawBlockReviewerCommandLockedByOtherResult,
+	PawBlockReviewerCommandLockedResult,
+	PawBlockReviewerCommandMissingOutputFileResult,
+	PawBlockReviewerCommandMissingProjectResult,
+	PawBlockReviewerCommandMissingSessionResult,
+	PawBlockReviewerCommandNoSelectedSliceResult,
+	PawBlockReviewerCommandNotLockedResult,
+	PawBlockReviewerCommandResult,
+	PawBlockReviewerCommandReviewerNotBlockedResult,
+	PawBlockReviewerParsedArgs,
+	PawBlockReviewerParsedInput,
+} from "./reviewer-blocked-command.ts";
+export {
+	createPawBlockReviewerCommandResult,
+	formatPawBlockReviewerCommandResult,
+	parsePawBlockReviewerArgs,
+	runPawBlockReviewerCommand,
+} from "./reviewer-blocked-command.ts";
+export type {
 	PawReviewerBlockedCompletedResult,
 	PawReviewerBlockedInput,
 	PawReviewerBlockedInvalidOutputResult,
