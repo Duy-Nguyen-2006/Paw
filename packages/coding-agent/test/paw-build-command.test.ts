@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { hostname, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { AssistantMessage, Context, Model, SimpleStreamOptions } from "@earendil-works/pi-ai";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { main } from "../src/main.ts";
 import {
@@ -14,6 +15,7 @@ import {
 import {
 	getPawSessionLockStatus,
 	loadDefaultPawRuntimeConfig,
+	type PawProviderSubAgentModelRegistry,
 	type PawSessionLock,
 	type PawSessionState,
 	type PawSubAgentOutput,
@@ -184,6 +186,50 @@ function createExecutor(outputs: string[]): PawSubAgentRuntimeExecutor {
 		const rawOutput = outputs[index] ?? outputs[outputs.length - 1] ?? "";
 		index += 1;
 		return { raw_output: rawOutput, model_id: "executor-model" };
+	};
+}
+
+function createAssistantMessage(text: string, overrides: Partial<AssistantMessage> = {}): AssistantMessage {
+	return {
+		role: "assistant",
+		content: [{ type: "text", text }],
+		api: "anthropic-messages",
+		provider: "fake-provider",
+		model: "fake-model",
+		usage: {
+			input: 1,
+			output: 1,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 2,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		},
+		stopReason: "stop",
+		timestamp: 0,
+		...overrides,
+	};
+}
+
+function createModel(modelId: string): Model<"anthropic-messages"> {
+	return {
+		id: modelId,
+		name: `Fake ${modelId}`,
+		api: "anthropic-messages",
+		provider: "fake-provider",
+		baseUrl: "http://localhost:0",
+		reasoning: false,
+		input: ["text"],
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 128000,
+		maxTokens: 4096,
+	};
+}
+
+function createFakeModelRegistry(): PawProviderSubAgentModelRegistry {
+	return {
+		find: (provider, modelId) => (provider === "fake-provider" ? createModel(modelId) : undefined),
+		hasConfiguredAuth: () => true,
+		getApiKeyAndHeaders: () => ({ ok: true, apiKey: "fake-key", headers: { "x-fake": "1" } }),
 	};
 }
 
@@ -781,6 +827,150 @@ describe("Paw build command", () => {
 			status: "locked",
 			lock: liveForeignLock,
 		});
+	});
+
+	test("runs one worker pass through a programmatic provider executor", async () => {
+		const projectRoot = await createTempProject();
+		process.chdir(projectRoot);
+		const config = loadDefaultPawRuntimeConfig(projectRoot);
+		const completeCalls: { modelId: string; context: Context; options: SimpleStreamOptions | undefined }[] = [];
+		await expect(handlePawCommand(["paw", "init"])).resolves.toBe(true);
+		await writePawSessionState(projectRoot, createImplementingState("session-1", "slice-1"));
+
+		const result = await createPawBuildCommandResult(
+			projectRoot,
+			"session-1",
+			{ once: true, timestamp },
+			{
+				config,
+				providerExecutor: {
+					modelRegistry: createFakeModelRegistry(),
+					defaultProvider: "fake-provider",
+					defaultOptions: { maxTokens: 777 },
+					completeSimple: async (model, context, options) => {
+						completeCalls.push({ modelId: model.id, context, options });
+						return createAssistantMessage(JSON.stringify(createWorkerOutput({ model_used: model.id })), {
+							model: model.id,
+						});
+					},
+				},
+				lockOptions: { nowMs: 2_000, ttlSec: 120 },
+			},
+		);
+
+		expect(result.status).toBe("completed");
+		if (result.status !== "completed") return;
+		expect(result.previousStateName).toBe("IMPLEMENTING");
+		expect(result.nextStateName).toBe("REVIEWING");
+		expect(completeCalls).toHaveLength(1);
+		expect(completeCalls[0]?.modelId).toBe("<configured-mid-model>");
+		expect(completeCalls[0]?.context.systemPrompt).toContain("Paw worker sub-agent");
+		expect(completeCalls[0]?.context.messages[0]?.content).toContain("session_id: session-1");
+		expect(completeCalls[0]?.options).toEqual({
+			maxTokens: 777,
+			apiKey: "fake-key",
+			headers: { "x-fake": "1" },
+		});
+		await expect(readPawSessionState(projectRoot, "session-1")).resolves.toMatchObject({ name: "REVIEWING" });
+	});
+
+	test("runs one reviewer pass through a programmatic provider executor", async () => {
+		const projectRoot = await createTempProject();
+		process.chdir(projectRoot);
+		const config = loadDefaultPawRuntimeConfig(projectRoot);
+		const completeCalls: { modelId: string; context: Context }[] = [];
+		await expect(handlePawCommand(["paw", "init"])).resolves.toBe(true);
+		await writePawSessionState(projectRoot, createReviewingState("session-1", "slice-1"));
+
+		const result = await createPawBuildCommandResult(
+			projectRoot,
+			"session-1",
+			{ once: true },
+			{
+				config,
+				providerExecutor: {
+					modelRegistry: createFakeModelRegistry(),
+					defaultProvider: "fake-provider",
+					completeSimple: async (model, context) => {
+						completeCalls.push({ modelId: model.id, context });
+						return createAssistantMessage(JSON.stringify(createReviewerOutput({ model_used: model.id })), {
+							model: model.id,
+						});
+					},
+				},
+				lockOptions: { nowMs: 2_000, ttlSec: 120 },
+			},
+		);
+
+		expect(result.status).toBe("completed");
+		if (result.status !== "completed") return;
+		expect(result.previousStateName).toBe("REVIEWING");
+		expect(result.nextStateName).toBe("VERIFYING");
+		expect(completeCalls).toHaveLength(1);
+		expect(completeCalls[0]?.modelId).toBe("<configured-strong-model>");
+		expect(completeCalls[0]?.context.systemPrompt).toContain("Paw reviewer sub-agent");
+		await expect(readPawSessionState(projectRoot, "session-1")).resolves.toMatchObject({ name: "VERIFYING" });
+	});
+
+	test("blocks provider executor resolver failures as provider unavailable", async () => {
+		const projectRoot = await createTempProject();
+		process.chdir(projectRoot);
+		const config = loadDefaultPawRuntimeConfig(projectRoot);
+		let completions = 0;
+		await expect(handlePawCommand(["paw", "init"])).resolves.toBe(true);
+		await writePawSessionState(projectRoot, createImplementingState("session-1", "slice-1"));
+
+		const result = await createPawBuildCommandResult(
+			projectRoot,
+			"session-1",
+			{ once: true },
+			{
+				config,
+				providerExecutor: {
+					modelRegistry: { ...createFakeModelRegistry(), hasConfiguredAuth: () => false },
+					defaultProvider: "fake-provider",
+					completeSimple: async () => {
+						completions += 1;
+						return createAssistantMessage("should not be called");
+					},
+				},
+				lockOptions: { nowMs: 2_000, ttlSec: 120 },
+			},
+		);
+
+		expect(completions).toBe(0);
+		expect(result.status).toBe("blocked");
+		if (result.status !== "blocked") return;
+		expect(result.nextStateName).toBe("BLOCKED_PROVIDER_UNAVAILABLE");
+		expect(result.blockedReasonCode).toBe("PROVIDER_UNAVAILABLE");
+		await expect(readPawSessionState(projectRoot, "session-1")).resolves.toMatchObject({
+			name: "BLOCKED_PROVIDER_UNAVAILABLE",
+		});
+	});
+
+	test("rejects ambiguous build executor configuration before mutating state", async () => {
+		const projectRoot = await createTempProject();
+		process.chdir(projectRoot);
+		const config = loadDefaultPawRuntimeConfig(projectRoot);
+		const initialState = createImplementingState("session-1", "slice-1");
+		await expect(handlePawCommand(["paw", "init"])).resolves.toBe(true);
+		await writePawSessionState(projectRoot, initialState);
+
+		await expect(
+			createPawBuildCommandResult(
+				projectRoot,
+				"session-1",
+				{ once: true },
+				{
+					config,
+					executor: createExecutor([JSON.stringify(createWorkerOutput())]),
+					providerExecutor: { modelRegistry: createFakeModelRegistry(), defaultProvider: "fake-provider" },
+					lockOptions: { nowMs: 2_000, ttlSec: 120 },
+				},
+			),
+		).rejects.toThrow("Paw build accepts either executor or providerExecutor, not both.");
+		await expect(readPawSessionState(projectRoot, "session-1")).resolves.toEqual(initialState);
+		expect(await getPawSessionLockStatus(projectRoot, "session-1", { nowMs: 2_500 })).toEqual({ status: "unlocked" });
 	});
 
 	test("default build executor blocks as provider unavailable for worker and reviewer", async () => {

@@ -11,7 +11,12 @@ import {
 } from "./slice-implementation-command.ts";
 import { createPawSelectSliceCommandResult, type PawSelectSliceCommandResult } from "./slice-selection-command.ts";
 import type { PawSessionStateName } from "./state.ts";
-import type { PawSubAgentRuntimeExecutor, PawSubAgentRuntimeInvocation } from "./subagent-runtime.ts";
+import {
+	createPawProviderSubAgentRuntimeExecutor,
+	type PawProviderSubAgentRuntimeExecutorInput,
+	type PawSubAgentRuntimeExecutor,
+	type PawSubAgentRuntimeInvocation,
+} from "./subagent-runtime.ts";
 import type { PawNativeVerificationPlanEntry } from "./verification-plan.ts";
 import type { PawNativeVerificationRunResult } from "./verification-runner.ts";
 import { createPawVerifyCommandResult, type PawVerifyCommandResult } from "./verify-command.ts";
@@ -63,6 +68,7 @@ export type PawBuildLoopStopReason =
 export interface PawBuildCommandInput {
 	config?: PawRuntimeConfig;
 	executor?: PawSubAgentRuntimeExecutor;
+	providerExecutor?: PawProviderSubAgentRuntimeExecutorInput;
 	lockOptions?: Parameters<typeof runPawWorkerOnce>[0]["lockOptions"];
 }
 
@@ -196,7 +202,7 @@ async function createPawBuildStepResult(
 	commandInput: PawBuildCommandInput = {},
 ): Promise<PawBuildStepResult> {
 	const config = commandInput.config ?? loadDefaultPawRuntimeConfig(repoRoot);
-	const executor = commandInput.executor ?? createPawUnavailableSubAgentExecutor();
+	const executor = resolvePawBuildSubAgentExecutor(commandInput);
 	const state = await readPawSessionStateIfExists(repoRoot, sessionId);
 	if (stateNameCanSelectSlice(state)) {
 		return createPawSelectSliceCommandResult(repoRoot, sessionId, { lockOptions: commandInput.lockOptions });
@@ -497,6 +503,19 @@ function stateNameIsReviewing(state: { name: string } | null): boolean {
 
 function stateNameIsVerifying(state: { name: string } | null): boolean {
 	return state?.name === "VERIFYING";
+}
+
+function resolvePawBuildSubAgentExecutor(commandInput: PawBuildCommandInput): PawSubAgentRuntimeExecutor {
+	if (commandInput.executor !== undefined && commandInput.providerExecutor !== undefined) {
+		throw new Error("Paw build accepts either executor or providerExecutor, not both.");
+	}
+	if (commandInput.executor !== undefined) {
+		return commandInput.executor;
+	}
+	if (commandInput.providerExecutor !== undefined) {
+		return createPawProviderSubAgentRuntimeExecutor(commandInput.providerExecutor);
+	}
+	return createPawUnavailableSubAgentExecutor();
 }
 
 function createPawUnavailableSubAgentExecutor(): PawSubAgentRuntimeExecutor {
