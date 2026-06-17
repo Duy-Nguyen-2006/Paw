@@ -413,6 +413,26 @@ export type {
 	PawSliceImplementationResult,
 } from "./slice-implementation.ts";
 export { beginPawSliceImplementation } from "./slice-implementation.ts";
+
+export type {
+	PawBeginImplementationCommandAdvancedResult,
+	PawBeginImplementationCommandInput,
+	PawBeginImplementationCommandInvalidTransitionResult,
+	PawBeginImplementationCommandLockedByOtherResult,
+	PawBeginImplementationCommandLockedResult,
+	PawBeginImplementationCommandMissingProjectResult,
+	PawBeginImplementationCommandMissingSessionResult,
+	PawBeginImplementationCommandNoSelectedSliceResult,
+	PawBeginImplementationCommandNotLockedResult,
+	PawBeginImplementationCommandResult,
+	PawBeginImplementationParsedArgs,
+} from "./slice-implementation-command.ts";
+export {
+	createPawBeginImplementationCommandResult,
+	formatPawBeginImplementationCommandResult,
+	parsePawBeginImplementationArgs,
+	runPawBeginImplementationCommand,
+} from "./slice-implementation-command.ts";
 export type {
 	PawAppliedChangeLookupInput,
 	PawSliceJournalApplyMethod,

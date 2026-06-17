@@ -9,6 +9,7 @@ import { runPawApprovePlanCommand } from "./plan-approval-command.ts";
 import { runPawReportCommand } from "./report-command.ts";
 import { runPawResumeCommand } from "./resume-command.ts";
 import { runPawPrepareCheckpointCommand } from "./slice-checkpoint-command.ts";
+import { runPawBeginImplementationCommand } from "./slice-implementation-command.ts";
 import { runPawSelectSliceCommand } from "./slice-selection-command.ts";
 import { runPawStartCommand } from "./start-command.ts";
 import { runPawStatusCommand } from "./status-command.ts";
@@ -23,6 +24,7 @@ function printPawHelp(): void {
   ${APP_NAME} paw verify <session-id>
   ${APP_NAME} paw approve-plan <session-id> --slice <slice-id>[:<title>]...
   ${APP_NAME} paw select-slice <session-id>
+  ${APP_NAME} paw begin-implementation <session-id>
   ${APP_NAME} paw prepare-checkpoint <session-id> --base-tree <tree> --short-id <id> --timestamp <iso> --changed-file <path>=<hash|null>
   ${APP_NAME} paw finalize <session-id> --summary <text>
   ${APP_NAME} paw report <session-id>
@@ -43,7 +45,9 @@ Commands:
   ${APP_NAME} paw approve-plan <session-id> --slice <id>[:<title>]... Approve plan slices from PLAN_DRAFTED
   ${APP_NAME} paw approve-plan --help               Show approve-plan help
   ${APP_NAME} paw select-slice <session-id>          Select next pending plan slice
+  ${APP_NAME} paw begin-implementation <session-id>   Begin implementing selected slice from SLICE_SELECT
   ${APP_NAME} paw select-slice --help                Show select-slice help
+  ${APP_NAME} paw begin-implementation --help          Show begin-implementation help
   ${APP_NAME} paw prepare-checkpoint <session-id> ... Prepare slice checkpoint metadata from SLICE_SELECT
   ${APP_NAME} paw prepare-checkpoint --help           Show prepare-checkpoint help
   ${APP_NAME} paw verify <session-id> Record configured verification decisions
@@ -147,6 +151,11 @@ export async function handlePawCommand(args: string[]): Promise<boolean> {
 
 	if (subcommand === "select-slice") {
 		await runPawSelectSliceCommand(rest);
+		return true;
+	}
+
+	if (subcommand === "begin-implementation") {
+		await runPawBeginImplementationCommand(rest);
 		return true;
 	}
 
