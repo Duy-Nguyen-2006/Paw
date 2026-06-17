@@ -416,6 +416,25 @@ export type {
 } from "./slice-selection.ts";
 export { selectNextPawPlanSlice } from "./slice-selection.ts";
 export type {
+	PawSelectSliceCommandAdvancedResult,
+	PawSelectSliceCommandInput,
+	PawSelectSliceCommandInvalidTransitionResult,
+	PawSelectSliceCommandLockedByOtherResult,
+	PawSelectSliceCommandLockedResult,
+	PawSelectSliceCommandMissingProjectResult,
+	PawSelectSliceCommandMissingSessionResult,
+	PawSelectSliceCommandNoPendingResult,
+	PawSelectSliceCommandNotLockedResult,
+	PawSelectSliceCommandResult,
+	PawSelectSliceParsedArgs,
+} from "./slice-selection-command.ts";
+export {
+	createPawSelectSliceCommandResult,
+	formatPawSelectSliceCommandResult,
+	parsePawSelectSliceArgs,
+	runPawSelectSliceCommand,
+} from "./slice-selection-command.ts";
+export type {
 	PawStartCommandExistingResult,
 	PawStartCommandInput,
 	PawStartCommandLockedResult,
