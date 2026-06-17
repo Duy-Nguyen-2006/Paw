@@ -79,11 +79,20 @@ describe("Paw verify command", () => {
 		expect(result.previousStateName).toBe("VERIFYING");
 		expect(result.nextStateName).toBe("SLICE_DONE");
 		expect(result.currentSliceId).toBe("slice-1");
+		expect(result.nativeVerificationPlan.find((entry) => entry.gate === "unit_tests")).toMatchObject({
+			status: "planned",
+			command: ["./test.sh"],
+			executed: false,
+		});
 		expect(result.verifyDecisions.length).toBeGreaterThan(0);
 		expect(result.verifyDecisions.every((decision) => decision.status === "unverified")).toBe(true);
 		expect(result.unverifiedDecisions.map((decision) => decision.gate)).toContain("unit_tests");
+		expect(result.unverifiedDecisions.find((decision) => decision.gate === "unit_tests")).toMatchObject({
+			reason: "Native verification command is planned but not executed in this foundation slice: ./test.sh.",
+		});
 		expect(result.lockReleased).toBe(true);
 		expect(formatPawVerifyCommandResult(result)).toContain("status: completed_with_unverified");
+		expect(formatPawVerifyCommandResult(result)).toContain("planned native gates:");
 		expect(formatPawVerifyCommandResult(result)).toContain("unverified gates:");
 		await expect(readPawSessionState(projectRoot, "session-1")).resolves.toMatchObject({
 			name: "SLICE_DONE",

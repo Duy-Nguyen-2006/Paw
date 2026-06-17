@@ -418,6 +418,14 @@ export type {
 } from "./task-session.ts";
 export { advancePawTaskSession, startPawTaskSession } from "./task-session.ts";
 export type {
+	PawNativeVerificationGateStatus,
+	PawNativeVerificationPlanEntry,
+} from "./verification-plan.ts";
+export {
+	createPawNativeVerificationPlan,
+	formatPawNativeVerificationCommand,
+} from "./verification-plan.ts";
+export type {
 	PawVerifierBlockedCompletedResult,
 	PawVerifierBlockedInput,
 	PawVerifierBlockedInvalidReasonResult,
