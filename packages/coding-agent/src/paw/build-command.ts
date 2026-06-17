@@ -1,7 +1,10 @@
 import { APP_NAME } from "../config.ts";
+import { AuthStorage } from "../core/auth-storage.ts";
+import { ModelRegistry } from "../core/model-registry.ts";
 import { loadDefaultPawRuntimeConfig } from "./config.ts";
-import type { PawRuntimeConfig, PawSubAgentOutput, PawValidationIssue } from "./contracts.ts";
+import type { PawRuntimeConfig, PawValidationIssue } from "./contracts.ts";
 import { emitPawFinalReport } from "./final-report-emission.ts";
+import { resolvePawModelRoute } from "./model-routing.ts";
 import type { PawVerifyGateDecision } from "./resilience-policy.ts";
 import { type PawReviewerOnceResult, runPawReviewerOnce } from "./reviewer-orchestrator.ts";
 import { acquirePawSessionLock, readPawSessionState, releasePawSessionLock } from "./session-store.ts";
@@ -19,7 +22,7 @@ import {
 } from "./subagent-runtime.ts";
 import type { PawSubAgentSandboxPreflightInput } from "./subagent-sandbox-preflight.ts";
 import type { PawNativeVerificationPlanEntry } from "./verification-plan.ts";
-import type { PawNativeVerificationRunResult } from "./verification-runner.ts";
+import type { PawNativeVerificationExecutor, PawNativeVerificationRunResult } from "./verification-runner.ts";
 import { createPawVerifyCommandResult, type PawVerifyCommandResult } from "./verify-command.ts";
 import { type PawWorkerOnceResult, runPawWorkerOnce } from "./worker-orchestrator.ts";
 
@@ -71,6 +74,7 @@ export interface PawBuildCommandInput {
 	executor?: PawSubAgentRuntimeExecutor;
 	providerExecutor?: PawProviderSubAgentRuntimeExecutorInput;
 	lockOptions?: Parameters<typeof runPawWorkerOnce>[0]["lockOptions"];
+	nativeVerificationExecutor?: PawNativeVerificationExecutor;
 	sandboxPreflight?: PawSubAgentSandboxPreflightInput;
 }
 
@@ -204,7 +208,7 @@ async function createPawBuildStepResult(
 	commandInput: PawBuildCommandInput = {},
 ): Promise<PawBuildStepResult> {
 	const config = commandInput.config ?? loadDefaultPawRuntimeConfig(repoRoot);
-	const executor = resolvePawBuildSubAgentExecutor(commandInput);
+	const executor = resolvePawBuildSubAgentExecutor(commandInput, config);
 	const state = await readPawSessionStateIfExists(repoRoot, sessionId);
 	if (stateNameCanSelectSlice(state)) {
 		return createPawSelectSliceCommandResult(repoRoot, sessionId, { lockOptions: commandInput.lockOptions });
@@ -227,7 +231,10 @@ async function createPawBuildStepResult(
 	}
 
 	if (stateNameIsVerifying(state)) {
-		return createPawVerifyCommandResult(repoRoot, sessionId, { lockOptions: commandInput.lockOptions });
+		return createPawVerifyCommandResult(repoRoot, sessionId, {
+			lockOptions: commandInput.lockOptions,
+			nativeVerificationExecutor: commandInput.nativeVerificationExecutor,
+		});
 	}
 
 	return runPawWorkerOnce({
@@ -509,7 +516,10 @@ function stateNameIsVerifying(state: { name: string } | null): boolean {
 	return state?.name === "VERIFYING";
 }
 
-function resolvePawBuildSubAgentExecutor(commandInput: PawBuildCommandInput): PawSubAgentRuntimeExecutor {
+function resolvePawBuildSubAgentExecutor(
+	commandInput: PawBuildCommandInput,
+	config: PawRuntimeConfig,
+): PawSubAgentRuntimeExecutor {
 	if (commandInput.executor !== undefined && commandInput.providerExecutor !== undefined) {
 		throw new Error("Paw build accepts either executor or providerExecutor, not both.");
 	}
@@ -519,35 +529,17 @@ function resolvePawBuildSubAgentExecutor(commandInput: PawBuildCommandInput): Pa
 	if (commandInput.providerExecutor !== undefined) {
 		return createPawProviderSubAgentRuntimeExecutor(commandInput.providerExecutor);
 	}
-	return createPawUnavailableSubAgentExecutor();
+	return createPawProviderSubAgentRuntimeExecutor({
+		modelRegistry: ModelRegistry.create(AuthStorage.create()),
+		defaultProvider: "primary",
+		modelIdResolver: (invocation) => resolveDefaultPawBuildModelId(config, invocation),
+	});
 }
 
-function createPawUnavailableSubAgentExecutor(): PawSubAgentRuntimeExecutor {
-	return (invocation: PawSubAgentRuntimeInvocation) => {
-		const agent = invocation.role === "reviewer" ? "reviewer" : "worker";
-		const output: PawSubAgentOutput = {
-			status: "blocked",
-			confidence: "low",
-			agent,
-			session_id: invocation.session_id,
-			slice_id: invocation.slice_id ?? null,
-			artifact_ref: invocation.artifact_ref,
-			changed_files: [],
-			inspected_files: [],
-			risks: [{ description: `No default Paw ${agent} provider executor is wired yet.`, severity: "medium" }],
-			next_actions: [`Provide an orchestrator ${agent} executor or complete the provider integration slice.`],
-			blocked_reason: {
-				code: "PROVIDER_UNAVAILABLE",
-				message: `Paw build cannot invoke a real ${agent} provider yet.`,
-				suggested_action: "Wire provider execution before running paw build without an injected executor.",
-			},
-			tokens_used: 0,
-			usd_cost: 0,
-			degraded: false,
-			model_used: invocation.model_id ?? null,
-		};
-		return { raw_output: JSON.stringify(output), model_id: invocation.model_id ?? null };
-	};
+function resolveDefaultPawBuildModelId(config: PawRuntimeConfig, invocation: PawSubAgentRuntimeInvocation): string {
+	const role = invocation.role === "reviewer" ? "reviewer" : "worker_simple";
+	const route = resolvePawModelRoute(config, role, "standard");
+	return `${route.providerName}/${route.model}`;
 }
 
 function isFileSystemError(error: unknown): error is NodeJS.ErrnoException {

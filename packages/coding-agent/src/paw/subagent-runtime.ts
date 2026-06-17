@@ -105,10 +105,13 @@ export type PawProviderSubAgentModelRegistry = {
 	): PawProviderSubAgentRegistryAuthResult | Promise<PawProviderSubAgentRegistryAuthResult>;
 };
 
+export type PawProviderSubAgentModelIdResolver = (invocation: PawSubAgentRuntimeInvocation) => string;
+
 export type PawProviderSubAgentRegistryResolverInput = {
 	modelRegistry: PawProviderSubAgentModelRegistry;
 	defaultProvider?: string;
 	defaultOptions?: SimpleStreamOptions;
+	modelIdResolver?: PawProviderSubAgentModelIdResolver;
 };
 
 export type PawProviderSubAgentRuntimeExecutorInput = PawProviderSubAgentRegistryResolverInput & {
@@ -150,15 +153,22 @@ export function createPawCompleteSimpleSubAgentCompletion(
 ): PawProviderSubAgentCompletion {
 	return async (completionInput) => {
 		const resolved = await input.resolveModel(completionInput);
-		const message = await (input.completeSimple ?? completeSimple)(
-			resolved.model,
-			createPawProviderSubAgentContext(completionInput.prompt),
-			resolved.options,
-		);
-		return {
-			text: extractAssistantText(message),
-			model_id: message.responseModel ?? message.model ?? resolved.model.id,
-		};
+		try {
+			const message = await (input.completeSimple ?? completeSimple)(
+				resolved.model,
+				createPawProviderSubAgentContext(completionInput.prompt),
+				resolved.options,
+			);
+			if (message.stopReason === "error" || message.stopReason === "aborted") {
+				throw new Error(message.errorMessage ?? `provider stopped with ${message.stopReason}`);
+			}
+			return {
+				text: extractAssistantText(message),
+				model_id: message.responseModel ?? message.model ?? resolved.model.id,
+			};
+		} catch (error) {
+			throw new Error(`Paw sub-agent provider completion failed: ${getErrorMessage(error)}`);
+		}
 	};
 }
 
@@ -166,7 +176,8 @@ export function createPawModelRegistrySubAgentResolver(
 	input: PawProviderSubAgentRegistryResolverInput,
 ): PawProviderSubAgentModelResolver {
 	return async (completionInput) => {
-		const modelRef = parsePawProviderModelRef(completionInput.model_id, input.defaultProvider);
+		const modelId = input.modelIdResolver?.(completionInput.invocation) ?? completionInput.model_id;
+		const modelRef = parsePawProviderModelRef(modelId, input.defaultProvider);
 		const model = input.modelRegistry.find(modelRef.provider, modelRef.modelId);
 		if (model === undefined) {
 			throw new Error(`Paw sub-agent model ${modelRef.provider}/${modelRef.modelId} was not found.`);

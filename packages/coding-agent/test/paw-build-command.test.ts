@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AssistantMessage, Context, Model, SimpleStreamOptions } from "@earendil-works/pi-ai";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { ENV_AGENT_DIR } from "../src/config.ts";
 import { main } from "../src/main.ts";
 import {
 	createPawBuildCommandResult,
@@ -37,6 +38,7 @@ const timestamp = "2026-06-17T00:00:00.000Z";
 
 let originalCwd: string;
 let originalExitCode: typeof process.exitCode;
+let originalAgentDir: string | undefined;
 
 async function createTempProject(): Promise<string> {
 	const root = await mkdtemp(join(tmpdir(), "paw-build-command-"));
@@ -237,9 +239,41 @@ async function writeLock(repoRoot: string, sessionId: string, lock: PawSessionLo
 	await writePawJsonAtomic(resolvePawSessionPaths(repoRoot, sessionId).lockFile, lock);
 }
 
+async function createTempAgentDir(): Promise<string> {
+	const agentDir = await mkdtemp(join(tmpdir(), "paw-build-agent-"));
+	tempRoots.push(agentDir);
+	return agentDir;
+}
+
+async function writeModelsJson(
+	agentDir: string,
+	provider = "primary",
+	models = ["<configured-mid-model>", "<configured-strong-model>"],
+): Promise<void> {
+	await writeFile(
+		join(agentDir, "models.json"),
+		JSON.stringify(
+			{
+				providers: {
+					[provider]: {
+						baseUrl: "http://localhost:0",
+						apiKey: "fake-key",
+						api: "anthropic-messages",
+						models: models.map((id) => ({ id })),
+					},
+				},
+			},
+			null,
+			2,
+		),
+		"utf-8",
+	);
+}
+
 beforeEach(() => {
 	originalCwd = process.cwd();
 	originalExitCode = process.exitCode;
+	originalAgentDir = process.env[ENV_AGENT_DIR];
 	process.exitCode = undefined;
 });
 
@@ -247,6 +281,11 @@ afterEach(async () => {
 	vi.restoreAllMocks();
 	process.chdir(originalCwd);
 	process.exitCode = originalExitCode;
+	if (originalAgentDir === undefined) {
+		delete process.env[ENV_AGENT_DIR];
+	} else {
+		process.env[ENV_AGENT_DIR] = originalAgentDir;
+	}
 	await Promise.all(tempRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
@@ -391,9 +430,106 @@ describe("Paw build command", () => {
 		expect(formatPawBuildCommandResult(result)).toContain("final report: done_with_unverified");
 	});
 
+	test("completes a full multi-slice build loop with fake agents, native verification, and final report", async () => {
+		const projectRoot = await createTempProject();
+		process.chdir(projectRoot);
+		const config = loadDefaultPawRuntimeConfig(projectRoot);
+		const executedGates: string[] = [];
+		await expect(handlePawCommand(["paw", "init"])).resolves.toBe(true);
+		await writePawSessionState(projectRoot, {
+			...createPlanApprovedState("session-1"),
+			pending_slice_ids: ["slice-1", "slice-2"],
+		});
+		const executor = createExecutor([
+			JSON.stringify(createWorkerOutput({ slice_id: "slice-1", model_used: "fake-worker-1" })),
+			JSON.stringify(createReviewerOutput({ slice_id: "slice-1", model_used: "fake-reviewer-1" })),
+			JSON.stringify(
+				createWorkerOutput({
+					slice_id: "slice-2",
+					model_used: "fake-worker-2",
+					changed_files: [
+						{
+							path: "src/b.ts",
+							change_type: "modify",
+							content_hash: "sha256:second",
+							apply_method: "diff",
+						},
+					],
+				}),
+			),
+			JSON.stringify(
+				createReviewerOutput({
+					slice_id: "slice-2",
+					model_used: "fake-reviewer-2",
+					inspected_files: [{ path: "src/b.ts", line_span: "1-12", rationale: "Reviewed second slice." }],
+				}),
+			),
+		]);
+
+		const result = await createPawBuildCommandResult(
+			projectRoot,
+			"session-1",
+			{ maxSteps: 12, timestamp },
+			{
+				config,
+				executor,
+				lockOptions: { nowMs: 2_000, ttlSec: 120 },
+				nativeVerificationExecutor: async (input) => {
+					executedGates.push(input.gate);
+					return { exitCode: 0, stdout: `${input.gate} ok`, stderr: "" };
+				},
+				sandboxPreflight: { availablePrimitives: ["bubblewrap_only"] },
+			},
+		);
+
+		expect(result.status).toBe("loop_completed");
+		if (result.status !== "loop_completed") return;
+		expect(result.stepsRun).toBe(11);
+		expect(result.maxSteps).toBe(12);
+		expect(result.stopReason).toBe("no_pending_slices");
+		expect(result.finalStateName).toBe("FINAL_REPORT");
+		expect(result.stepResults.map((step) => step.status)).toEqual([
+			"advanced",
+			"advanced",
+			"completed",
+			"completed",
+			"completed",
+			"advanced",
+			"advanced",
+			"completed",
+			"completed",
+			"completed",
+			"no_pending_slices",
+		]);
+		expect(executedGates.length).toBeGreaterThan(0);
+		expect(executedGates.length % 2).toBe(0);
+		expect(result.finalReport?.status).toBe("completed");
+		if (result.finalReport?.status !== "completed") return;
+		expect(result.finalReport.reportStatus).toBe("done");
+		await expect(readPawSessionState(projectRoot, "session-1")).resolves.toMatchObject({
+			name: "FINAL_REPORT",
+			pending_slice_ids: [],
+			completed_slice_ids: ["slice-1", "slice-2"],
+		});
+		const verificationEvidence = await readPawVerificationEvidence(projectRoot, "session-1");
+		expect(verificationEvidence.length).toBeGreaterThan(0);
+		expect(verificationEvidence.every((entry) => entry.status === "verified" && entry.executed)).toBe(true);
+		const summary = await readFile(result.finalReport.summaryFile, "utf-8");
+		expect(summary).toContain("Paw build completed 11 step(s) within max 12.");
+		expect(summary).toContain("- done");
+		expect(summary).toContain("## Verification Evidence");
+		expect(summary).toContain("verified");
+		const reportJson = JSON.parse(await readFile(result.finalReport.reportJsonFile, "utf-8"));
+		expect(reportJson.status).toBe("done");
+		expect(reportJson.unverified_gates).toEqual([]);
+		expect(reportJson.native_verification_run_results).toEqual(verificationEvidence);
+		expect(formatPawBuildCommandResult(result)).toContain("final report: done");
+	});
+
 	test("stops a bounded build loop on provider unavailable block", async () => {
 		const projectRoot = await createTempProject();
 		process.chdir(projectRoot);
+		process.env[ENV_AGENT_DIR] = await createTempAgentDir();
 		await expect(handlePawCommand(["paw", "init"])).resolves.toBe(true);
 		await writePawSessionState(projectRoot, createPlanApprovedState("session-1"));
 
@@ -1095,6 +1231,7 @@ describe("Paw build command", () => {
 	test("default build executor blocks as provider unavailable for worker and reviewer", async () => {
 		const projectRoot = await createTempProject();
 		process.chdir(projectRoot);
+		process.env[ENV_AGENT_DIR] = await createTempAgentDir();
 		await expect(handlePawCommand(["paw", "init"])).resolves.toBe(true);
 		await writePawSessionState(projectRoot, createImplementingState("worker-session", "slice-1"));
 		await writePawSessionState(projectRoot, createReviewingState("reviewer-session", "slice-1"));
@@ -1112,9 +1249,27 @@ describe("Paw build command", () => {
 		expect(reviewerResult.blockedReasonCode).toBe("PROVIDER_UNAVAILABLE");
 	});
 
+	test("default build executor preserves routed provider names", async () => {
+		const projectRoot = await createTempProject();
+		process.chdir(projectRoot);
+		process.env[ENV_AGENT_DIR] = await createTempAgentDir();
+		const config = loadDefaultPawRuntimeConfig(projectRoot);
+		config.model_tiers.mid.provider = "secondary";
+		await expect(handlePawCommand(["paw", "init"])).resolves.toBe(true);
+		await writePawSessionState(projectRoot, createImplementingState("worker-session", "slice-1"));
+
+		const result = await createPawBuildCommandResult(projectRoot, "worker-session", { once: true }, { config });
+
+		expect(result.status).toBe("blocked");
+		if (result.status !== "blocked") return;
+		expect(result.blockedReasonCode).toBe("PROVIDER_UNAVAILABLE");
+		expect(result.blockedReasonMessage).toContain("secondary/<configured-mid-model>");
+	});
+
 	test("routes paw build and validates command arguments", async () => {
 		const projectRoot = await createTempProject();
 		process.chdir(projectRoot);
+		process.env[ENV_AGENT_DIR] = await createTempAgentDir();
 		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 		await expect(handlePawCommand(["paw", "init"])).resolves.toBe(true);
@@ -1133,9 +1288,12 @@ describe("Paw build command", () => {
 		expect(process.exitCode).toBe(1);
 	});
 
-	test("main routes paw build before normal agent runtime", async () => {
+	test("main routes paw build through the default provider executor before normal agent runtime", async () => {
 		const projectRoot = await createTempProject();
+		const agentDir = await createTempAgentDir();
 		process.chdir(projectRoot);
+		process.env[ENV_AGENT_DIR] = agentDir;
+		await writeModelsJson(agentDir);
 		vi.spyOn(console, "log").mockImplementation(() => {});
 		vi.spyOn(process, "exit").mockImplementation(((code?: string | number | null) => {
 			throw new Error(`process.exit(${code ?? ""})`);
@@ -1148,6 +1306,10 @@ describe("Paw build command", () => {
 		await expect(readPawSessionState(projectRoot, "session-1")).resolves.toMatchObject({
 			name: "BLOCKED_PROVIDER_UNAVAILABLE",
 			current_slice_id: "slice-1",
+			blocked_reason: {
+				code: "PROVIDER_UNAVAILABLE",
+				message: expect.stringContaining("Paw sub-agent provider completion failed"),
+			},
 		});
 		expect(process.exitCode).toBeUndefined();
 	});

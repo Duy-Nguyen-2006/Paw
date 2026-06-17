@@ -91,6 +91,11 @@ describe("parsePawRollbackArgs", () => {
 			sessionId: "session-1",
 			input: { dryRun: true, checkpointName: "checkpoint-1" },
 		});
+		expect(parsePawRollbackArgs(["session-1"])).toEqual({
+			kind: "ok",
+			sessionId: "session-1",
+			input: { dryRun: false },
+		});
 		expect(parsePawRollbackArgs(["--help"])).toEqual({ kind: "help" });
 		expect(parsePawRollbackArgs([])).toEqual({
 			kind: "error",
@@ -99,10 +104,6 @@ describe("parsePawRollbackArgs", () => {
 		expect(parsePawRollbackArgs(["--dry-run"])).toEqual({
 			kind: "error",
 			message: 'Missing required session id for "paw rollback".',
-		});
-		expect(parsePawRollbackArgs(["session-1"])).toEqual({
-			kind: "error",
-			message: "Only dry-run rollback inspection is implemented. Pass --dry-run.",
 		});
 		expect(parsePawRollbackArgs(["session-1", "--dry-run", "--dry-run"])).toEqual({
 			kind: "error",
@@ -153,6 +154,43 @@ describe("Paw rollback command", () => {
 		expect(formatPawRollbackCommandResult(result)).toContain("No files were changed.");
 		expect(formatPawRollbackCommandResult(result)).toContain("Git state was not touched.");
 		await expect(readPawSessionState(projectRoot, "session-1")).resolves.toEqual(initialState);
+		expect(await getPawSessionLockStatus(projectRoot, "session-1", { nowMs: 2_000 })).toEqual({ status: "unlocked" });
+		expect(existsSync(resolvePawSessionPaths(projectRoot, "session-1").lockFile)).toBe(false);
+	});
+
+	test("fails closed on non-dry-run rollback when checkpoint lacks restorable file content", async () => {
+		const projectRoot = await createTempProject();
+		process.chdir(projectRoot);
+		await expect(handlePawCommand(["paw", "init"])).resolves.toBe(true);
+		const initialState = createSessionState("session-1");
+		await writePawSessionState(projectRoot, initialState);
+		await writePawCheckpointMetadata(projectRoot, createCheckpointMetadata());
+
+		const result = await createPawRollbackCommandResult(projectRoot, "session-1", {
+			dryRun: false,
+			checkpointName: "20260617T010203Z-slice-1-abc123",
+		});
+
+		expect(result.status).toBe("blocked_missing_restore_metadata");
+		if (result.status !== "blocked_missing_restore_metadata") return;
+		expect(result.filesChanged).toBe(false);
+		expect(result.rollbackExecuted).toBe(false);
+		expect(result.gitTouched).toBe(false);
+		expect(result.blockedReason).toContain("does not contain restorable file content");
+		expect(result.externalSideEffectsNotReverted).toEqual([
+			"migrations",
+			"installed dependencies",
+			"generated artifacts outside Paw-owned file changes",
+			"external service or provider side effects",
+		]);
+		const formatted = formatPawRollbackCommandResult(result);
+		expect(formatted).toContain("Paw rollback blocked");
+		expect(formatted).toContain("External side effects not reverted:");
+		expect(formatted).toContain("No files were changed.");
+		expect(formatted).toContain("No rollback was executed.");
+		expect(formatted).toContain("Git state was not touched.");
+		await expect(readPawSessionState(projectRoot, "session-1")).resolves.toEqual(initialState);
+		expect(existsSync(join(projectRoot, "src", "changed.ts"))).toBe(false);
 		expect(await getPawSessionLockStatus(projectRoot, "session-1", { nowMs: 2_000 })).toEqual({ status: "unlocked" });
 		expect(existsSync(resolvePawSessionPaths(projectRoot, "session-1").lockFile)).toBe(false);
 	});
@@ -259,15 +297,22 @@ describe("Paw rollback command", () => {
 		await writePawCheckpointMetadata(projectRoot, createCheckpointMetadata());
 
 		await expect(handlePawCommand(["paw", "rollback", "session-1", "--dry-run"])).resolves.toBe(true);
+		expect(process.exitCode).toBeUndefined();
+
 		await expect(handlePawCommand(["paw", "rollback", "session-1"])).resolves.toBe(true);
+		expect(process.exitCode).toBe(1);
+
+		process.exitCode = undefined;
 		await expect(handlePawCommand(["paw", "rollback", "--help"])).resolves.toBe(true);
+		await expect(handlePawCommand(["paw", "rollback", "session-1", "--bogus"])).resolves.toBe(true);
 
 		const stdout = logSpy.mock.calls.map(([message]) => String(message)).join("\n");
 		const stderr = errorSpy.mock.calls.map(([message]) => String(message)).join("\n");
 		expect(stdout).toContain("Paw rollback dry-run");
+		expect(stdout).toContain("Paw rollback blocked");
 		expect(stdout).toContain("No files were changed.");
 		expect(stdout).toContain("pi paw rollback");
-		expect(stderr).toContain("Only dry-run rollback inspection is implemented");
+		expect(stderr).toContain('Unknown option for "paw rollback": --bogus');
 		expect(process.exitCode).toBe(1);
 	});
 

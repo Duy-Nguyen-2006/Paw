@@ -9,6 +9,7 @@ import type { PawSessionStateName } from "./state.ts";
 
 export type PawRollbackCommandResult =
 	| PawRollbackDryRunResult
+	| PawRollbackBlockedMissingRestoreMetadataResult
 	| PawRollbackMissingProjectResult
 	| PawRollbackMissingSessionResult
 	| PawRollbackNoCheckpointsResult
@@ -25,6 +26,20 @@ export interface PawRollbackDryRunResult {
 	filesChanged: false;
 	rollbackExecuted: false;
 	gitTouched: false;
+}
+
+export interface PawRollbackBlockedMissingRestoreMetadataResult {
+	status: "blocked_missing_restore_metadata";
+	sessionId: string;
+	checkpointName: string;
+	metadataPath: string;
+	stateName: PawSessionStateName;
+	metadata: PawCheckpointMetadata;
+	filesChanged: false;
+	rollbackExecuted: false;
+	gitTouched: false;
+	blockedReason: string;
+	externalSideEffectsNotReverted: readonly string[];
 }
 
 export interface PawRollbackMissingProjectResult {
@@ -60,7 +75,7 @@ export interface PawRollbackInvalidCheckpointResult {
 }
 
 export interface PawRollbackParsedInput {
-	dryRun: true;
+	dryRun: boolean;
 	checkpointName?: string;
 }
 
@@ -122,10 +137,6 @@ export function parsePawRollbackArgs(args: string[]): PawRollbackParsedArgs {
 		return { kind: "error", message: `Unknown option for "paw rollback": ${arg}` };
 	}
 
-	if (!dryRun) {
-		return { kind: "error", message: "Only dry-run rollback inspection is implemented. Pass --dry-run." };
-	}
-
 	const input: PawRollbackParsedInput = { dryRun };
 	if (checkpointName !== undefined) {
 		input.checkpointName = checkpointName;
@@ -171,6 +182,28 @@ export async function createPawRollbackCommandResult(
 	}
 
 	const state = await readPawSessionState(repoRoot, sessionId);
+	if (!input.dryRun) {
+		return {
+			status: "blocked_missing_restore_metadata",
+			sessionId,
+			checkpointName,
+			metadataPath: metadataFile,
+			stateName: state.name,
+			metadata: validation.value,
+			filesChanged: false,
+			rollbackExecuted: false,
+			gitTouched: false,
+			blockedReason:
+				"Checkpoint metadata records changed paths and content hashes only; it does not contain restorable file content or a shadow snapshot reference.",
+			externalSideEffectsNotReverted: [
+				"migrations",
+				"installed dependencies",
+				"generated artifacts outside Paw-owned file changes",
+				"external service or provider side effects",
+			],
+		};
+	}
+
 	return {
 		status: "dry_run",
 		sessionId,
@@ -189,16 +222,18 @@ export function formatPawRollbackCommandResult(result: PawRollbackCommandResult)
 		case "dry_run":
 			return [
 				"Paw rollback dry-run",
-				`session: ${result.sessionId}`,
-				`status: ${result.status}`,
-				`checkpoint: ${result.checkpointName}`,
-				`metadata: ${result.metadataPath}`,
-				`state: ${result.stateName}`,
-				`scope: ${result.metadata.scope}`,
-				`slice: ${result.metadata.slice_id ?? "none"}`,
-				`base tree: ${result.metadata.base_tree}`,
-				`changed files: ${result.metadata.changed_files.length}`,
-				...formatRollbackChangedFiles(result.metadata.changed_files),
+				...formatRollbackInspectionLines(result),
+				"No files were changed.",
+				"No rollback was executed.",
+				"Git state was not touched.",
+			].join("\n");
+		case "blocked_missing_restore_metadata":
+			return [
+				"Paw rollback blocked",
+				...formatRollbackInspectionLines(result),
+				`blocked: ${result.blockedReason}`,
+				"External side effects not reverted:",
+				...result.externalSideEffectsNotReverted.map((sideEffect) => `  - ${sideEffect}`),
 				"No files were changed.",
 				"No rollback was executed.",
 				"Git state was not touched.",
@@ -228,11 +263,11 @@ export async function runPawRollbackCommand(args: string[]): Promise<void> {
 	}
 
 	try {
-		console.log(
-			formatPawRollbackCommandResult(
-				await createPawRollbackCommandResult(process.cwd(), parsed.sessionId, parsed.input),
-			),
-		);
+		const result = await createPawRollbackCommandResult(process.cwd(), parsed.sessionId, parsed.input);
+		console.log(formatPawRollbackCommandResult(result));
+		if (result.status === "blocked_missing_restore_metadata") {
+			process.exitCode = 1;
+		}
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		printPawRollbackCommandError(message);
@@ -262,6 +297,23 @@ async function findLatestPawCheckpointName(repoRoot: string, sessionId: string):
 		}
 	}
 	return directories.sort().at(-1) ?? null;
+}
+
+function formatRollbackInspectionLines(
+	result: PawRollbackDryRunResult | PawRollbackBlockedMissingRestoreMetadataResult,
+): string[] {
+	return [
+		`session: ${result.sessionId}`,
+		`status: ${result.status}`,
+		`checkpoint: ${result.checkpointName}`,
+		`metadata: ${result.metadataPath}`,
+		`state: ${result.stateName}`,
+		`scope: ${result.metadata.scope}`,
+		`slice: ${result.metadata.slice_id ?? "none"}`,
+		`base tree: ${result.metadata.base_tree}`,
+		`changed files: ${result.metadata.changed_files.length}`,
+		...formatRollbackChangedFiles(result.metadata.changed_files),
+	];
 }
 
 function formatRollbackChangedFiles(changedFiles: PawCheckpointMetadata["changed_files"]): string[] {
@@ -303,8 +355,10 @@ function printPawRollbackHelp(): void {
 
 Inspect checkpoint metadata for a future rollback without changing files.
 
+Without --dry-run, rollback fails closed unless checkpoint metadata includes enough restorable content for a safe Paw-owned file restore.
+
 Options:
-  --dry-run            Required. Inspect only; do not change files.
+  --dry-run            Inspect only; do not change files.
   --checkpoint <name>  Optional checkpoint name. Defaults to the latest checkpoint.
 
 Commands:
@@ -312,7 +366,7 @@ Commands:
   ${APP_NAME} paw rollback <session-id> --dry-run --checkpoint <name>
   ${APP_NAME} paw rollback --help
 
-This command is dry-run only. It does not edit files, acquire locks, run git, reset branches, stash changes, or restore content.
+This command never runs git, resets branches, or stashes changes. Non-dry-run rollback currently fails closed when restore metadata is insufficient.
 `);
 }
 

@@ -400,6 +400,7 @@ export type {
 } from "./risk-classifier.ts";
 export { classifyPawTask, maxPawRiskLevel, scorePawTaskRisk } from "./risk-classifier.ts";
 export type {
+	PawRollbackBlockedMissingRestoreMetadataResult,
 	PawRollbackCommandResult,
 	PawRollbackDryRunResult,
 	PawRollbackInvalidCheckpointResult,
@@ -618,6 +619,7 @@ export type {
 	PawProviderSubAgentCompletionInput,
 	PawProviderSubAgentCompletionResult,
 	PawProviderSubAgentExecutorInput,
+	PawProviderSubAgentModelIdResolver,
 	PawProviderSubAgentModelRegistry,
 	PawProviderSubAgentModelResolver,
 	PawProviderSubAgentPrompt,
