@@ -621,6 +621,8 @@ export {
 	createPawProviderSubAgentRuntimeExecutor,
 	runPawSubAgentRuntime,
 } from "./subagent-runtime.ts";
+export type { PawSubAgentSandboxPreflightInput } from "./subagent-sandbox-preflight.ts";
+export { evaluatePawSubAgentSandboxPreflight } from "./subagent-sandbox-preflight.ts";
 export type {
 	PawTaskSessionAdvancedResult,
 	PawTaskSessionAdvanceInput,

@@ -22,6 +22,10 @@ import {
 	type PawSubAgentRuntimeInvocation,
 	runPawSubAgentRuntime,
 } from "./subagent-runtime.ts";
+import {
+	evaluatePawSubAgentSandboxPreflight,
+	type PawSubAgentSandboxPreflightInput,
+} from "./subagent-sandbox-preflight.ts";
 
 export type PawReviewerOnceResult =
 	| PawReviewerOnceCompletedResult
@@ -45,6 +49,7 @@ export interface PawReviewerOnceInput {
 	executor: PawSubAgentRuntimeExecutor;
 	handoff?: string;
 	lockOptions?: PawSessionLockOptions;
+	sandboxPreflight?: PawSubAgentSandboxPreflightInput;
 }
 
 export interface PawReviewerOnceCompletedResult {
@@ -263,7 +268,12 @@ async function runReviewerRuntimeWithRetry(
 ): Promise<Extract<PawSubAgentRuntimeDecision, { status: "accepted" | "blocked" }>> {
 	let decision: PawSubAgentRuntimeDecision | undefined;
 	for (let attempt = 1; attempt <= 2; attempt += 1) {
-		decision = await runPawSubAgentRuntime(createReviewerInvocation(input, sliceId, attempt), input.executor);
+		const invocation = createReviewerInvocation(input, sliceId, attempt);
+		const sandboxDecision = evaluatePawSubAgentSandboxPreflight(input.config, invocation, input.sandboxPreflight);
+		if (sandboxDecision !== null) {
+			return sandboxDecision;
+		}
+		decision = await runPawSubAgentRuntime(invocation, input.executor);
 		if (decision.status !== "retry") {
 			return decision;
 		}

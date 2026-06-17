@@ -17,6 +17,7 @@ import {
 	type PawSubAgentRuntimeExecutor,
 	type PawSubAgentRuntimeInvocation,
 } from "./subagent-runtime.ts";
+import type { PawSubAgentSandboxPreflightInput } from "./subagent-sandbox-preflight.ts";
 import type { PawNativeVerificationPlanEntry } from "./verification-plan.ts";
 import type { PawNativeVerificationRunResult } from "./verification-runner.ts";
 import { createPawVerifyCommandResult, type PawVerifyCommandResult } from "./verify-command.ts";
@@ -70,6 +71,7 @@ export interface PawBuildCommandInput {
 	executor?: PawSubAgentRuntimeExecutor;
 	providerExecutor?: PawProviderSubAgentRuntimeExecutorInput;
 	lockOptions?: Parameters<typeof runPawWorkerOnce>[0]["lockOptions"];
+	sandboxPreflight?: PawSubAgentSandboxPreflightInput;
 }
 
 export type PawBuildParsedInput =
@@ -220,6 +222,7 @@ async function createPawBuildStepResult(
 			executor,
 			handoff: input.handoff,
 			lockOptions: commandInput.lockOptions,
+			sandboxPreflight: commandInput.sandboxPreflight,
 		});
 	}
 
@@ -234,6 +237,7 @@ async function createPawBuildStepResult(
 		executor,
 		handoff: input.handoff,
 		lockOptions: commandInput.lockOptions,
+		sandboxPreflight: commandInput.sandboxPreflight,
 		timestamp: input.timestamp,
 	});
 }

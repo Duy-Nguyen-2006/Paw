@@ -973,6 +973,125 @@ describe("Paw build command", () => {
 		expect(await getPawSessionLockStatus(projectRoot, "session-1", { nowMs: 2_500 })).toEqual({ status: "unlocked" });
 	});
 
+	test("sandbox preflight blocks worker before provider execution", async () => {
+		const projectRoot = await createTempProject();
+		process.chdir(projectRoot);
+		const config = loadDefaultPawRuntimeConfig(projectRoot);
+		let completions = 0;
+		await expect(handlePawCommand(["paw", "init"])).resolves.toBe(true);
+		await writePawSessionState(projectRoot, createImplementingState("session-1", "slice-1"));
+
+		const result = await createPawBuildCommandResult(
+			projectRoot,
+			"session-1",
+			{ once: true },
+			{
+				config,
+				providerExecutor: {
+					modelRegistry: createFakeModelRegistry(),
+					defaultProvider: "fake-provider",
+					completeSimple: async () => {
+						completions += 1;
+						return createAssistantMessage(JSON.stringify(createWorkerOutput()));
+					},
+				},
+				sandboxPreflight: { availablePrimitives: [] },
+				lockOptions: { nowMs: 2_000, ttlSec: 120 },
+			},
+		);
+
+		expect(completions).toBe(0);
+		expect(result.status).toBe("blocked");
+		if (result.status !== "blocked") return;
+		expect(result.previousStateName).toBe("IMPLEMENTING");
+		expect(result.nextStateName).toBe("BLOCKED_SANDBOX_UNAVAILABLE");
+		expect(result.blockedReasonCode).toBe("SANDBOX_UNAVAILABLE");
+		expect(result.attempts).toBe(0);
+		expect(result.lockReleased).toBe(true);
+		await expect(readPawSessionState(projectRoot, "session-1")).resolves.toMatchObject({
+			name: "BLOCKED_SANDBOX_UNAVAILABLE",
+			current_slice_id: "slice-1",
+		});
+	});
+
+	test("sandbox preflight blocks reviewer before provider execution", async () => {
+		const projectRoot = await createTempProject();
+		process.chdir(projectRoot);
+		const config = loadDefaultPawRuntimeConfig(projectRoot);
+		let completions = 0;
+		await expect(handlePawCommand(["paw", "init"])).resolves.toBe(true);
+		await writePawSessionState(projectRoot, createReviewingState("session-1", "slice-1"));
+
+		const result = await createPawBuildCommandResult(
+			projectRoot,
+			"session-1",
+			{ once: true },
+			{
+				config,
+				providerExecutor: {
+					modelRegistry: createFakeModelRegistry(),
+					defaultProvider: "fake-provider",
+					completeSimple: async () => {
+						completions += 1;
+						return createAssistantMessage(JSON.stringify(createReviewerOutput()));
+					},
+				},
+				sandboxPreflight: { availablePrimitives: [] },
+				lockOptions: { nowMs: 2_000, ttlSec: 120 },
+			},
+		);
+
+		expect(completions).toBe(0);
+		expect(result.status).toBe("blocked");
+		if (result.status !== "blocked") return;
+		expect(result.previousStateName).toBe("REVIEWING");
+		expect(result.nextStateName).toBe("BLOCKED_SANDBOX_UNAVAILABLE");
+		expect(result.blockedReasonCode).toBe("SANDBOX_UNAVAILABLE");
+		expect(result.attempts).toBe(0);
+		expect(result.lockReleased).toBe(true);
+		await expect(readPawSessionState(projectRoot, "session-1")).resolves.toMatchObject({
+			name: "BLOCKED_SANDBOX_UNAVAILABLE",
+			current_slice_id: "slice-1",
+		});
+	});
+
+	test("sandbox preflight allows worker execution when a configured primitive is available", async () => {
+		const projectRoot = await createTempProject();
+		process.chdir(projectRoot);
+		const config = loadDefaultPawRuntimeConfig(projectRoot);
+		let completions = 0;
+		await expect(handlePawCommand(["paw", "init"])).resolves.toBe(true);
+		await writePawSessionState(projectRoot, createImplementingState("session-1", "slice-1"));
+
+		const result = await createPawBuildCommandResult(
+			projectRoot,
+			"session-1",
+			{ once: true },
+			{
+				config,
+				providerExecutor: {
+					modelRegistry: createFakeModelRegistry(),
+					defaultProvider: "fake-provider",
+					completeSimple: async (model) => {
+						completions += 1;
+						return createAssistantMessage(JSON.stringify(createWorkerOutput({ model_used: model.id })), {
+							model: model.id,
+						});
+					},
+				},
+				sandboxPreflight: { availablePrimitives: ["bubblewrap_only"] },
+				lockOptions: { nowMs: 2_000, ttlSec: 120 },
+			},
+		);
+
+		expect(completions).toBe(1);
+		expect(result.status).toBe("completed");
+		if (result.status !== "completed") return;
+		expect(result.previousStateName).toBe("IMPLEMENTING");
+		expect(result.nextStateName).toBe("REVIEWING");
+		await expect(readPawSessionState(projectRoot, "session-1")).resolves.toMatchObject({ name: "REVIEWING" });
+	});
+
 	test("default build executor blocks as provider unavailable for worker and reviewer", async () => {
 		const projectRoot = await createTempProject();
 		process.chdir(projectRoot);

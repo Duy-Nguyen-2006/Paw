@@ -20,6 +20,10 @@ import {
 	type PawSubAgentRuntimeInvocation,
 	runPawSubAgentRuntime,
 } from "./subagent-runtime.ts";
+import {
+	evaluatePawSubAgentSandboxPreflight,
+	type PawSubAgentSandboxPreflightInput,
+} from "./subagent-sandbox-preflight.ts";
 import { blockPawWorkerResult, type PawWorkerBlockedResult } from "./worker-blocked-result.ts";
 import { completePawWorkerPass, type PawWorkerPassResult } from "./worker-result.ts";
 
@@ -45,6 +49,7 @@ export interface PawWorkerOnceInput {
 	executor: PawSubAgentRuntimeExecutor;
 	handoff?: string;
 	lockOptions?: PawSessionLockOptions;
+	sandboxPreflight?: PawSubAgentSandboxPreflightInput;
 	timestamp?: string;
 }
 
@@ -265,7 +270,12 @@ async function runWorkerRuntimeWithRetry(
 ): Promise<Extract<PawSubAgentRuntimeDecision, { status: "accepted" | "blocked" }>> {
 	let decision: PawSubAgentRuntimeDecision | undefined;
 	for (let attempt = 1; attempt <= 2; attempt += 1) {
-		decision = await runPawSubAgentRuntime(createWorkerInvocation(input, sliceId, attempt), input.executor);
+		const invocation = createWorkerInvocation(input, sliceId, attempt);
+		const sandboxDecision = evaluatePawSubAgentSandboxPreflight(input.config, invocation, input.sandboxPreflight);
+		if (sandboxDecision !== null) {
+			return sandboxDecision;
+		}
+		decision = await runPawSubAgentRuntime(invocation, input.executor);
 		if (decision.status !== "retry") {
 			return decision;
 		}
