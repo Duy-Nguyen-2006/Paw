@@ -651,7 +651,32 @@ export type {
 	PawVerifyCommandResult,
 } from "./verify-command.ts";
 export { createPawVerifyCommandResult, formatPawVerifyCommandResult, runPawVerifyCommand } from "./verify-command.ts";
-
+export type {
+	PawBlockWorkerCommandBlockedResult,
+	PawBlockWorkerCommandInput,
+	PawBlockWorkerCommandInvalidBlockedReasonResult,
+	PawBlockWorkerCommandInvalidOutputFileResult,
+	PawBlockWorkerCommandInvalidStateResult,
+	PawBlockWorkerCommandInvalidTransitionResult,
+	PawBlockWorkerCommandInvalidWorkerOutputResult,
+	PawBlockWorkerCommandLockedByOtherResult,
+	PawBlockWorkerCommandLockedResult,
+	PawBlockWorkerCommandMissingOutputFileResult,
+	PawBlockWorkerCommandMissingProjectResult,
+	PawBlockWorkerCommandMissingSessionResult,
+	PawBlockWorkerCommandNoSelectedSliceResult,
+	PawBlockWorkerCommandNotLockedResult,
+	PawBlockWorkerCommandResult,
+	PawBlockWorkerCommandWorkerNotBlockedResult,
+	PawBlockWorkerParsedArgs,
+	PawBlockWorkerParsedInput,
+} from "./worker-blocked-command.ts";
+export {
+	createPawBlockWorkerCommandResult,
+	formatPawBlockWorkerCommandResult,
+	parsePawBlockWorkerArgs,
+	runPawBlockWorkerCommand,
+} from "./worker-blocked-command.ts";
 export type {
 	PawWorkerBlockedCompletedResult,
 	PawWorkerBlockedInput,
