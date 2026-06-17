@@ -1,5 +1,6 @@
 import { relative } from "node:path";
 import { APP_NAME } from "../config.ts";
+import { runPawBuildCommand } from "./build-command.ts";
 import { runPawCleanCommand } from "./clean-command.ts";
 import { loadDefaultPawRuntimeConfig } from "./config.ts";
 import { runPawDoctorCommand } from "./doctor-command.ts";
@@ -28,6 +29,7 @@ function printPawHelp(): void {
   ${APP_NAME} paw start <session-id>
   ${APP_NAME} paw resume <session-id>
   ${APP_NAME} paw verify <session-id>
+  ${APP_NAME} paw build <session-id> --once
   ${APP_NAME} paw approve-plan <session-id> --slice <slice-id>[:<title>]...
   ${APP_NAME} paw select-slice <session-id>
   ${APP_NAME} paw begin-implementation <session-id>
@@ -54,6 +56,8 @@ Commands:
   ${APP_NAME} paw start --help           Show start help
   ${APP_NAME} paw resume <session-id> Show resumable session state and lock status
   ${APP_NAME} paw resume --help Show resume help
+  ${APP_NAME} paw build <session-id> --once Run one worker orchestration step
+  ${APP_NAME} paw build --help Show build help
   ${APP_NAME} paw approve-plan <session-id> --slice <id>[:<title>]... Approve plan slices from PLAN_DRAFTED
   ${APP_NAME} paw approve-plan --help               Show approve-plan help
   ${APP_NAME} paw select-slice <session-id>          Select next pending plan slice
@@ -165,6 +169,11 @@ export async function handlePawCommand(args: string[]): Promise<boolean> {
 
 	if (subcommand === "verify") {
 		await runPawVerifyCommand(rest);
+		return true;
+	}
+
+	if (subcommand === "build") {
+		await runPawBuildCommand(rest);
 		return true;
 	}
 

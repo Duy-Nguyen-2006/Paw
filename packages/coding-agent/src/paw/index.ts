@@ -45,6 +45,18 @@ export {
 	evaluatePawTaskBudget,
 } from "./budget-policy.ts";
 export type {
+	PawBuildCommandInput,
+	PawBuildCommandResult,
+	PawBuildParsedArgs,
+	PawBuildParsedInput,
+} from "./build-command.ts";
+export {
+	createPawBuildCommandResult,
+	formatPawBuildCommandResult,
+	parsePawBuildArgs,
+	runPawBuildCommand,
+} from "./build-command.ts";
+export type {
 	PawCheckpointChangedFile,
 	PawCheckpointMetadata,
 	PawCheckpointNameInput,
@@ -323,6 +335,25 @@ export type {
 } from "./reviewer-blocked-result.ts";
 export { blockPawReviewerResult } from "./reviewer-blocked-result.ts";
 export type {
+	PawReviewerOnceBlockedResult,
+	PawReviewerOnceCompletedResult,
+	PawReviewerOnceInput,
+	PawReviewerOnceInvalidBlockedReasonResult,
+	PawReviewerOnceInvalidReviewerOutputResult,
+	PawReviewerOnceInvalidStateResult,
+	PawReviewerOnceInvalidTransitionResult,
+	PawReviewerOnceLockedByOtherResult,
+	PawReviewerOnceLockedResult,
+	PawReviewerOnceMissingProjectResult,
+	PawReviewerOnceMissingSessionResult,
+	PawReviewerOnceNoSelectedSliceResult,
+	PawReviewerOnceNotLockedResult,
+	PawReviewerOnceReclaimedLock,
+	PawReviewerOnceResult,
+	PawReviewerOnceReviewerFailedResult,
+} from "./reviewer-orchestrator.ts";
+export { runPawReviewerOnce } from "./reviewer-orchestrator.ts";
+export type {
 	PawReviewerPassCompletedResult,
 	PawReviewerPassInput,
 	PawReviewerPassInvalidOutputResult,
@@ -564,13 +595,32 @@ export { writePawSubAgentArtifactReport } from "./subagent-artifacts.ts";
 export type { PawSubAgentResponseDecision, PawSubAgentResponseInput } from "./subagent-response.ts";
 export { evaluatePawSubAgentResponse } from "./subagent-response.ts";
 export type {
+	PawProviderSubAgentCompleteSimple,
+	PawProviderSubAgentCompleteSimpleInput,
+	PawProviderSubAgentCompletion,
+	PawProviderSubAgentCompletionInput,
+	PawProviderSubAgentCompletionResult,
+	PawProviderSubAgentExecutorInput,
+	PawProviderSubAgentModelRegistry,
+	PawProviderSubAgentModelResolver,
+	PawProviderSubAgentPrompt,
+	PawProviderSubAgentRegistryAuthResult,
+	PawProviderSubAgentRegistryResolverInput,
+	PawProviderSubAgentResolvedModel,
+	PawProviderSubAgentRuntimeExecutorInput,
 	PawSubAgentRuntimeDecision,
 	PawSubAgentRuntimeDegradedMetadata,
 	PawSubAgentRuntimeExecutor,
 	PawSubAgentRuntimeExecutorResult,
 	PawSubAgentRuntimeInvocation,
 } from "./subagent-runtime.ts";
-export { runPawSubAgentRuntime } from "./subagent-runtime.ts";
+export {
+	createPawCompleteSimpleSubAgentCompletion,
+	createPawModelRegistrySubAgentResolver,
+	createPawProviderSubAgentExecutor,
+	createPawProviderSubAgentRuntimeExecutor,
+	runPawSubAgentRuntime,
+} from "./subagent-runtime.ts";
 export type {
 	PawTaskSessionAdvancedResult,
 	PawTaskSessionAdvanceInput,
@@ -743,6 +793,25 @@ export type {
 	PawWorkerBlockedResult,
 } from "./worker-blocked-result.ts";
 export { blockPawWorkerResult } from "./worker-blocked-result.ts";
+export type {
+	PawWorkerOnceBlockedResult,
+	PawWorkerOnceCompletedResult,
+	PawWorkerOnceInput,
+	PawWorkerOnceInvalidBlockedReasonResult,
+	PawWorkerOnceInvalidStateResult,
+	PawWorkerOnceInvalidTransitionResult,
+	PawWorkerOnceInvalidWorkerOutputResult,
+	PawWorkerOnceLockedByOtherResult,
+	PawWorkerOnceLockedResult,
+	PawWorkerOnceMissingProjectResult,
+	PawWorkerOnceMissingSessionResult,
+	PawWorkerOnceNoSelectedSliceResult,
+	PawWorkerOnceNotLockedResult,
+	PawWorkerOnceReclaimedLock,
+	PawWorkerOnceResult,
+	PawWorkerOnceWorkerFailedResult,
+} from "./worker-orchestrator.ts";
+export { runPawWorkerOnce } from "./worker-orchestrator.ts";
 export type {
 	PawWorkerPassCompletedResult,
 	PawWorkerPassInput,
