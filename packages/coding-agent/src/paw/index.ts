@@ -631,3 +631,28 @@ export type {
 	PawWorkerPassResult,
 } from "./worker-result.ts";
 export { completePawWorkerPass } from "./worker-result.ts";
+export type {
+	PawCompleteWorkerCommandCompletedResult,
+	PawCompleteWorkerCommandInput,
+	PawCompleteWorkerCommandInvalidOutputFileResult,
+	PawCompleteWorkerCommandInvalidStateResult,
+	PawCompleteWorkerCommandInvalidTransitionResult,
+	PawCompleteWorkerCommandInvalidWorkerOutputResult,
+	PawCompleteWorkerCommandLockedByOtherResult,
+	PawCompleteWorkerCommandLockedResult,
+	PawCompleteWorkerCommandMissingOutputFileResult,
+	PawCompleteWorkerCommandMissingProjectResult,
+	PawCompleteWorkerCommandMissingSessionResult,
+	PawCompleteWorkerCommandNoSelectedSliceResult,
+	PawCompleteWorkerCommandNotLockedResult,
+	PawCompleteWorkerCommandResult,
+	PawCompleteWorkerCommandWorkerNotPassedResult,
+	PawCompleteWorkerParsedArgs,
+	PawCompleteWorkerParsedInput,
+} from "./worker-result-command.ts";
+export {
+	createPawCompleteWorkerCommandResult,
+	formatPawCompleteWorkerCommandResult,
+	parsePawCompleteWorkerArgs,
+	runPawCompleteWorkerCommand,
+} from "./worker-result-command.ts";
