@@ -1,5 +1,14 @@
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	chmodSync,
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -19,6 +28,7 @@ interface FixtureRepo {
 	name: string;
 	projectDir: string;
 	sentinelFiles: string[];
+	toolBinDir: string;
 }
 
 interface CliResult {
@@ -51,29 +61,57 @@ function createFixtureRepo(tempRoot: string, name: string, files: Record<string,
 	const projectDir = join(tempRoot, name);
 	const agentDir = join(tempRoot, "agents", name);
 	const homeDir = join(tempRoot, "homes", name);
+	const toolBinDir = join(tempRoot, "tools", name);
 	mkdirSync(agentDir, { recursive: true });
 	mkdirSync(homeDir, { recursive: true });
+	mkdirSync(toolBinDir, { recursive: true });
 	mkdirSync(join(projectDir, "paw-spec"), { recursive: true });
 	writeFileSync(join(projectDir, "paw-spec", "config.yaml"), readFileSync(sourceConfigPath, "utf-8"), "utf-8");
 
 	const sentinelFiles = Object.entries(files).map(([relativePath, content]) =>
 		writeFixtureFile(projectDir, relativePath, content),
 	);
-	writeFixtureFile(
-		projectDir,
-		"package.json",
+	writeFileSync(
+		join(projectDir, "package.json"),
 		JSON.stringify(
 			{
 				name,
 				private: true,
-				scripts: { test: "node --version" },
+				scripts: {
+					"check:browser-smoke": "node scripts/check-browser-smoke.mjs",
+					build: "node scripts/build.mjs",
+					check: "node scripts/check.mjs",
+					test: "node scripts/test.mjs",
+				},
 			},
 			null,
 			"\t",
 		),
+		"utf-8",
 	);
+	writeVerificationScript(projectDir, "scripts/check.mjs", `${name} check ok`);
+	writeVerificationScript(projectDir, "scripts/build.mjs", `${name} build ok`);
+	writeVerificationScript(projectDir, "scripts/test.mjs", `${name} test ok`);
+	writeVerificationScript(projectDir, "scripts/check-browser-smoke.mjs", `${name} browser smoke ok`);
+	writeExecutableFile(projectDir, "test.sh", `#!/usr/bin/env sh\necho ${name} test.sh ok\n`);
+	writeToolShim(toolBinDir, "git", "process.exit(0);");
 
-	return { agentDir, homeDir, name, projectDir, sentinelFiles };
+	return { agentDir, homeDir, name, projectDir, sentinelFiles, toolBinDir };
+}
+
+function writeVerificationScript(projectDir: string, relativePath: string, message: string): void {
+	writeFixtureFile(projectDir, relativePath, `console.log(${JSON.stringify(message)});\n`);
+}
+
+function writeExecutableFile(projectDir: string, relativePath: string, content: string): void {
+	const filePath = writeFixtureFile(projectDir, relativePath, content);
+	chmodSync(filePath, 0o755);
+}
+
+function writeToolShim(toolBinDir: string, commandName: string, body: string): void {
+	const shimPath = join(toolBinDir, commandName);
+	writeFileSync(shimPath, `#!/usr/bin/env node\n${body}\n`, "utf-8");
+	chmodSync(shimPath, 0o755);
 }
 
 function createFixtureRepos(tempRoot: string): FixtureRepo[] {
@@ -107,6 +145,7 @@ async function runCli(fixture: FixtureRepo, args: string[]): Promise<CliResult> 
 			TSX_TSCONFIG_PATH: resolve(testDir, "../../../tsconfig.json"),
 			XDG_CACHE_HOME: join(fixture.homeDir, ".cache"),
 			XDG_CONFIG_HOME: join(fixture.homeDir, ".config"),
+			PATH: `${fixture.toolBinDir}:${process.env.PATH ?? ""}`,
 		},
 		stdio: ["ignore", "pipe", "pipe"],
 	});
@@ -223,7 +262,7 @@ function expectSentinelsUnchanged(before: Map<string, string>): void {
 function expectIsolatedProviderConfig(fixture: FixtureRepo): void {
 	expect(existsSync(join(fixture.agentDir, "models.json"))).toBe(false);
 	expect(existsSync(join(fixture.homeDir, ".factory"))).toBe(false);
-	const agentEntries = readdirSync(fixture.agentDir);
+	const agentEntries = readdirSync(fixture.agentDir).filter((entry) => entry !== "auth.json");
 	expect(agentEntries).toEqual([]);
 }
 
@@ -249,20 +288,22 @@ describe("fixture-based three-repo Paw validation", () => {
 			expect(status.stdout).toContain("sessions: 0");
 
 			seedVerifyingSession(fixture.projectDir, sessionId);
-			const verify = await runCli(fixture, ["paw", "verify", sessionId]);
-			expect(verify, `${fixture.name} verify`).toMatchObject({ code: 0, signal: null, stderr: "" });
-			expect(verify.stdout).toContain("Paw verify");
-			expect(verify.stdout).toContain("status: completed_with_unverified");
-			expect(verify.stdout).toContain("native executed gates: none");
+			const build = await runCli(fixture, ["paw", "build", sessionId, "--once", "--native"]);
+			expect(build, `${fixture.name} build`).toMatchObject({ code: 0, signal: null, stderr: "" });
+			expect(build.stdout).toContain("Paw build");
+			expect(build.stdout).toContain("status: completed");
+			expect(build.stdout).toContain("native executed gates:");
+			expect(build.stdout).not.toContain("native executed gates: none");
+			expect(build.stdout).toContain("verified gates:");
 
 			const finalize = await runCli(fixture, [
 				"paw",
 				"finalize",
 				sessionId,
 				"--summary",
-				`Fixture validation completed for ${fixture.name}.`,
+				`Native fixture validation completed for ${fixture.name}.`,
 				"--evidence",
-				"spawned Paw CLI flow completed with provider environment removed and native execution skipped",
+				"spawned Paw build --native completed with provider environment removed and native gates executed",
 			]);
 			expect(finalize, `${fixture.name} finalize`).toMatchObject({ code: 0, signal: null, stderr: "" });
 			expect(finalize.stdout).toContain("Paw finalize");
@@ -270,8 +311,8 @@ describe("fixture-based three-repo Paw validation", () => {
 
 			const report = await runCli(fixture, ["paw", "report", sessionId]);
 			expect(report, `${fixture.name} report`).toMatchObject({ code: 0, signal: null, stderr: "" });
-			expect(report.stdout).toContain(`Fixture validation completed for ${fixture.name}.`);
-			expect(report.stdout).toContain("provider environment removed");
+			expect(report.stdout).toContain(`Native fixture validation completed for ${fixture.name}.`);
+			expect(report.stdout).toContain("native gates executed");
 
 			expect(existsSync(join(fixture.projectDir, ".paw", "sessions", sessionId, "state.json"))).toBe(true);
 			expect(existsSync(join(fixture.projectDir, ".paw", "sessions", sessionId, "report.json"))).toBe(true);
