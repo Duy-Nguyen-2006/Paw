@@ -11,6 +11,7 @@ import { runPawReportCommand } from "./report-command.ts";
 import { runPawResumeCommand } from "./resume-command.ts";
 import { runPawBlockReviewerCommand } from "./reviewer-blocked-command.ts";
 import { runPawCompleteReviewerCommand } from "./reviewer-result-command.ts";
+import { runPawRollbackCommand } from "./rollback-command.ts";
 import { runPawPrepareCheckpointCommand } from "./slice-checkpoint-command.ts";
 import { runPawBeginImplementationCommand } from "./slice-implementation-command.ts";
 import { runPawSelectSliceCommand } from "./slice-selection-command.ts";
@@ -40,6 +41,7 @@ function printPawHelp(): void {
   ${APP_NAME} paw complete-reviewer <session-id> --output-file <path>
   ${APP_NAME} paw complete-verification <session-id> --decision-file <path>
   ${APP_NAME} paw prepare-checkpoint <session-id> --base-tree <tree> --short-id <id> --timestamp <iso> --changed-file <path>=<hash|null>
+  ${APP_NAME} paw rollback <session-id> --dry-run [--checkpoint <name>]
   ${APP_NAME} paw finalize <session-id> --summary <text>
   ${APP_NAME} paw report <session-id>
   ${APP_NAME} paw clean --dry-run
@@ -78,6 +80,8 @@ Commands:
   ${APP_NAME} paw complete-verification --help                   Show complete-verification help
   ${APP_NAME} paw prepare-checkpoint <session-id> ... Prepare slice checkpoint metadata from SLICE_SELECT
   ${APP_NAME} paw prepare-checkpoint --help           Show prepare-checkpoint help
+  ${APP_NAME} paw rollback <session-id> --dry-run     Inspect checkpoint metadata without changing files
+  ${APP_NAME} paw rollback --help                     Show rollback help
   ${APP_NAME} paw verify <session-id> Record configured verification decisions
   ${APP_NAME} paw verify --help Show verify help
   ${APP_NAME} paw finalize <session-id> --summary <text> Emit final report for SLICE_DONE session
@@ -224,6 +228,11 @@ export async function handlePawCommand(args: string[]): Promise<boolean> {
 
 	if (subcommand === "prepare-checkpoint") {
 		await runPawPrepareCheckpointCommand(rest);
+		return true;
+	}
+
+	if (subcommand === "rollback") {
+		await runPawRollbackCommand(rest);
 		return true;
 	}
 

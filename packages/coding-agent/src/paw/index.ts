@@ -400,6 +400,23 @@ export type {
 } from "./risk-classifier.ts";
 export { classifyPawTask, maxPawRiskLevel, scorePawTaskRisk } from "./risk-classifier.ts";
 export type {
+	PawRollbackCommandResult,
+	PawRollbackDryRunResult,
+	PawRollbackInvalidCheckpointResult,
+	PawRollbackMissingCheckpointResult,
+	PawRollbackMissingProjectResult,
+	PawRollbackMissingSessionResult,
+	PawRollbackNoCheckpointsResult,
+	PawRollbackParsedArgs,
+	PawRollbackParsedInput,
+} from "./rollback-command.ts";
+export {
+	createPawRollbackCommandResult,
+	formatPawRollbackCommandResult,
+	parsePawRollbackArgs,
+	runPawRollbackCommand,
+} from "./rollback-command.ts";
+export type {
 	PawSandboxDetectionResult,
 	PawSandboxDetectionStatus,
 	PawSandboxDistroFacts,
