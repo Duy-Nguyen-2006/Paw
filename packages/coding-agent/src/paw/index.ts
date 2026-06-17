@@ -138,6 +138,26 @@ export type {
 } from "./final-report-emission.ts";
 export { emitPawFinalReport } from "./final-report-emission.ts";
 export type {
+	PawFinalizeCommandCompletedResult,
+	PawFinalizeCommandInput,
+	PawFinalizeCommandInvalidReportInputResult,
+	PawFinalizeCommandInvalidStateResult,
+	PawFinalizeCommandInvalidTransitionResult,
+	PawFinalizeCommandLockedResult,
+	PawFinalizeCommandMissingProjectResult,
+	PawFinalizeCommandMissingSessionResult,
+	PawFinalizeCommandNotLockedResult,
+	PawFinalizeCommandPendingSlicesResult,
+	PawFinalizeCommandResult,
+	PawFinalizeParsedArgs,
+} from "./finalize-command.ts";
+export {
+	createPawFinalizeCommandResult,
+	formatPawFinalizeCommandResult,
+	parsePawFinalizeArgs,
+	runPawFinalizeCommand,
+} from "./finalize-command.ts";
+export type {
 	PawFailoverRoute,
 	PawModelRoutingRole,
 	PawModelTier,

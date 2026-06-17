@@ -3,6 +3,7 @@ import { APP_NAME } from "../config.ts";
 import { runPawCleanCommand } from "./clean-command.ts";
 import { loadDefaultPawRuntimeConfig } from "./config.ts";
 import { runPawDoctorCommand } from "./doctor-command.ts";
+import { runPawFinalizeCommand } from "./finalize-command.ts";
 import { initializePawProject } from "./persistence.ts";
 import { runPawReportCommand } from "./report-command.ts";
 import { runPawResumeCommand } from "./resume-command.ts";
@@ -15,6 +16,7 @@ function printPawHelp(): void {
   ${APP_NAME} paw status
   ${APP_NAME} paw resume <session-id>
   ${APP_NAME} paw verify <session-id>
+  ${APP_NAME} paw finalize <session-id> --summary <text>
   ${APP_NAME} paw report <session-id>
   ${APP_NAME} paw clean --dry-run
   ${APP_NAME} paw doctor
@@ -30,6 +32,8 @@ Commands:
   ${APP_NAME} paw resume --help Show resume help
   ${APP_NAME} paw verify <session-id> Record configured verification decisions
   ${APP_NAME} paw verify --help Show verify help
+  ${APP_NAME} paw finalize <session-id> --summary <text> Emit final report for SLICE_DONE session
+  ${APP_NAME} paw finalize --help               Show finalize help
   ${APP_NAME} paw report <session-id>         Show persisted final report markdown
   ${APP_NAME} paw report <session-id> --json  Show persisted final report JSON
   ${APP_NAME} paw report --help                Show report help
@@ -112,6 +116,11 @@ export async function handlePawCommand(args: string[]): Promise<boolean> {
 
 	if (subcommand === "verify") {
 		await runPawVerifyCommand(rest);
+		return true;
+	}
+
+	if (subcommand === "finalize") {
+		await runPawFinalizeCommand(rest);
 		return true;
 	}
 
