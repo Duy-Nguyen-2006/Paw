@@ -417,6 +417,8 @@ export type {
 	PawTaskSessionStartResult,
 } from "./task-session.ts";
 export { advancePawTaskSession, startPawTaskSession } from "./task-session.ts";
+export type { PawNativeSubprocessExecutorOptions } from "./verification-executor.ts";
+export { createPawNativeSubprocessExecutor } from "./verification-executor.ts";
 export type {
 	PawNativeVerificationGateStatus,
 	PawNativeVerificationPlanEntry,
