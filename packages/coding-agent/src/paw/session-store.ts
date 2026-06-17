@@ -15,6 +15,7 @@ export interface PawSessionPaths {
 	sliceJournalFile: string;
 	summaryFile: string;
 	transcriptFile: string;
+	reportJsonFile: string;
 	lockFile: string;
 	verificationEvidenceFile: string;
 }
@@ -78,6 +79,7 @@ export function resolvePawSessionPaths(repoRoot: string, sessionId: string): Paw
 		sliceJournalFile: join(sessionDir, "slice-journal.jsonl"),
 		summaryFile: join(sessionDir, "summary.md"),
 		transcriptFile: join(sessionDir, "transcript.jsonl"),
+		reportJsonFile: join(sessionDir, "report.json"),
 		lockFile: join(sessionDir, "session.lock"),
 		verificationEvidenceFile: join(sessionDir, "verification-evidence.json"),
 	};

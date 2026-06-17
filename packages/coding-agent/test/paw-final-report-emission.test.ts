@@ -102,6 +102,9 @@ describe("emitPawFinalReport", () => {
 		expect(result.markdown).toContain("- done");
 		expect(result.markdown).toContain("- focused tests passed");
 		await expect(readFile(result.summaryFile, "utf-8")).resolves.toBe(result.markdown);
+		const jsonContent = await readFile(result.reportJsonFile, "utf-8");
+		expect(jsonContent).toBe(JSON.stringify(result.report, null, 2));
+		expect(result.reportJsonFile).toContain("report.json");
 		await expect(readPawSessionState(repoRoot, "session-1")).resolves.toEqual(result.nextState);
 	});
 
@@ -128,6 +131,8 @@ describe("emitPawFinalReport", () => {
 		expect(result.markdown).toContain("- done_with_unverified");
 		expect(result.markdown).toContain("- lint: lint command unavailable");
 		await expect(readFile(result.summaryFile, "utf-8")).resolves.toBe(result.markdown);
+		const jsonContent = await readFile(result.reportJsonFile, "utf-8");
+		expect(jsonContent).toBe(JSON.stringify(result.report, null, 2));
 	});
 
 	test("returns pending_slices without writing state or summary", async () => {
@@ -162,6 +167,7 @@ describe("emitPawFinalReport", () => {
 			],
 		});
 		expect(existsSync(summaryFile)).toBe(false);
+		expect(existsSync(resolvePawSessionPaths(repoRoot, "session-1").reportJsonFile)).toBe(false);
 		await expect(readPawSessionState(repoRoot, "session-1")).resolves.toEqual(state);
 	});
 
@@ -193,6 +199,7 @@ describe("emitPawFinalReport", () => {
 			},
 		]);
 		expect(existsSync(summaryFile)).toBe(false);
+		expect(existsSync(resolvePawSessionPaths(repoRoot, "session-1").reportJsonFile)).toBe(false);
 		await expect(readPawSessionState(repoRoot, "session-1")).resolves.toEqual(state);
 	});
 
@@ -300,6 +307,35 @@ describe("emitPawFinalReport", () => {
 		]);
 		await expect(readPawSessionState(repoRoot, "foreign-lock")).resolves.toEqual(foreignState);
 		await expect(readPawSessionState(repoRoot, "wrong-state")).resolves.toEqual(wrongState);
+	});
+
+	test("writes report.json as typed JSON artifact alongside summary.md", async () => {
+		const repoRoot = await createTempRepo();
+		const state = createSliceDoneState("session-json");
+		await writePawSessionState(repoRoot, state);
+		await writeCurrentLock(repoRoot, "session-json", 1_000);
+
+		const result = await emitPawFinalReport({
+			repoRoot,
+			sessionId: "session-json",
+			reportInput: {
+				summary: "All slices implemented and verified.",
+				evidence: ["test suite passed", "build succeeded"],
+				verifyDecisions: [verifiedUnitGate],
+				risks: [{ description: "Minor perf regression", severity: "low" }],
+				nextActions: ["Monitor latency"],
+			},
+			lockOptions: { nowMs: 2_000, ttlSec: 120 },
+		});
+
+		expect(result.status).toBe("completed");
+		if (result.status !== "completed") return;
+
+		expect(result.reportJsonFile).toContain("report.json");
+		expect(existsSync(result.reportJsonFile)).toBe(true);
+
+		const jsonContent = await readFile(result.reportJsonFile, "utf-8");
+		expect(jsonContent).toBe(JSON.stringify(result.report, null, 2));
 	});
 });
 

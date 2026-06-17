@@ -43,6 +43,7 @@ export interface PawFinalReportEmissionCompletedResult {
 	report: PawFinalReport;
 	markdown: string;
 	summaryFile: string;
+	reportJsonFile: string;
 }
 
 export type PawFinalReportEmissionNotLockedResult =
@@ -175,6 +176,8 @@ export async function emitPawFinalReport(input: PawFinalReportEmissionInput): Pr
 	const markdown = renderPawFinalReportMarkdown(reportResult.report);
 	await mkdir(dirname(paths.summaryFile), { recursive: true });
 	await writeFile(paths.summaryFile, markdown, "utf-8");
+	const reportJson = JSON.stringify(reportResult.report, null, 2);
+	await writeFile(paths.reportJsonFile, reportJson, "utf-8");
 	await writePawSessionState(input.repoRoot, transitioned.value);
 
 	return {
@@ -185,6 +188,7 @@ export async function emitPawFinalReport(input: PawFinalReportEmissionInput): Pr
 		report: reportResult.report,
 		markdown,
 		summaryFile: paths.summaryFile,
+		reportJsonFile: paths.reportJsonFile,
 	};
 }
 

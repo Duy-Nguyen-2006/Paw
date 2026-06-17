@@ -174,12 +174,21 @@ export { approvePawPlanSlices } from "./plan-approval.ts";
 export type { PawPlannerSlice, PawPlanSliceQueue } from "./plan-slices.ts";
 export { createPawPlanSliceQueue } from "./plan-slices.ts";
 export type {
+	PawReportCommandFoundJsonResult,
 	PawReportCommandFoundResult,
+	PawReportCommandJsonResult,
 	PawReportCommandMissingProjectResult,
+	PawReportCommandMissingReportJsonResult,
 	PawReportCommandMissingReportResult,
 	PawReportCommandResult,
 } from "./report-command.ts";
-export { createPawReportCommandResult, formatPawReportCommandResult, runPawReportCommand } from "./report-command.ts";
+export {
+	createPawReportCommandResult,
+	createPawReportJsonCommandResult,
+	formatPawReportCommandResult,
+	formatPawReportJsonCommandResult,
+	runPawReportCommand,
+} from "./report-command.ts";
 export type {
 	PawResilienceDrillEvent,
 	PawResilienceDrillEventName,

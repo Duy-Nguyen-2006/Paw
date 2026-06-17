@@ -30,8 +30,9 @@ Commands:
   ${APP_NAME} paw resume --help Show resume help
   ${APP_NAME} paw verify <session-id> Record configured verification decisions
   ${APP_NAME} paw verify --help Show verify help
-  ${APP_NAME} paw report <session-id> Show persisted final report markdown
-  ${APP_NAME} paw report --help Show report help
+  ${APP_NAME} paw report <session-id>         Show persisted final report markdown
+  ${APP_NAME} paw report <session-id> --json  Show persisted final report JSON
+  ${APP_NAME} paw report --help                Show report help
   ${APP_NAME} paw clean --dry-run Show read-only Paw retention plan
   ${APP_NAME} paw clean --help  Show clean help
   ${APP_NAME} paw doctor        Show read-only sandbox diagnostics
