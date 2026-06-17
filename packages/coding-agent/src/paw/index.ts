@@ -61,6 +61,7 @@ export type {
 	PawCheckpointMetadata,
 	PawCheckpointNameInput,
 	PawCheckpointPaths,
+	PawCheckpointRestorableFile,
 	PawCheckpointScope,
 } from "./checkpoints.ts";
 export {
@@ -659,16 +660,25 @@ export type {
 } from "./task-session.ts";
 export { advancePawTaskSession, startPawTaskSession } from "./task-session.ts";
 export type {
+	PawToolExecutionAuthorization,
+	PawToolExecutionAuthorizationSource,
+	PawToolExecutionPlan,
+	PawToolExecutor,
+	PawToolExecutorInput,
+	PawToolExecutorResult,
 	PawToolRuntimeBlockCode,
 	PawToolRuntimeBlockedDecision,
 	PawToolRuntimeDecision,
 	PawToolRuntimeDryRunAllowedDecision,
+	PawToolRuntimeExecutedDecision,
+	PawToolRuntimeExecuteInput,
+	PawToolRuntimeExecutionResult,
 	PawToolRuntimeInput,
 	PawToolRuntimeInvalidDecision,
 	PawToolRuntimeRequest,
 	PawToolRuntimeSandboxInput,
 } from "./tool-runtime.ts";
-export { evaluatePawToolRuntimeRequest } from "./tool-runtime.ts";
+export { evaluatePawToolRuntimeRequest, executePawToolRuntimePlan } from "./tool-runtime.ts";
 export type { PawNativeVerificationCommandPolicy } from "./verification-command-policy.ts";
 export {
 	createPawNativeVerificationCommandPolicy,

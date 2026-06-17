@@ -16,6 +16,13 @@ export interface PawCheckpointChangedFile {
 	content_hash: string | null;
 }
 
+export interface PawCheckpointRestorableFile {
+	path: string;
+	paw_owned: true;
+	restore_content: string | null;
+	current_content_hash: string | null;
+}
+
 export interface PawCheckpointMetadata {
 	session_id: string;
 	checkpoint_name: string;
@@ -24,6 +31,7 @@ export interface PawCheckpointMetadata {
 	created_at: string;
 	base_tree: string;
 	changed_files: PawCheckpointChangedFile[];
+	restore_files?: PawCheckpointRestorableFile[];
 	notes?: string;
 }
 
@@ -45,9 +53,11 @@ const CHECKPOINT_METADATA_KEYS = new Set([
 	"created_at",
 	"base_tree",
 	"changed_files",
+	"restore_files",
 	"notes",
 ]);
 const CHECKPOINT_CHANGED_FILE_KEYS = new Set(["path", "content_hash"]);
+const CHECKPOINT_RESTORABLE_FILE_KEYS = new Set(["path", "paw_owned", "restore_content", "current_content_hash"]);
 const MAX_CHECKPOINT_SEGMENT_LENGTH = 48;
 
 export function createPawCheckpointName(input: PawCheckpointNameInput): string {
@@ -92,6 +102,11 @@ export function validatePawCheckpointMetadata(input: unknown): PawValidationResu
 		changed_files: readChangedFiles(record, issues),
 	};
 
+	const restoreFiles = readOptionalRestorableFiles(record, issues);
+	if (restoreFiles !== undefined) {
+		metadata.restore_files = restoreFiles;
+	}
+
 	const notes = readOptionalString(record, "notes", issues);
 	if (notes !== undefined) {
 		metadata.notes = notes;
@@ -100,6 +115,8 @@ export function validatePawCheckpointMetadata(input: unknown): PawValidationResu
 	validateCheckpointSessionId(metadata.session_id, issues);
 	validateCheckpointName(metadata.checkpoint_name, issues);
 	validateScopeSliceId(metadata.scope, metadata.slice_id, issues);
+	validateCheckpointFilePaths(metadata.changed_files, "/changed_files", issues);
+	validateCheckpointFilePaths(metadata.restore_files ?? [], "/restore_files", issues);
 
 	if (issues.length > 0) {
 		return { ok: false, issues };
@@ -307,6 +324,79 @@ function readChangedFile(value: unknown, index: number, issues: PawValidationIss
 	};
 }
 
+function readOptionalRestorableFiles(
+	record: Record<string, unknown>,
+	issues: PawValidationIssue[],
+): PawCheckpointRestorableFile[] | undefined {
+	const value = record.restore_files;
+	if (value === undefined) {
+		return undefined;
+	}
+	if (!Array.isArray(value)) {
+		issues.push({ path: "/restore_files", message: "Expected array." });
+		return [];
+	}
+
+	return value.map((entry, index) => readRestorableFile(entry, index, issues));
+}
+
+function readRestorableFile(value: unknown, index: number, issues: PawValidationIssue[]): PawCheckpointRestorableFile {
+	const prefix = `/restore_files/${index}`;
+	const record = readRecord(value, prefix, CHECKPOINT_RESTORABLE_FILE_KEYS, issues);
+
+	return {
+		path: readNonEmptyString(record, "path", issues, prefix),
+		paw_owned: readPawOwnedTrue(record, index, issues),
+		restore_content: readNullableContent(record, "restore_content", issues, prefix),
+		current_content_hash: readNullableContentHash(record, "current_content_hash", issues, prefix),
+	};
+}
+
+function readPawOwnedTrue(record: Record<string, unknown>, index: number, issues: PawValidationIssue[]): true {
+	if (record.paw_owned === true) {
+		return true;
+	}
+
+	issues.push({ path: `/restore_files/${index}/paw_owned`, message: "Expected true." });
+	return true;
+}
+
+function readNullableContent(
+	record: Record<string, unknown>,
+	key: string,
+	issues: PawValidationIssue[],
+	prefix: string,
+): string | null {
+	const value = record[key];
+	if (value === null) {
+		return null;
+	}
+	if (typeof value === "string") {
+		return value;
+	}
+
+	issues.push({ path: `${prefix}/${key}`, message: "Expected string or null." });
+	return null;
+}
+
+function readNullableContentHash(
+	record: Record<string, unknown>,
+	key: string,
+	issues: PawValidationIssue[],
+	prefix: string,
+): string | null {
+	const value = record[key];
+	if (value === null) {
+		return null;
+	}
+	if (typeof value === "string" && value.length > 0) {
+		return value;
+	}
+
+	issues.push({ path: `${prefix}/${key}`, message: "Expected non-empty string or null." });
+	return null;
+}
+
 function readContentHash(record: Record<string, unknown>, index: number, issues: PawValidationIssue[]): string | null {
 	const value = record.content_hash;
 	if (value === null) {
@@ -318,6 +408,53 @@ function readContentHash(record: Record<string, unknown>, index: number, issues:
 
 	issues.push({ path: `/changed_files/${index}/content_hash`, message: "Expected string or null." });
 	return null;
+}
+
+function validateCheckpointFilePaths(
+	files: readonly { path: string }[],
+	prefix: string,
+	issues: PawValidationIssue[],
+): void {
+	for (const [index, file] of files.entries()) {
+		validateCheckpointFilePath(file.path, `${prefix}/${index}/path`, issues);
+	}
+}
+
+function validateCheckpointFilePath(path: string, issuePath: string, issues: PawValidationIssue[]): void {
+	if (path.length === 0) {
+		return;
+	}
+	if (path.includes("\0")) {
+		issues.push({ path: issuePath, message: "Path must not contain null bytes." });
+	}
+	if (path.startsWith("/") || /^[A-Za-z]:[\\/]/.test(path)) {
+		issues.push({ path: issuePath, message: "Path must be relative to the repository root." });
+	}
+	if (path.includes("\\")) {
+		issues.push({ path: issuePath, message: "Path must use '/' separators." });
+	}
+
+	const normalized = path.replaceAll("\\", "/").replace(/^\.\/+/, "");
+	const segments = normalized.split("/");
+	if (segments.includes("..")) {
+		issues.push({ path: issuePath, message: "Path must not traverse outside the repository root." });
+	}
+	if (isSecretCheckpointPath(normalized)) {
+		issues.push({ path: issuePath, message: "Path must not target secret or credential files." });
+	}
+}
+
+function isSecretCheckpointPath(path: string): boolean {
+	const basename = path.split("/").at(-1) ?? path;
+	return (
+		basename.startsWith(".env") ||
+		basename.startsWith("id_rsa") ||
+		basename.endsWith(".pem") ||
+		basename.endsWith(".key") ||
+		path === "secrets" ||
+		path.startsWith("secrets/") ||
+		path.includes("/secrets/")
+	);
 }
 
 function isCheckpointScope(value: string): value is PawCheckpointScope {

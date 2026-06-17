@@ -176,6 +176,48 @@ describe("Paw checkpoints", () => {
 		});
 	});
 
+	test("validation accepts Paw-owned restorable file snapshots and rejects unsafe restore metadata", () => {
+		const valid = validatePawCheckpointMetadata(
+			createMetadata({
+				restore_files: [
+					{
+						path: "src/example.ts",
+						paw_owned: true,
+						restore_content: "before\n",
+						current_content_hash: "sha256:after",
+					},
+					{
+						path: "src/deleted.ts",
+						paw_owned: true,
+						restore_content: null,
+						current_content_hash: null,
+					},
+				],
+			}),
+		);
+		expect(valid.ok).toBe(true);
+
+		const invalid = validatePawCheckpointMetadata({
+			...createMetadata(),
+			restore_files: [
+				{ path: "src/not-owned.ts", paw_owned: false, restore_content: "x", current_content_hash: null },
+				{ path: "../outside.ts", paw_owned: true, restore_content: "x", current_content_hash: null },
+				{ path: "/tmp/outside.ts", paw_owned: true, restore_content: "x", current_content_hash: null },
+				{ path: ".env", paw_owned: true, restore_content: "SECRET=1", current_content_hash: null },
+			],
+		});
+
+		expect(invalid).toEqual({
+			ok: false,
+			issues: expect.arrayContaining([
+				{ path: "/restore_files/0/paw_owned", message: "Expected true." },
+				{ path: "/restore_files/1/path", message: "Path must not traverse outside the repository root." },
+				{ path: "/restore_files/2/path", message: "Path must be relative to the repository root." },
+				{ path: "/restore_files/3/path", message: "Path must not target secret or credential files." },
+			]),
+		});
+	});
+
 	test("validation requires task_start checkpoints to have null slice id", () => {
 		const validation = validatePawCheckpointMetadata(
 			createMetadata({

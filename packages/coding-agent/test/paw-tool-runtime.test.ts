@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { loadDefaultPawRuntimeConfig, type PawRuntimeConfig } from "../src/paw/index.ts";
-import { evaluatePawToolRuntimeRequest } from "../src/paw/tool-runtime.ts";
+import { evaluatePawToolRuntimeRequest, executePawToolRuntimePlan } from "../src/paw/tool-runtime.ts";
 
 const config: PawRuntimeConfig = loadDefaultPawRuntimeConfig(process.cwd());
 
@@ -177,6 +177,310 @@ describe("evaluatePawToolRuntimeRequest", () => {
 				{ path: "/toolName", message: "Expected non-empty tool name." },
 				{ path: "/paths/0", message: "Expected non-empty path." },
 			],
+		});
+	});
+
+	describe("executePawToolRuntimePlan", () => {
+		test("blocks execution when only dry-run approval exists", async () => {
+			let executorCalled = false;
+			const plan = {
+				request: {
+					toolName: "edit_file",
+					riskLevel: "R1" as const,
+					runMode: "json" as const,
+					sandbox: { availablePrimitives: ["bubblewrap_landlock"] },
+					paths: ["src/a.ts"],
+				},
+				description: "Edit a safe source file.",
+				expectedFilesChanged: true,
+			};
+
+			const dryRun = evaluatePawToolRuntimeRequest({ config, request: plan.request });
+			const execution = await executePawToolRuntimePlan({
+				config,
+				plan,
+				executor: () => {
+					executorCalled = true;
+					return { exitCode: 0, filesChanged: true };
+				},
+			});
+
+			expect(dryRun.status).toBe("dry_run_allowed");
+			expect(execution.status).toBe("blocked");
+			if (execution.status !== "blocked") return;
+			expect(execution.code).toBe("EXECUTE_AUTHORIZATION_REQUIRED");
+			expect(execution.executed).toBe(false);
+			expect(executorCalled).toBe(false);
+		});
+
+		test("keeps default execution path non-mutating without an injected executor", async () => {
+			const execution = await executePawToolRuntimePlan({
+				config,
+				plan: {
+					request: {
+						toolName: "edit_file",
+						riskLevel: "R1",
+						runMode: "json",
+						sandbox: { availablePrimitives: ["bubblewrap_landlock"] },
+						paths: ["src/a.ts"],
+					},
+					description: "Edit a safe source file.",
+					expectedFilesChanged: true,
+				},
+				authorization: {
+					status: "execute_authorized",
+					toolName: "edit_file",
+					riskLevel: "R1",
+					source: "automatic_policy",
+					reason: "Safe write authorized after runtime gates passed.",
+				},
+			});
+
+			expect(execution.status).toBe("blocked");
+			if (execution.status !== "blocked") return;
+			expect(execution.code).toBe("EXECUTOR_REQUIRED");
+			expect(execution.executed).toBe(false);
+			expect(execution.filesChanged).toBe(false);
+		});
+
+		test("reports executor mutations when execution fails after invocation", async () => {
+			const execution = await executePawToolRuntimePlan({
+				config,
+				plan: {
+					request: {
+						toolName: "edit_file",
+						riskLevel: "R1",
+						runMode: "json",
+						sandbox: { availablePrimitives: ["bubblewrap_landlock"] },
+						paths: ["src/a.ts"],
+					},
+					description: "Edit a safe source file.",
+					expectedFilesChanged: true,
+				},
+				authorization: {
+					status: "execute_authorized",
+					toolName: "edit_file",
+					riskLevel: "R1",
+					source: "automatic_policy",
+					reason: "Safe write authorized after runtime gates passed.",
+				},
+				executor: () => ({ exitCode: 1, stdout: "partial", stderr: "failed", filesChanged: true }),
+			});
+
+			expect(execution).toMatchObject({
+				status: "blocked",
+				code: "EXECUTOR_FAILED",
+				executed: true,
+				filesChanged: true,
+				exitCode: 1,
+				stdout: "partial",
+				stderr: "failed",
+			});
+		});
+
+		test("does not invent mutation signal when executor throws", async () => {
+			const execution = await executePawToolRuntimePlan({
+				config,
+				plan: {
+					request: {
+						toolName: "edit_file",
+						riskLevel: "R1",
+						runMode: "json",
+						sandbox: { availablePrimitives: ["bubblewrap_landlock"] },
+						paths: ["src/a.ts"],
+					},
+					description: "Edit a safe source file.",
+					expectedFilesChanged: true,
+				},
+				authorization: {
+					status: "execute_authorized",
+					toolName: "edit_file",
+					riskLevel: "R1",
+					source: "automatic_policy",
+					reason: "Safe write authorized after runtime gates passed.",
+				},
+				executor: () => {
+					throw new Error("executor crashed after entering tool runtime");
+				},
+			});
+
+			expect(execution).toMatchObject({
+				status: "blocked",
+				code: "EXECUTOR_FAILED",
+				executed: true,
+				filesChanged: false,
+				stderr: "executor crashed after entering tool runtime",
+			});
+		});
+
+		test("invokes injected executor only after authorization and safety gates pass", async () => {
+			let executorCalls = 0;
+			const execution = await executePawToolRuntimePlan({
+				config,
+				plan: {
+					request: {
+						toolName: "edit_file",
+						riskLevel: "R1",
+						runMode: "json",
+						sandbox: { availablePrimitives: ["bubblewrap_landlock"] },
+						paths: ["src/a.ts"],
+					},
+					description: "Edit a safe source file.",
+					expectedFilesChanged: true,
+				},
+				authorization: {
+					status: "execute_authorized",
+					toolName: "edit_file",
+					riskLevel: "R1",
+					source: "automatic_policy",
+					reason: "Safe write authorized after runtime gates passed.",
+				},
+				executor: (input) => {
+					executorCalls += 1;
+					expect(input.sandboxPrimitive).toBe("bubblewrap_landlock");
+					expect(input.approvedRequest.toolName).toBe("edit_file");
+					return { exitCode: 0, stdout: "ok", filesChanged: true };
+				},
+			});
+
+			expect(executorCalls).toBe(1);
+			expect(execution).toMatchObject({
+				status: "executed",
+				executed: true,
+				filesChanged: true,
+				exitCode: 0,
+				stdout: "ok",
+			});
+		});
+
+		test("blocks secret and untrusted paths before executor invocation", async () => {
+			for (const request of [
+				{
+					toolName: "read_file",
+					riskLevel: "R0" as const,
+					runMode: "json" as const,
+					readOnly: true,
+					paths: [".env"],
+				},
+				{
+					toolName: "edit_file",
+					riskLevel: "R1" as const,
+					runMode: "json" as const,
+					source: "web",
+					sandbox: { availablePrimitives: ["bubblewrap_landlock"] },
+					paths: ["src/a.ts"],
+				},
+			]) {
+				let executorCalled = false;
+				const execution = await executePawToolRuntimePlan({
+					config,
+					plan: { request, description: "Unsafe plan.", expectedFilesChanged: request.riskLevel !== "R0" },
+					authorization: {
+						status: "execute_authorized",
+						toolName: request.toolName,
+						riskLevel: request.riskLevel,
+						source: "automatic_policy",
+						reason: "Authorization cannot bypass safety gates.",
+					},
+					executor: () => {
+						executorCalled = true;
+						return { exitCode: 0, filesChanged: true };
+					},
+				});
+
+				expect(execution.status).toBe("blocked");
+				expect(executorCalled).toBe(false);
+			}
+		});
+
+		test("blocks R7 execution without human approval before executor invocation", async () => {
+			let executorCalled = false;
+			const execution = await executePawToolRuntimePlan({
+				config,
+				plan: {
+					request: {
+						toolName: "rotate_auth_token",
+						riskLevel: "R7",
+						runMode: "interactive",
+						sandbox: { availablePrimitives: ["bubblewrap_landlock"] },
+						paths: ["src/auth/token.ts"],
+					},
+					description: "Rotate auth token.",
+					expectedFilesChanged: true,
+				},
+				authorization: {
+					status: "execute_authorized",
+					toolName: "rotate_auth_token",
+					riskLevel: "R7",
+					source: "automatic_policy",
+					reason: "Invalid automatic approval for sensitive execution.",
+				},
+				executor: () => {
+					executorCalled = true;
+					return { exitCode: 0, filesChanged: true };
+				},
+			});
+
+			expect(execution.status).toBe("blocked");
+			if (execution.status !== "blocked") return;
+			expect(execution.code).toBe("NEEDS_USER_DECISION");
+			expect(executorCalled).toBe(false);
+		});
+
+		test("requires sandbox or unsafe override before write-capable executor invocation", async () => {
+			let blockedExecutorCalled = false;
+			const blocked = await executePawToolRuntimePlan({
+				config,
+				plan: {
+					request: { toolName: "edit_file", riskLevel: "R1", runMode: "json", paths: ["src/a.ts"] },
+					description: "Edit without sandbox.",
+					expectedFilesChanged: true,
+				},
+				authorization: {
+					status: "execute_authorized",
+					toolName: "edit_file",
+					riskLevel: "R1",
+					source: "automatic_policy",
+					reason: "Safe write authorized after runtime gates passed.",
+				},
+				executor: () => {
+					blockedExecutorCalled = true;
+					return { exitCode: 0, filesChanged: true };
+				},
+			});
+			let overrideExecutorCalled = false;
+			const override = await executePawToolRuntimePlan({
+				config,
+				plan: {
+					request: {
+						toolName: "edit_file",
+						riskLevel: "R1",
+						runMode: "json",
+						sandbox: { availablePrimitives: [], unsafeOverride: true },
+						paths: ["src/a.ts"],
+					},
+					description: "Edit with explicit unsafe sandbox override.",
+					expectedFilesChanged: true,
+				},
+				authorization: {
+					status: "execute_authorized",
+					toolName: "edit_file",
+					riskLevel: "R1",
+					source: "automatic_policy",
+					reason: "Safe write authorized after runtime gates passed.",
+				},
+				executor: () => {
+					overrideExecutorCalled = true;
+					return { exitCode: 0, filesChanged: true };
+				},
+			});
+
+			expect(blocked.status).toBe("blocked");
+			if (blocked.status !== "blocked") return;
+			expect(blocked.code).toBe("SANDBOX_UNAVAILABLE");
+			expect(blockedExecutorCalled).toBe(false);
+			expect(override.status).toBe("executed");
+			expect(overrideExecutorCalled).toBe(true);
 		});
 	});
 });

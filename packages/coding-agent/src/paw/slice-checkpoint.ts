@@ -4,6 +4,7 @@ import {
 	type PawCheckpointChangedFile,
 	type PawCheckpointMetadata,
 	type PawCheckpointPaths,
+	type PawCheckpointRestorableFile,
 	writePawCheckpointMetadata,
 } from "./checkpoints.ts";
 import {
@@ -20,6 +21,7 @@ export interface PawSliceCheckpointInput {
 	sessionId: string;
 	baseTree: string;
 	changedFiles: readonly PawCheckpointChangedFile[];
+	restoreFiles?: readonly PawCheckpointRestorableFile[];
 	shortId: string;
 	timestamp: Date | string;
 	notes?: string;
@@ -134,6 +136,9 @@ export async function preparePawSliceCheckpoint(input: PawSliceCheckpointInput):
 		base_tree: input.baseTree,
 		changed_files: input.changedFiles.map((file) => ({ ...file })),
 	};
+	if (input.restoreFiles !== undefined) {
+		metadata.restore_files = input.restoreFiles.map((file) => ({ ...file }));
+	}
 	if (input.notes !== undefined) {
 		metadata.notes = input.notes;
 	}

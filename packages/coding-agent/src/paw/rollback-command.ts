@@ -1,7 +1,13 @@
-import { readdir, stat } from "node:fs/promises";
-import { relative } from "node:path";
+import { createHash, randomUUID } from "node:crypto";
+import { lstat, mkdir, readdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { basename, dirname, relative, resolve } from "node:path";
 import { APP_NAME } from "../config.ts";
-import { type PawCheckpointMetadata, resolvePawCheckpointPaths, validatePawCheckpointMetadata } from "./checkpoints.ts";
+import {
+	type PawCheckpointMetadata,
+	type PawCheckpointRestorableFile,
+	resolvePawCheckpointPaths,
+	validatePawCheckpointMetadata,
+} from "./checkpoints.ts";
 import type { PawValidationIssue } from "./contracts.ts";
 import { readPawJson, resolvePawProjectPaths } from "./persistence.ts";
 import { readPawSessionState, resolvePawSessionPaths } from "./session-store.ts";
@@ -9,7 +15,9 @@ import type { PawSessionStateName } from "./state.ts";
 
 export type PawRollbackCommandResult =
 	| PawRollbackDryRunResult
+	| PawRollbackRestoredResult
 	| PawRollbackBlockedMissingRestoreMetadataResult
+	| PawRollbackBlockedUnsafeRestoreResult
 	| PawRollbackMissingProjectResult
 	| PawRollbackMissingSessionResult
 	| PawRollbackNoCheckpointsResult
@@ -28,8 +36,41 @@ export interface PawRollbackDryRunResult {
 	gitTouched: false;
 }
 
+export interface PawRollbackRestoredResult {
+	status: "restored";
+	sessionId: string;
+	checkpointName: string;
+	metadataPath: string;
+	stateName: PawSessionStateName;
+	metadata: PawCheckpointMetadata;
+	filesChanged: boolean;
+	rollbackExecuted: true;
+	gitTouched: false;
+	restoredFiles: PawRollbackRestoredFile[];
+	deletedFiles: PawRollbackRestoredFile[];
+	externalSideEffectsNotReverted: readonly string[];
+}
+
+export interface PawRollbackRestoredFile {
+	path: string;
+}
+
 export interface PawRollbackBlockedMissingRestoreMetadataResult {
 	status: "blocked_missing_restore_metadata";
+	sessionId: string;
+	checkpointName: string;
+	metadataPath: string;
+	stateName: PawSessionStateName;
+	metadata: PawCheckpointMetadata;
+	filesChanged: false;
+	rollbackExecuted: false;
+	gitTouched: false;
+	blockedReason: string;
+	externalSideEffectsNotReverted: readonly string[];
+}
+
+export interface PawRollbackBlockedUnsafeRestoreResult {
+	status: "blocked_unsafe_restore";
 	sessionId: string;
 	checkpointName: string;
 	metadataPath: string;
@@ -183,24 +224,61 @@ export async function createPawRollbackCommandResult(
 
 	const state = await readPawSessionState(repoRoot, sessionId);
 	if (!input.dryRun) {
+		const restoreFiles = validation.value.restore_files ?? [];
+		if (restoreFiles.length === 0) {
+			return {
+				status: "blocked_missing_restore_metadata",
+				sessionId,
+				checkpointName,
+				metadataPath: metadataFile,
+				stateName: state.name,
+				metadata: validation.value,
+				filesChanged: false,
+				rollbackExecuted: false,
+				gitTouched: false,
+				blockedReason:
+					"Checkpoint metadata records changed paths and content hashes only; it does not contain restorable Paw-owned file snapshots.",
+				externalSideEffectsNotReverted: getExternalSideEffectsNotReverted(),
+			};
+		}
+
+		const unsafeReason = await findUnsafeRestoreReason(projectPaths.repoRoot, restoreFiles);
+		if (unsafeReason !== null) {
+			return {
+				status: "blocked_unsafe_restore",
+				sessionId,
+				checkpointName,
+				metadataPath: metadataFile,
+				stateName: state.name,
+				metadata: validation.value,
+				filesChanged: false,
+				rollbackExecuted: false,
+				gitTouched: false,
+				blockedReason: unsafeReason,
+				externalSideEffectsNotReverted: getExternalSideEffectsNotReverted(),
+			};
+		}
+
+		const restoredFiles = restoreFiles
+			.filter((file) => file.restore_content !== null)
+			.map((file) => ({ path: file.path }));
+		const deletedFiles = restoreFiles
+			.filter((file) => file.restore_content === null)
+			.map((file) => ({ path: file.path }));
+		await restorePawOwnedFiles(projectPaths.repoRoot, restoreFiles);
 		return {
-			status: "blocked_missing_restore_metadata",
+			status: "restored",
 			sessionId,
 			checkpointName,
 			metadataPath: metadataFile,
 			stateName: state.name,
 			metadata: validation.value,
-			filesChanged: false,
-			rollbackExecuted: false,
+			filesChanged: restoreFiles.length > 0,
+			rollbackExecuted: true,
 			gitTouched: false,
-			blockedReason:
-				"Checkpoint metadata records changed paths and content hashes only; it does not contain restorable file content or a shadow snapshot reference.",
-			externalSideEffectsNotReverted: [
-				"migrations",
-				"installed dependencies",
-				"generated artifacts outside Paw-owned file changes",
-				"external service or provider side effects",
-			],
+			restoredFiles,
+			deletedFiles,
+			externalSideEffectsNotReverted: getExternalSideEffectsNotReverted(),
 		};
 	}
 
@@ -227,7 +305,21 @@ export function formatPawRollbackCommandResult(result: PawRollbackCommandResult)
 				"No rollback was executed.",
 				"Git state was not touched.",
 			].join("\n");
+		case "restored":
+			return [
+				"Paw rollback restored",
+				...formatRollbackInspectionLines(result),
+				`restored files: ${result.restoredFiles.length}`,
+				...result.restoredFiles.map((file) => `  - ${file.path}`),
+				`deleted files: ${result.deletedFiles.length}`,
+				...result.deletedFiles.map((file) => `  - ${file.path}`),
+				"External side effects not reverted:",
+				...result.externalSideEffectsNotReverted.map((sideEffect) => `  - ${sideEffect}`),
+				"Rollback executed for declared Paw-owned files only.",
+				"Git state was not touched.",
+			].join("\n");
 		case "blocked_missing_restore_metadata":
+		case "blocked_unsafe_restore":
 			return [
 				"Paw rollback blocked",
 				...formatRollbackInspectionLines(result),
@@ -265,12 +357,143 @@ export async function runPawRollbackCommand(args: string[]): Promise<void> {
 	try {
 		const result = await createPawRollbackCommandResult(process.cwd(), parsed.sessionId, parsed.input);
 		console.log(formatPawRollbackCommandResult(result));
-		if (result.status === "blocked_missing_restore_metadata") {
+		if (result.status === "blocked_missing_restore_metadata" || result.status === "blocked_unsafe_restore") {
 			process.exitCode = 1;
 		}
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		printPawRollbackCommandError(message);
+	}
+}
+
+function getExternalSideEffectsNotReverted(): readonly string[] {
+	return [
+		"migrations",
+		"installed dependencies",
+		"generated artifacts outside Paw-owned file changes",
+		"external service or provider side effects",
+	];
+}
+
+async function findUnsafeRestoreReason(
+	repoRoot: string,
+	restoreFiles: readonly PawCheckpointRestorableFile[],
+): Promise<string | null> {
+	const seenPaths = new Set<string>();
+	for (const file of restoreFiles) {
+		const targetPath = resolveRestoreTargetPath(repoRoot, file.path);
+		if (targetPath === null) {
+			return `Restore path ${file.path} is outside the repository root.`;
+		}
+		if (seenPaths.has(file.path)) {
+			return `Restore path ${file.path} is declared more than once.`;
+		}
+		seenPaths.add(file.path);
+
+		if (await hasSymlinkedAncestor(repoRoot, targetPath)) {
+			return `Restore path ${file.path} has a symlinked ancestor and cannot be restored safely.`;
+		}
+
+		const currentHash = await readCurrentFileHash(targetPath);
+		if (currentHash !== file.current_content_hash) {
+			return `Current content for ${file.path} does not match checkpoint safety hash.`;
+		}
+	}
+	return null;
+}
+
+async function restorePawOwnedFiles(
+	repoRoot: string,
+	restoreFiles: readonly PawCheckpointRestorableFile[],
+): Promise<void> {
+	for (const file of restoreFiles) {
+		const targetPath = resolveRestoreTargetPath(repoRoot, file.path);
+		if (targetPath === null) {
+			throw new Error(`Restore path ${file.path} is outside the repository root.`);
+		}
+		if (await hasSymlinkedAncestor(repoRoot, targetPath)) {
+			throw new Error(`Restore path ${file.path} has a symlinked ancestor and cannot be restored safely.`);
+		}
+		if (file.restore_content === null) {
+			await removeFileIfExists(targetPath);
+			continue;
+		}
+
+		await writeRestoreContentAtomic(targetPath, file.restore_content);
+	}
+}
+
+async function writeRestoreContentAtomic(targetPath: string, content: string): Promise<void> {
+	const targetDir = dirname(targetPath);
+	const tempPath = resolve(targetDir, `.${basename(targetPath)}.${process.pid}.${randomUUID()}.tmp`);
+	let wroteTemp = false;
+	await mkdir(targetDir, { recursive: true });
+	try {
+		await writeFile(tempPath, content, { encoding: "utf-8", flag: "wx", mode: 0o600 });
+		wroteTemp = true;
+		await rename(tempPath, targetPath);
+		wroteTemp = false;
+	} finally {
+		if (wroteTemp) {
+			await removeFileIfExists(tempPath);
+		}
+	}
+}
+
+function resolveRestoreTargetPath(repoRoot: string, path: string): string | null {
+	const root = resolve(repoRoot);
+	const target = resolve(root, path);
+	if (target !== root && !target.startsWith(`${root}/`)) {
+		return null;
+	}
+	return target;
+}
+
+async function hasSymlinkedAncestor(repoRoot: string, targetPath: string): Promise<boolean> {
+	const root = resolve(repoRoot);
+	let currentPath = targetPath;
+	for (;;) {
+		if (currentPath === root) {
+			return false;
+		}
+
+		try {
+			if ((await lstat(currentPath)).isSymbolicLink()) {
+				return true;
+			}
+		} catch (error) {
+			if (!isFileSystemError(error) || error.code !== "ENOENT") {
+				throw error;
+			}
+		}
+
+		const parentPath = dirname(currentPath);
+		if (parentPath === currentPath) {
+			return true;
+		}
+		currentPath = parentPath;
+	}
+}
+
+async function readCurrentFileHash(path: string): Promise<string | null> {
+	try {
+		const content = await readFile(path);
+		return `sha256:${createHash("sha256").update(content).digest("hex")}`;
+	} catch (error) {
+		if (isFileSystemError(error) && error.code === "ENOENT") {
+			return null;
+		}
+		throw error;
+	}
+}
+
+async function removeFileIfExists(path: string): Promise<void> {
+	try {
+		await unlink(path);
+	} catch (error) {
+		if (!isFileSystemError(error) || error.code !== "ENOENT") {
+			throw error;
+		}
 	}
 }
 
@@ -300,7 +523,11 @@ async function findLatestPawCheckpointName(repoRoot: string, sessionId: string):
 }
 
 function formatRollbackInspectionLines(
-	result: PawRollbackDryRunResult | PawRollbackBlockedMissingRestoreMetadataResult,
+	result:
+		| PawRollbackDryRunResult
+		| PawRollbackRestoredResult
+		| PawRollbackBlockedMissingRestoreMetadataResult
+		| PawRollbackBlockedUnsafeRestoreResult,
 ): string[] {
 	return [
 		`session: ${result.sessionId}`,

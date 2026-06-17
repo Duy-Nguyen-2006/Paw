@@ -1,5 +1,6 @@
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -48,6 +49,10 @@ function createSessionState(sessionId: string): PawSessionState {
 		completed_slice_ids: [],
 		blocked_reason: null,
 	};
+}
+
+function hashContent(content: string): string {
+	return `sha256:${createHash("sha256").update(content).digest("hex")}`;
 }
 
 function createCheckpointMetadata(overrides: Partial<PawCheckpointMetadata> = {}): PawCheckpointMetadata {
@@ -176,7 +181,7 @@ describe("Paw rollback command", () => {
 		expect(result.filesChanged).toBe(false);
 		expect(result.rollbackExecuted).toBe(false);
 		expect(result.gitTouched).toBe(false);
-		expect(result.blockedReason).toContain("does not contain restorable file content");
+		expect(result.blockedReason).toContain("does not contain restorable Paw-owned file snapshots");
 		expect(result.externalSideEffectsNotReverted).toEqual([
 			"migrations",
 			"installed dependencies",
@@ -193,6 +198,163 @@ describe("Paw rollback command", () => {
 		expect(existsSync(join(projectRoot, "src", "changed.ts"))).toBe(false);
 		expect(await getPawSessionLockStatus(projectRoot, "session-1", { nowMs: 2_000 })).toEqual({ status: "unlocked" });
 		expect(existsSync(resolvePawSessionPaths(projectRoot, "session-1").lockFile)).toBe(false);
+	});
+
+	test("restores and deletes only declared Paw-owned files with matching safety hashes", async () => {
+		const projectRoot = await createTempProject();
+		process.chdir(projectRoot);
+		await expect(handlePawCommand(["paw", "init"])).resolves.toBe(true);
+		const initialState = createSessionState("session-1");
+		await writePawSessionState(projectRoot, initialState);
+		await mkdir(join(projectRoot, "src"), { recursive: true });
+		await writeFile(join(projectRoot, "src", "changed.ts"), "after\n", "utf-8");
+		await writeFile(join(projectRoot, "src", "deleted.ts"), "created by paw\n", "utf-8");
+		await writeFile(join(projectRoot, "src", "untouched.ts"), "user work\n", "utf-8");
+		await writePawCheckpointMetadata(
+			projectRoot,
+			createCheckpointMetadata({
+				restore_files: [
+					{
+						path: "src/changed.ts",
+						paw_owned: true,
+						restore_content: "before\n",
+						current_content_hash: hashContent("after\n"),
+					},
+					{
+						path: "src/deleted.ts",
+						paw_owned: true,
+						restore_content: null,
+						current_content_hash: hashContent("created by paw\n"),
+					},
+				],
+			}),
+		);
+
+		const result = await createPawRollbackCommandResult(projectRoot, "session-1", {
+			dryRun: false,
+			checkpointName: "20260617T010203Z-slice-1-abc123",
+		});
+
+		expect(result.status).toBe("restored");
+		if (result.status !== "restored") return;
+		expect(result.filesChanged).toBe(true);
+		expect(result.rollbackExecuted).toBe(true);
+		expect(result.gitTouched).toBe(false);
+		expect(result.restoredFiles).toEqual([{ path: "src/changed.ts" }]);
+		expect(result.deletedFiles).toEqual([{ path: "src/deleted.ts" }]);
+		expect(await readFile(join(projectRoot, "src", "changed.ts"), "utf-8")).toBe("before\n");
+		expect(existsSync(join(projectRoot, "src", "deleted.ts"))).toBe(false);
+		expect(await readFile(join(projectRoot, "src", "untouched.ts"), "utf-8")).toBe("user work\n");
+		expect(formatPawRollbackCommandResult(result)).toContain("Rollback executed for declared Paw-owned files only.");
+		await expect(readPawSessionState(projectRoot, "session-1")).resolves.toEqual(initialState);
+		expect(await getPawSessionLockStatus(projectRoot, "session-1", { nowMs: 2_000 })).toEqual({ status: "unlocked" });
+	});
+
+	test("blocks restore through a symlinked ancestor before creating external files", async () => {
+		const projectRoot = await createTempProject();
+		const externalRoot = await mkdtemp(join(tmpdir(), "paw-rollback-external-"));
+		tempRoots.push(externalRoot);
+		process.chdir(projectRoot);
+		await expect(handlePawCommand(["paw", "init"])).resolves.toBe(true);
+		await writePawSessionState(projectRoot, createSessionState("session-1"));
+		await symlink(externalRoot, join(projectRoot, "link"), "dir");
+		await writePawCheckpointMetadata(
+			projectRoot,
+			createCheckpointMetadata({
+				restore_files: [
+					{
+						path: "link/victim.txt",
+						paw_owned: true,
+						restore_content: "restored outside\n",
+						current_content_hash: null,
+					},
+				],
+			}),
+		);
+
+		const result = await createPawRollbackCommandResult(projectRoot, "session-1", {
+			dryRun: false,
+			checkpointName: "20260617T010203Z-slice-1-abc123",
+		});
+
+		expect(result.status).toBe("blocked_unsafe_restore");
+		if (result.status !== "blocked_unsafe_restore") return;
+		expect(result.filesChanged).toBe(false);
+		expect(result.rollbackExecuted).toBe(false);
+		expect(result.blockedReason).toContain("has a symlinked ancestor");
+		expect(existsSync(join(externalRoot, "victim.txt"))).toBe(false);
+		expect(existsSync(join(projectRoot, "link"))).toBe(true);
+	});
+
+	test("blocks delete through a symlinked ancestor before removing external files", async () => {
+		const projectRoot = await createTempProject();
+		const externalRoot = await mkdtemp(join(tmpdir(), "paw-rollback-external-"));
+		tempRoots.push(externalRoot);
+		process.chdir(projectRoot);
+		await expect(handlePawCommand(["paw", "init"])).resolves.toBe(true);
+		await writePawSessionState(projectRoot, createSessionState("session-1"));
+		await writeFile(join(externalRoot, "victim.txt"), "outside\n", "utf-8");
+		await symlink(externalRoot, join(projectRoot, "link"), "dir");
+		await writePawCheckpointMetadata(
+			projectRoot,
+			createCheckpointMetadata({
+				restore_files: [
+					{
+						path: "link/victim.txt",
+						paw_owned: true,
+						restore_content: null,
+						current_content_hash: hashContent("outside\n"),
+					},
+				],
+			}),
+		);
+
+		const result = await createPawRollbackCommandResult(projectRoot, "session-1", {
+			dryRun: false,
+			checkpointName: "20260617T010203Z-slice-1-abc123",
+		});
+
+		expect(result.status).toBe("blocked_unsafe_restore");
+		if (result.status !== "blocked_unsafe_restore") return;
+		expect(result.filesChanged).toBe(false);
+		expect(result.rollbackExecuted).toBe(false);
+		expect(result.blockedReason).toContain("has a symlinked ancestor");
+		expect(await readFile(join(externalRoot, "victim.txt"), "utf-8")).toBe("outside\n");
+		expect(existsSync(join(projectRoot, "link"))).toBe(true);
+	});
+
+	test("blocks restore when declared file content changed after checkpoint", async () => {
+		const projectRoot = await createTempProject();
+		process.chdir(projectRoot);
+		await expect(handlePawCommand(["paw", "init"])).resolves.toBe(true);
+		await writePawSessionState(projectRoot, createSessionState("session-1"));
+		await mkdir(join(projectRoot, "src"), { recursive: true });
+		await writeFile(join(projectRoot, "src", "changed.ts"), "user changed\n", "utf-8");
+		await writePawCheckpointMetadata(
+			projectRoot,
+			createCheckpointMetadata({
+				restore_files: [
+					{
+						path: "src/changed.ts",
+						paw_owned: true,
+						restore_content: "before\n",
+						current_content_hash: hashContent("after\n"),
+					},
+				],
+			}),
+		);
+
+		const result = await createPawRollbackCommandResult(projectRoot, "session-1", {
+			dryRun: false,
+			checkpointName: "20260617T010203Z-slice-1-abc123",
+		});
+
+		expect(result.status).toBe("blocked_unsafe_restore");
+		if (result.status !== "blocked_unsafe_restore") return;
+		expect(result.filesChanged).toBe(false);
+		expect(result.rollbackExecuted).toBe(false);
+		expect(result.blockedReason).toContain("does not match checkpoint safety hash");
+		expect(await readFile(join(projectRoot, "src", "changed.ts"), "utf-8")).toBe("user changed\n");
 	});
 
 	test("selects the latest checkpoint by name when checkpoint is omitted", async () => {
@@ -285,6 +447,50 @@ describe("Paw rollback command", () => {
 			]),
 		);
 		expect(formatPawRollbackCommandResult(result)).toContain("Cannot dry-run rollback");
+	});
+
+	test("rejects path traversal, secret, and out-of-repo restore paths before mutation", async () => {
+		const projectRoot = await createTempProject();
+		process.chdir(projectRoot);
+		await expect(handlePawCommand(["paw", "init"])).resolves.toBe(true);
+		await writePawSessionState(projectRoot, createSessionState("session-1"));
+		await writePawJsonAtomic(
+			join(projectRoot, ".paw", "checkpoints", "session-1", "unsafe-checkpoint", "checkpoint.json"),
+			{
+				session_id: "session-1",
+				checkpoint_name: "unsafe-checkpoint",
+				scope: "slice",
+				slice_id: "slice-1",
+				created_at: "2026-06-17T01:02:03.000Z",
+				base_tree: "tree:abc123",
+				changed_files: [{ path: "../outside.ts", content_hash: "sha256:x" }],
+				restore_files: [
+					{ path: "../outside.ts", paw_owned: true, restore_content: "x", current_content_hash: null },
+					{ path: "/tmp/outside.ts", paw_owned: true, restore_content: "x", current_content_hash: null },
+					{ path: ".env", paw_owned: true, restore_content: "SECRET=1", current_content_hash: null },
+					{ path: "secrets/token.txt", paw_owned: true, restore_content: "token", current_content_hash: null },
+				],
+			},
+		);
+
+		const result = await createPawRollbackCommandResult(projectRoot, "session-1", {
+			dryRun: false,
+			checkpointName: "unsafe-checkpoint",
+		});
+
+		expect(result.status).toBe("invalid_checkpoint");
+		if (result.status !== "invalid_checkpoint") return;
+		expect(result.issues).toEqual(
+			expect.arrayContaining([
+				{ path: "/changed_files/0/path", message: "Path must not traverse outside the repository root." },
+				{ path: "/restore_files/0/path", message: "Path must not traverse outside the repository root." },
+				{ path: "/restore_files/1/path", message: "Path must be relative to the repository root." },
+				{ path: "/restore_files/2/path", message: "Path must not target secret or credential files." },
+				{ path: "/restore_files/3/path", message: "Path must not target secret or credential files." },
+			]),
+		);
+		expect(existsSync(join(projectRoot, "outside.ts"))).toBe(false);
+		expect(existsSync(join(projectRoot, ".env"))).toBe(false);
 	});
 
 	test("routes paw rollback and validates command arguments", async () => {
