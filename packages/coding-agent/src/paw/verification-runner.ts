@@ -1,3 +1,5 @@
+import type { PawVerifyConfig, PawVerifyGateDecision } from "./resilience-policy.ts";
+import { evaluatePawVerifyGate } from "./resilience-policy.ts";
 import type { PawNativeVerificationPlanEntry } from "./verification-plan.ts";
 
 export type PawNativeVerificationExecutorInput = {
@@ -44,6 +46,28 @@ export type PawNativeVerificationRunResult =
 			stderr?: string;
 			reason: string;
 	  };
+
+export function mapPawNativeVerificationRunResults(
+	results: readonly PawNativeVerificationRunResult[],
+	config: PawVerifyConfig,
+): PawVerifyGateDecision[] {
+	return results.map((result) => {
+		if (result.status === "verified") {
+			return evaluatePawVerifyGate({
+				gate: result.gate,
+				available: true,
+				config,
+			});
+		}
+
+		return evaluatePawVerifyGate({
+			gate: result.gate,
+			available: false,
+			config,
+			reason: result.reason,
+		});
+	});
+}
 
 export async function runPawNativeVerificationPlan(
 	plan: readonly PawNativeVerificationPlanEntry[],

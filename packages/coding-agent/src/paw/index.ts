@@ -433,6 +433,7 @@ export type {
 	PawNativeVerificationRunResult,
 } from "./verification-runner.ts";
 export {
+	mapPawNativeVerificationRunResults,
 	runPawNativeVerificationPlan,
 	summarizeNativeVerificationOutput,
 } from "./verification-runner.ts";
