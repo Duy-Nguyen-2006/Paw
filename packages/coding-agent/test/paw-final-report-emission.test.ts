@@ -13,6 +13,7 @@ import {
 	resolvePawSessionPaths,
 	writePawJsonAtomic,
 	writePawSessionState,
+	writePawVerificationEvidence,
 } from "../src/paw/index.ts";
 
 const tempRoots: string[] = [];
@@ -380,5 +381,134 @@ describe("emitPawFinalReport native verification run results", () => {
 		expect(result.report.native_verification_run_results).toEqual([]);
 		expect(result.markdown).toContain("## Verification Evidence");
 		expect(result.markdown).toContain("- No native verification gates executed");
+	});
+
+	test("reads persisted verification evidence when reportInput omits nativeVerificationRunResults", async () => {
+		const repoRoot = await createTempRepo();
+		const state = createSliceDoneState("session-persisted");
+		await writePawSessionState(repoRoot, state);
+		await writeCurrentLock(repoRoot, "session-persisted", 1_000);
+
+		const persistedResults: PawNativeVerificationRunResult[] = [
+			{
+				status: "verified",
+				gate: "unit_tests",
+				verified: true,
+				executed: true,
+				command: ["./test.sh"],
+				exitCode: 0,
+				stdout: "all 42 passed",
+				stderr: "",
+			},
+		];
+		await writePawVerificationEvidence(repoRoot, "session-persisted", persistedResults);
+
+		const result = await emitPawFinalReport({
+			repoRoot,
+			sessionId: "session-persisted",
+			reportInput: {
+				summary: "Implemented all planned slices.",
+				evidence: ["focused tests passed"],
+				verifyDecisions: [verifiedUnitGate],
+			},
+			lockOptions: { nowMs: 2_000, ttlSec: 120 },
+		});
+
+		expect(result.status).toBe("completed");
+		if (result.status !== "completed") return;
+		expect(result.report.native_verification_run_results).toEqual(persistedResults);
+		expect(result.markdown).toContain("- unit_tests: verified");
+		expect(result.markdown).not.toContain("all 42 passed");
+	});
+
+	test("explicit empty nativeVerificationRunResults array is preserved over persisted evidence", async () => {
+		const repoRoot = await createTempRepo();
+		const state = createSliceDoneState("session-explicit-empty");
+		await writePawSessionState(repoRoot, state);
+		await writeCurrentLock(repoRoot, "session-explicit-empty", 1_000);
+
+		const persistedResults: PawNativeVerificationRunResult[] = [
+			{
+				status: "verified",
+				gate: "unit_tests",
+				verified: true,
+				executed: true,
+				command: ["./test.sh"],
+				exitCode: 0,
+				stdout: "sensitive output",
+				stderr: "",
+			},
+		];
+		await writePawVerificationEvidence(repoRoot, "session-explicit-empty", persistedResults);
+
+		const result = await emitPawFinalReport({
+			repoRoot,
+			sessionId: "session-explicit-empty",
+			reportInput: {
+				summary: "Implemented all planned slices.",
+				evidence: ["focused tests passed"],
+				verifyDecisions: [verifiedUnitGate],
+				nativeVerificationRunResults: [],
+			},
+			lockOptions: { nowMs: 2_000, ttlSec: 120 },
+		});
+
+		expect(result.status).toBe("completed");
+		if (result.status !== "completed") return;
+		expect(result.report.native_verification_run_results).toEqual([]);
+		expect(result.markdown).toContain("- No native verification gates executed");
+	});
+
+	test("explicit nativeVerificationRunResults are preserved over different persisted evidence", async () => {
+		const repoRoot = await createTempRepo();
+		const state = createSliceDoneState("session-explicit-wins");
+		await writePawSessionState(repoRoot, state);
+		await writeCurrentLock(repoRoot, "session-explicit-wins", 1_000);
+
+		const persistedResults: PawNativeVerificationRunResult[] = [
+			{
+				status: "verified",
+				gate: "unit_tests",
+				verified: true,
+				executed: true,
+				command: ["./test.sh"],
+				exitCode: 0,
+				stdout: "old results",
+				stderr: "",
+			},
+		];
+		await writePawVerificationEvidence(repoRoot, "session-explicit-wins", persistedResults);
+
+		const callerResults: PawNativeVerificationRunResult[] = [
+			{
+				status: "unverified",
+				gate: "build",
+				verified: false,
+				executed: true,
+				command: ["npm", "run", "build"],
+				exitCode: 1,
+				stdout: "build error",
+				stderr: "failed",
+				reason: "Build failed.",
+			},
+		];
+
+		const result = await emitPawFinalReport({
+			repoRoot,
+			sessionId: "session-explicit-wins",
+			reportInput: {
+				summary: "Implemented all planned slices.",
+				evidence: ["focused tests passed"],
+				verifyDecisions: [verifiedUnitGate],
+				nativeVerificationRunResults: callerResults,
+			},
+			lockOptions: { nowMs: 2_000, ttlSec: 120 },
+		});
+
+		expect(result.status).toBe("completed");
+		if (result.status !== "completed") return;
+		expect(result.report.native_verification_run_results).toEqual(callerResults);
+		expect(result.markdown).toContain("- build: unverified");
+		expect(result.markdown).not.toContain("- unit_tests: verified");
 	});
 });

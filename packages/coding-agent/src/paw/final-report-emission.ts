@@ -12,6 +12,7 @@ import type { PawSessionLock, PawSessionLockOptions, PawSessionLockStaleReason }
 import {
 	getPawSessionLockStatus,
 	readPawSessionState,
+	readPawVerificationEvidence,
 	resolvePawSessionPaths,
 	writePawSessionState,
 } from "./session-store.ts";
@@ -144,7 +145,15 @@ export async function emitPawFinalReport(input: PawFinalReportEmissionInput): Pr
 		};
 	}
 
-	const reportResult = createFinalReport(input.sessionId, input.reportInput);
+	const resolvedReportInput =
+		"nativeVerificationRunResults" in input.reportInput
+			? input.reportInput
+			: {
+					...input.reportInput,
+					nativeVerificationRunResults: await readPawVerificationEvidence(input.repoRoot, input.sessionId),
+				};
+
+	const reportResult = createFinalReport(input.sessionId, resolvedReportInput);
 	if (!reportResult.ok) {
 		return {
 			status: "invalid_report_input",
