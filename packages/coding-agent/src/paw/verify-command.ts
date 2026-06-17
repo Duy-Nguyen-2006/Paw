@@ -13,6 +13,10 @@ import {
 	resolvePawSessionPaths,
 } from "./session-store.ts";
 import type { PawSessionStateName } from "./state.ts";
+import {
+	createPawNativeVerificationCommandPolicy,
+	createPawPolicyCheckedNativeVerificationExecutor,
+} from "./verification-command-policy.ts";
 import { createPawNativeSubprocessExecutor } from "./verification-executor.ts";
 import { createPawNativeVerificationPlan, type PawNativeVerificationPlanEntry } from "./verification-plan.ts";
 import type { PawNativeVerificationExecutor } from "./verification-runner.ts";
@@ -263,7 +267,16 @@ export async function runPawVerifyCommand(args: string[]): Promise<void> {
 	}
 
 	const nativeVerificationExecutor = parsed.native
-		? createPawNativeSubprocessExecutor({ cwd: process.cwd() })
+		? (() => {
+				const repoRoot = process.cwd();
+				const runtimeConfig = loadDefaultPawRuntimeConfig(repoRoot);
+				const plan = createPawNativeVerificationPlan(runtimeConfig.verify.v1_gates);
+				const policy = createPawNativeVerificationCommandPolicy(plan);
+				return createPawPolicyCheckedNativeVerificationExecutor(
+					createPawNativeSubprocessExecutor({ cwd: repoRoot }),
+					policy,
+				);
+			})()
 		: undefined;
 
 	try {

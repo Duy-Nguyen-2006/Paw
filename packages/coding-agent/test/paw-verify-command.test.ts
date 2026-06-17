@@ -15,6 +15,7 @@ import {
 	writePawSessionState,
 } from "../src/paw/index.ts";
 import { handlePawCommand } from "../src/paw/init-command.ts";
+import * as verificationCommandPolicyModule from "../src/paw/verification-command-policy.ts";
 import * as verificationExecutorModule from "../src/paw/verification-executor.ts";
 import type { PawNativeVerificationExecutor } from "../src/paw/verification-runner.ts";
 import {
@@ -393,7 +394,7 @@ describe("parsePawVerifyArgs", () => {
 });
 
 describe("runPawVerifyCommand --native wiring", () => {
-	test("--native flag produces verified gates via native executor", async () => {
+	test("--native flag wraps subprocess executor with policy derived from verification plan", async () => {
 		const projectRoot = await createTempProject();
 		process.chdir(projectRoot);
 		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
@@ -405,13 +406,55 @@ describe("runPawVerifyCommand --native wiring", () => {
 			stdout: "",
 			stderr: "",
 		}));
+		const policySpy = vi.spyOn(verificationCommandPolicyModule, "createPawNativeVerificationCommandPolicy");
+		const policyCheckedSpy = vi.spyOn(
+			verificationCommandPolicyModule,
+			"createPawPolicyCheckedNativeVerificationExecutor",
+		);
 
 		await runPawVerifyCommand(["session-wired", "--native"]);
 
 		expect(verificationExecutorModule.createPawNativeSubprocessExecutor).toHaveBeenCalledWith({ cwd: projectRoot });
+		expect(policySpy).toHaveBeenCalledOnce();
+		// Policy is derived from a plan with at least one planned entry
+		const planArg = policySpy.mock.calls[0][0];
+		const plannedEntries = planArg.filter((entry) => entry.status === "planned");
+		expect(plannedEntries.length).toBeGreaterThan(0);
+		expect(policyCheckedSpy).toHaveBeenCalledOnce();
+		// The first arg to policyChecked is the subprocess executor return value
+		// and the second is the policy return value
 		const stdout = logSpy.mock.calls.map(([message]) => String(message)).join("\n");
 		expect(stdout).toContain("status: completed");
 		expect(stdout).toContain("unverified gates: none");
+	});
+
+	test("--native policy-blocked command does not reach subprocess executor", async () => {
+		const projectRoot = await createTempProject();
+		process.chdir(projectRoot);
+		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+		await expect(handlePawCommand(["paw", "init"])).resolves.toBe(true);
+		await writePawSessionState(projectRoot, createVerifyingState("session-policy-block"));
+
+		let subprocessCallCount = 0;
+		vi.spyOn(verificationExecutorModule, "createPawNativeSubprocessExecutor").mockReturnValue(async () => {
+			subprocessCallCount++;
+			return { exitCode: 0, stdout: "", stderr: "" };
+		});
+
+		// Wrap with a policy that blocks all commands
+		vi.spyOn(verificationCommandPolicyModule, "createPawNativeVerificationCommandPolicy").mockReturnValue({
+			isAllowed: () => false,
+		});
+
+		await runPawVerifyCommand(["session-policy-block", "--native"]);
+
+		// The subprocess executor factory is called to create the executor,
+		// but the policy blocks all invocations so no subprocess calls happen
+		expect(verificationExecutorModule.createPawNativeSubprocessExecutor).toHaveBeenCalledOnce();
+		expect(subprocessCallCount).toBe(0);
+		const stdout = logSpy.mock.calls.map(([message]) => String(message)).join("\n");
+		expect(stdout).toContain("status: completed_with_unverified");
+		expect(stdout).toContain("verified gates: none");
 	});
 
 	test("default path without --native produces unverified gates and does not construct subprocess executor", async () => {
