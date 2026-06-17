@@ -191,6 +191,26 @@ export type {
 	PawPlanApprovalTransitionResult,
 } from "./plan-approval.ts";
 export { approvePawPlanSlices } from "./plan-approval.ts";
+export type {
+	PawApprovePlanCommandAdvancedResult,
+	PawApprovePlanCommandInput,
+	PawApprovePlanCommandInvalidPlanResult,
+	PawApprovePlanCommandInvalidTransitionResult,
+	PawApprovePlanCommandLockedByOtherResult,
+	PawApprovePlanCommandLockedResult,
+	PawApprovePlanCommandMissingProjectResult,
+	PawApprovePlanCommandMissingSessionResult,
+	PawApprovePlanCommandNotLockedResult,
+	PawApprovePlanCommandResult,
+	PawApprovePlanParsedArgs,
+} from "./plan-approval-command.ts";
+export {
+	buildPawPlannerSlicesFromCliSliceValues,
+	createPawApprovePlanCommandResult,
+	formatPawApprovePlanCommandResult,
+	parsePawApprovePlanArgs,
+	runPawApprovePlanCommand,
+} from "./plan-approval-command.ts";
 export type { PawPlannerSlice, PawPlanSliceQueue } from "./plan-slices.ts";
 export { createPawPlanSliceQueue } from "./plan-slices.ts";
 export type {

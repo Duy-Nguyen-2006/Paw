@@ -5,6 +5,7 @@ import { loadDefaultPawRuntimeConfig } from "./config.ts";
 import { runPawDoctorCommand } from "./doctor-command.ts";
 import { runPawFinalizeCommand } from "./finalize-command.ts";
 import { initializePawProject } from "./persistence.ts";
+import { runPawApprovePlanCommand } from "./plan-approval-command.ts";
 import { runPawReportCommand } from "./report-command.ts";
 import { runPawResumeCommand } from "./resume-command.ts";
 import { runPawStartCommand } from "./start-command.ts";
@@ -18,6 +19,7 @@ function printPawHelp(): void {
   ${APP_NAME} paw start <session-id>
   ${APP_NAME} paw resume <session-id>
   ${APP_NAME} paw verify <session-id>
+  ${APP_NAME} paw approve-plan <session-id> --slice <slice-id>[:<title>]...
   ${APP_NAME} paw finalize <session-id> --summary <text>
   ${APP_NAME} paw report <session-id>
   ${APP_NAME} paw clean --dry-run
@@ -34,6 +36,8 @@ Commands:
   ${APP_NAME} paw start --help           Show start help
   ${APP_NAME} paw resume <session-id> Show resumable session state and lock status
   ${APP_NAME} paw resume --help Show resume help
+  ${APP_NAME} paw approve-plan <session-id> --slice <id>[:<title>]... Approve plan slices from PLAN_DRAFTED
+  ${APP_NAME} paw approve-plan --help               Show approve-plan help
   ${APP_NAME} paw verify <session-id> Record configured verification decisions
   ${APP_NAME} paw verify --help Show verify help
   ${APP_NAME} paw finalize <session-id> --summary <text> Emit final report for SLICE_DONE session
@@ -125,6 +129,11 @@ export async function handlePawCommand(args: string[]): Promise<boolean> {
 
 	if (subcommand === "verify") {
 		await runPawVerifyCommand(rest);
+		return true;
+	}
+
+	if (subcommand === "approve-plan") {
+		await runPawApprovePlanCommand(rest);
 		return true;
 	}
 
