@@ -15,8 +15,14 @@ import {
 	writePawSessionState,
 } from "../src/paw/index.ts";
 import { handlePawCommand } from "../src/paw/init-command.ts";
+import * as verificationExecutorModule from "../src/paw/verification-executor.ts";
 import type { PawNativeVerificationExecutor } from "../src/paw/verification-runner.ts";
-import { createPawVerifyCommandResult, formatPawVerifyCommandResult } from "../src/paw/verify-command.ts";
+import {
+	createPawVerifyCommandResult,
+	formatPawVerifyCommandResult,
+	parsePawVerifyArgs,
+	runPawVerifyCommand,
+} from "../src/paw/verify-command.ts";
 
 const testDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(testDir, "..", "..", "..");
@@ -282,5 +288,159 @@ describe("Paw verify command with injected native executor", () => {
 		if (result.status !== "completed_with_unverified") return;
 		expect(result.verifyDecisions.every((d) => d.status === "unverified")).toBe(true);
 		expect(formatPawVerifyCommandResult(result)).toContain("verified gates: none");
+	});
+});
+
+describe("parsePawVerifyArgs", () => {
+	test("returns ok with session id and native=false for a single session argument", () => {
+		expect(parsePawVerifyArgs(["session-1"])).toEqual({
+			kind: "ok",
+			native: false,
+			sessionId: "session-1",
+		});
+	});
+
+	test("returns ok with native=true when --native follows session id", () => {
+		expect(parsePawVerifyArgs(["session-1", "--native"])).toEqual({
+			kind: "ok",
+			native: true,
+			sessionId: "session-1",
+		});
+	});
+
+	test("returns ok with native=true when --native precedes session id", () => {
+		expect(parsePawVerifyArgs(["--native", "session-1"])).toEqual({
+			kind: "ok",
+			native: true,
+			sessionId: "session-1",
+		});
+	});
+
+	test("returns help for --help", () => {
+		expect(parsePawVerifyArgs(["--help"])).toEqual({ kind: "help", native: false });
+		expect(parsePawVerifyArgs(["-h"])).toEqual({ kind: "help", native: false });
+	});
+
+	test("returns help with native=true when --native is combined with --help", () => {
+		expect(parsePawVerifyArgs(["--help", "--native"])).toEqual({ kind: "help", native: true });
+		expect(parsePawVerifyArgs(["--native", "-h"])).toEqual({ kind: "help", native: true });
+	});
+
+	test("returns error for no arguments", () => {
+		expect(parsePawVerifyArgs([])).toEqual({
+			kind: "error",
+			native: false,
+			message: 'Missing required session id for "paw verify".',
+		});
+	});
+
+	test("returns error for --native with no session id", () => {
+		expect(parsePawVerifyArgs(["--native"])).toEqual({
+			kind: "error",
+			native: true,
+			message: 'Missing required session id for "paw verify".',
+		});
+	});
+
+	test("returns error for extra arguments", () => {
+		expect(parsePawVerifyArgs(["session-1", "extra"])).toEqual({
+			kind: "error",
+			native: false,
+			message: 'Unknown option for "paw verify": extra',
+		});
+	});
+
+	test("returns error for extra arguments even when --native is present", () => {
+		expect(parsePawVerifyArgs(["session-1", "--native", "extra"])).toEqual({
+			kind: "error",
+			native: true,
+			message: 'Unknown option for "paw verify": extra',
+		});
+	});
+
+	test("returns error for unknown flag-like arg", () => {
+		expect(parsePawVerifyArgs(["--bad"])).toEqual({
+			kind: "error",
+			native: false,
+			message: 'Unknown option for "paw verify": --bad',
+		});
+	});
+
+	test("returns error for unknown flag-like arg alongside session id", () => {
+		expect(parsePawVerifyArgs(["session-1", "--bad"])).toEqual({
+			kind: "error",
+			native: false,
+			message: 'Unknown option for "paw verify": --bad',
+		});
+	});
+
+	test("returns error for unknown flag-like arg alongside --native and session id", () => {
+		expect(parsePawVerifyArgs(["session-1", "--native", "--bad"])).toEqual({
+			kind: "error",
+			native: true,
+			message: 'Unknown option for "paw verify": --bad',
+		});
+	});
+
+	test("returns help when --help accompanies session id", () => {
+		expect(parsePawVerifyArgs(["session-1", "--help"])).toEqual({ kind: "help", native: false });
+	});
+
+	test("returns help with native=true when session id, --native, and --help are all present", () => {
+		expect(parsePawVerifyArgs(["--native", "session-1", "--help"])).toEqual({ kind: "help", native: true });
+		expect(parsePawVerifyArgs(["session-1", "--native", "-h"])).toEqual({ kind: "help", native: true });
+	});
+});
+
+describe("runPawVerifyCommand --native wiring", () => {
+	test("--native flag produces verified gates via native executor", async () => {
+		const projectRoot = await createTempProject();
+		process.chdir(projectRoot);
+		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+		await expect(handlePawCommand(["paw", "init"])).resolves.toBe(true);
+		await writePawSessionState(projectRoot, createVerifyingState("session-wired"));
+
+		vi.spyOn(verificationExecutorModule, "createPawNativeSubprocessExecutor").mockReturnValue(async () => ({
+			exitCode: 0,
+			stdout: "",
+			stderr: "",
+		}));
+
+		await runPawVerifyCommand(["session-wired", "--native"]);
+
+		expect(verificationExecutorModule.createPawNativeSubprocessExecutor).toHaveBeenCalledWith({ cwd: projectRoot });
+		const stdout = logSpy.mock.calls.map(([message]) => String(message)).join("\n");
+		expect(stdout).toContain("status: completed");
+		expect(stdout).toContain("unverified gates: none");
+	});
+
+	test("default path without --native produces unverified gates and does not construct subprocess executor", async () => {
+		const projectRoot = await createTempProject();
+		process.chdir(projectRoot);
+		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+		await expect(handlePawCommand(["paw", "init"])).resolves.toBe(true);
+		await writePawSessionState(projectRoot, createVerifyingState("session-default"));
+
+		const executorSpy = vi.spyOn(verificationExecutorModule, "createPawNativeSubprocessExecutor");
+
+		await runPawVerifyCommand(["session-default"]);
+
+		expect(executorSpy).not.toHaveBeenCalled();
+		const stdout = logSpy.mock.calls.map(([message]) => String(message)).join("\n");
+		expect(stdout).toContain("verified gates: none");
+		expect(stdout).toContain("status: completed_with_unverified");
+	});
+
+	test("help text mentions --native flag", async () => {
+		vi.spyOn(console, "log").mockImplementation(() => {});
+
+		await runPawVerifyCommand(["--help"]);
+
+		const stdout = vi
+			.mocked(console.log)
+			.mock.calls.map(([message]) => String(message))
+			.join("\n");
+		expect(stdout).toContain("--native");
+		expect(stdout).toContain("Execute verification gates via native subprocess");
 	});
 });

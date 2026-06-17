@@ -13,6 +13,7 @@ import {
 	resolvePawSessionPaths,
 } from "./session-store.ts";
 import type { PawSessionStateName } from "./state.ts";
+import { createPawNativeSubprocessExecutor } from "./verification-executor.ts";
 import { createPawNativeVerificationPlan, type PawNativeVerificationPlanEntry } from "./verification-plan.ts";
 import type { PawNativeVerificationExecutor } from "./verification-runner.ts";
 import { mapPawNativeVerificationRunResults, runPawNativeVerificationPlan } from "./verification-runner.ts";
@@ -216,24 +217,63 @@ export function formatPawVerifyCommandResult(result: PawVerifyCommandResult): st
 	}
 }
 
+export type PawVerifyParsedArgs =
+	| { kind: "help"; native: boolean }
+	| { kind: "error"; native: boolean; message: string }
+	| { kind: "ok"; native: boolean; sessionId: string };
+
+export function parsePawVerifyArgs(args: string[]): PawVerifyParsedArgs {
+	const native = args.includes("--native");
+	const hasHelp = args.some((arg) => arg === "--help" || arg === "-h");
+
+	if (hasHelp) {
+		return { kind: "help", native };
+	}
+
+	const knownFlags = new Set(["--native", "--help", "-h"]);
+	const positional = args.filter((arg) => !knownFlags.has(arg));
+
+	if (positional.length === 0) {
+		return { kind: "error", native, message: 'Missing required session id for "paw verify".' };
+	}
+
+	const unknownFlag = positional.find((arg) => arg.startsWith("-"));
+	if (unknownFlag !== undefined) {
+		return { kind: "error", native, message: `Unknown option for "paw verify": ${unknownFlag}` };
+	}
+
+	if (positional.length > 1) {
+		return { kind: "error", native, message: `Unknown option for "paw verify": ${positional[1]}` };
+	}
+
+	return { kind: "ok", native, sessionId: positional[0] };
+}
+
 export async function runPawVerifyCommand(args: string[]): Promise<void> {
-	if (args.length === 1 && (args[0] === "--help" || args[0] === "-h")) {
+	const parsed = parsePawVerifyArgs(args);
+
+	if (parsed.kind === "help") {
 		printPawVerifyHelp();
 		return;
 	}
 
-	if (args.length === 0) {
-		printPawVerifyCommandError('Missing required session id for "paw verify".');
+	if (parsed.kind === "error") {
+		printPawVerifyCommandError(parsed.message);
 		return;
 	}
 
-	if (args.length > 1) {
-		printPawVerifyCommandError(`Unknown option for "paw verify": ${args[1]}`);
-		return;
-	}
+	const nativeVerificationExecutor = parsed.native
+		? createPawNativeSubprocessExecutor({ cwd: process.cwd() })
+		: undefined;
 
 	try {
-		console.log(formatPawVerifyCommandResult(await createPawVerifyCommandResult(process.cwd(), args[0])));
+		console.log(
+			formatPawVerifyCommandResult(
+				await createPawVerifyCommandResult(process.cwd(), parsed.sessionId, {
+					nativeVerificationExecutor,
+				}),
+			),
+		);
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		printPawVerifyCommandError(message);
@@ -283,13 +323,17 @@ function formatIssues(issues: readonly PawValidationIssue[]): string {
 
 function printPawVerifyHelp(): void {
 	console.log(`Usage:
-  ${APP_NAME} paw verify <session-id>
+  ${APP_NAME} paw verify <session-id> [--native]
 
 Evaluate configured Paw verification gates for a session.
 
+Options:
+  --native    Execute verification gates via native subprocess
+
 Commands:
-  ${APP_NAME} paw verify <session-id> Record verification decisions for current slice
-  ${APP_NAME} paw verify --help       Show this help
+  ${APP_NAME} paw verify <session-id>          Record verification decisions for current slice
+  ${APP_NAME} paw verify <session-id> --native Run native verification gates for current slice
+  ${APP_NAME} paw verify --help                Show this help
 `);
 }
 
