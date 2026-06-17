@@ -656,6 +656,17 @@ export type {
 	PawTaskSessionStartResult,
 } from "./task-session.ts";
 export { advancePawTaskSession, startPawTaskSession } from "./task-session.ts";
+export type {
+	PawToolRuntimeBlockCode,
+	PawToolRuntimeBlockedDecision,
+	PawToolRuntimeDecision,
+	PawToolRuntimeDryRunAllowedDecision,
+	PawToolRuntimeInput,
+	PawToolRuntimeInvalidDecision,
+	PawToolRuntimeRequest,
+	PawToolRuntimeSandboxInput,
+} from "./tool-runtime.ts";
+export { evaluatePawToolRuntimeRequest } from "./tool-runtime.ts";
 export type { PawNativeVerificationCommandPolicy } from "./verification-command-policy.ts";
 export {
 	createPawNativeVerificationCommandPolicy,
