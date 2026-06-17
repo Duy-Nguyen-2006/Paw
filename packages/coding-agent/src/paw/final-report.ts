@@ -1,4 +1,5 @@
 import type { PawDegradedStep, PawVerifyGateDecision } from "./resilience-policy.ts";
+import type { PawNativeVerificationRunResult } from "./verification-runner.ts";
 
 export type PawFinalReportStatus = "done" | "done_with_unverified";
 
@@ -15,6 +16,7 @@ export type PawFinalReportInput = {
 	verifyDecisions: PawVerifyGateDecision[];
 	degradedSteps?: PawDegradedStep[];
 	nextActions?: string[];
+	nativeVerificationRunResults?: readonly PawNativeVerificationRunResult[];
 };
 
 export type PawFinalReport = {
@@ -27,6 +29,7 @@ export type PawFinalReport = {
 	unverified_gates: PawVerifyGateDecision[];
 	degraded_steps: PawDegradedStep[];
 	next_actions: string[];
+	native_verification_run_results: readonly PawNativeVerificationRunResult[];
 };
 
 export function createPawFinalReport(input: PawFinalReportInput): PawFinalReport {
@@ -49,6 +52,7 @@ export function createPawFinalReport(input: PawFinalReportInput): PawFinalReport
 		unverified_gates: unverifiedGates,
 		degraded_steps: input.degradedSteps ?? [],
 		next_actions: trimNonEmptyStrings(input.nextActions ?? []),
+		native_verification_run_results: input.nativeVerificationRunResults ?? [],
 	};
 }
 
@@ -76,6 +80,10 @@ export function renderPawFinalReportMarkdown(report: PawFinalReport): string {
 		"",
 		renderUnverifiedGates(report.unverified_gates),
 		"",
+		"## Verification Evidence",
+		"",
+		renderVerificationEvidence(report.native_verification_run_results),
+		"",
 		"## Risks",
 		"",
 		renderRisks(report.risks),
@@ -89,6 +97,15 @@ export function renderPawFinalReportMarkdown(report: PawFinalReport): string {
 		renderStringList(report.next_actions),
 		"",
 	].join("\n");
+}
+
+function renderVerificationEvidence(results: readonly PawNativeVerificationRunResult[]): string {
+	const executed = results.filter((result) => result.executed);
+	if (executed.length === 0) {
+		return "- No native verification gates executed";
+	}
+
+	return executed.map((result) => `- ${result.gate}: ${result.status}`).join("\n");
 }
 
 function requireNonEmptyString(value: string, fieldName: string): string {

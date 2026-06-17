@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 import {
 	emitPawFinalReport,
+	type PawNativeVerificationRunResult,
 	type PawSessionLock,
 	type PawSessionState,
 	type PawVerifyGateDecision,
@@ -298,5 +299,86 @@ describe("emitPawFinalReport", () => {
 		]);
 		await expect(readPawSessionState(repoRoot, "foreign-lock")).resolves.toEqual(foreignState);
 		await expect(readPawSessionState(repoRoot, "wrong-state")).resolves.toEqual(wrongState);
+	});
+});
+
+describe("emitPawFinalReport native verification run results", () => {
+	test("preserves run results on emitted report and concise Verification Evidence markdown", async () => {
+		const repoRoot = await createTempRepo();
+		const state = createSliceDoneState("session-native");
+		await writePawSessionState(repoRoot, state);
+		await writeCurrentLock(repoRoot, "session-native", 1_000);
+
+		const nativeVerificationRunResults: PawNativeVerificationRunResult[] = [
+			{
+				status: "verified",
+				gate: "unit_tests",
+				verified: true,
+				executed: true,
+				command: ["./test.sh"],
+				exitCode: 0,
+				stdout: "all tests passed with sensitive data",
+				stderr: "",
+			},
+			{
+				status: "unverified",
+				gate: "build",
+				verified: false,
+				executed: true,
+				command: ["npm", "run", "build"],
+				exitCode: 1,
+				stdout: "ERROR in src/foo.ts(10,5): error TS2322",
+				stderr: "Build failed",
+				reason: "Native verification command failed with exit code 1.",
+			},
+		];
+
+		const result = await emitPawFinalReport({
+			repoRoot,
+			sessionId: "session-native",
+			reportInput: {
+				summary: "Implemented all planned slices.",
+				evidence: ["focused tests passed"],
+				verifyDecisions: [verifiedUnitGate],
+				nativeVerificationRunResults,
+			},
+			lockOptions: { nowMs: 2_000, ttlSec: 120 },
+		});
+
+		expect(result.status).toBe("completed");
+		if (result.status !== "completed") return;
+		expect(result.report.native_verification_run_results).toEqual(nativeVerificationRunResults);
+		expect(result.markdown).toContain("## Verification Evidence");
+		expect(result.markdown).toContain("- unit_tests: verified");
+		expect(result.markdown).toContain("- build: unverified");
+		expect(result.markdown).not.toContain("all tests passed with sensitive data");
+		expect(result.markdown).not.toContain("ERROR in src/foo.ts");
+		expect(result.markdown).not.toContain("Build failed");
+		expect(result.markdown).not.toContain("exitCode");
+		await expect(readFile(result.summaryFile, "utf-8")).resolves.toBe(result.markdown);
+	});
+
+	test("emission without native verification run results shows no executed gates message", async () => {
+		const repoRoot = await createTempRepo();
+		const state = createSliceDoneState("session-no-native");
+		await writePawSessionState(repoRoot, state);
+		await writeCurrentLock(repoRoot, "session-no-native", 1_000);
+
+		const result = await emitPawFinalReport({
+			repoRoot,
+			sessionId: "session-no-native",
+			reportInput: {
+				summary: "Implemented all planned slices.",
+				evidence: ["focused tests passed"],
+				verifyDecisions: [verifiedUnitGate],
+			},
+			lockOptions: { nowMs: 2_000, ttlSec: 120 },
+		});
+
+		expect(result.status).toBe("completed");
+		if (result.status !== "completed") return;
+		expect(result.report.native_verification_run_results).toEqual([]);
+		expect(result.markdown).toContain("## Verification Evidence");
+		expect(result.markdown).toContain("- No native verification gates executed");
 	});
 });

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "vitest";
+import type { PawNativeVerificationRunResult } from "../src/paw/index.ts";
 import {
 	createPawFinalReport,
 	type PawDegradedStep,
@@ -131,5 +132,107 @@ describe("Paw final report assembly", () => {
 				verifyDecisions: [],
 			}),
 		).toThrow(message);
+	});
+});
+
+describe("Paw final report native verification run results", () => {
+	const nativeVerificationRunResults: PawNativeVerificationRunResult[] = [
+		{
+			status: "verified",
+			gate: "unit_tests",
+			verified: true,
+			executed: true,
+			command: ["./test.sh"],
+			exitCode: 0,
+			stdout: "681 tests passed\n681 pass\n0 fail",
+			stderr: "",
+		},
+		{
+			status: "unverified",
+			gate: "build",
+			verified: false,
+			executed: true,
+			command: ["npm", "run", "build"],
+			exitCode: 1,
+			stdout: "ERROR in src/foo.ts(10,5): error TS2322",
+			stderr: "Build failed with 1 error",
+			reason: "Native verification command failed with exit code 1: ERROR in src/foo.ts(10,5): error TS2322",
+		},
+		{
+			status: "unverified",
+			gate: "custom_gate",
+			verified: false,
+			executed: false,
+			reason: "No native command mapping is defined for verification gate custom_gate.",
+		},
+	];
+
+	test("preserves native verification run results exactly on the typed report", () => {
+		const report = createPawFinalReport({
+			sessionId: "session-1",
+			summary: "Implemented feature.",
+			evidence: ["test passed"],
+			verifyDecisions: [verifiedUnitGate],
+			nativeVerificationRunResults,
+		});
+
+		expect(report.native_verification_run_results).toEqual(nativeVerificationRunResults);
+		expect(report.native_verification_run_results[0]).toBe(nativeVerificationRunResults[0]);
+	});
+
+	test("without native verification run results, run results default to empty array", () => {
+		const report = createPawFinalReport({
+			sessionId: "session-1",
+			summary: "Implemented feature.",
+			evidence: ["test passed"],
+			verifyDecisions: [verifiedUnitGate],
+		});
+
+		expect(report.native_verification_run_results).toEqual([]);
+	});
+
+	test("markdown renders Verification Evidence with concise executed gate status only", () => {
+		const report = createPawFinalReport({
+			sessionId: "session-1",
+			summary: "Implemented feature.",
+			evidence: ["test passed"],
+			verifyDecisions: [verifiedUnitGate],
+			nativeVerificationRunResults,
+		});
+
+		const markdown = renderPawFinalReportMarkdown(report);
+
+		expect(markdown).toContain("## Verification Evidence");
+		expect(markdown).toContain("- unit_tests: verified");
+		expect(markdown).toContain("- build: unverified");
+		expect(markdown).not.toContain("- custom_gate:");
+		expect(markdown).not.toContain("681 tests passed");
+		expect(markdown).not.toContain("ERROR in src/foo.ts");
+		expect(markdown).not.toContain("Build failed");
+		expect(markdown).not.toContain("exit code 1");
+		expect(markdown).not.toContain("exitCode");
+		expect(markdown).not.toContain("./test.sh");
+	});
+
+	test("markdown renders no executed gates message when none ran", () => {
+		const report = createPawFinalReport({
+			sessionId: "session-1",
+			summary: "Implemented feature.",
+			evidence: ["test passed"],
+			verifyDecisions: [verifiedUnitGate],
+			nativeVerificationRunResults: [
+				{
+					status: "unverified",
+					gate: "custom_gate",
+					verified: false,
+					executed: false,
+					reason: "No native command mapping is defined for verification gate custom_gate.",
+				},
+			],
+		});
+
+		const markdown = renderPawFinalReportMarkdown(report);
+
+		expect(markdown).toContain("## Verification Evidence\n\n- No native verification gates executed");
 	});
 });
