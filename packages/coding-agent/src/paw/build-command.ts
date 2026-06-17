@@ -104,108 +104,46 @@ export type PawBuildParsedArgs =
 
 const BUILD_SCALAR_OPTIONS = new Set(["--handoff", "--timestamp", "--max-steps"]);
 
+type PawBuildParseState = {
+	once: boolean;
+	native: boolean;
+	maxSteps?: number;
+	handoff?: string;
+	timestamp?: string;
+	seenScalarOptions: Set<string>;
+};
+
+type PawBuildOptionParseResult = { status: "ok"; nextIndex: number } | { status: "error"; message: string };
+
 export function parsePawBuildArgs(args: string[]): PawBuildParsedArgs {
 	if (args.includes("--help") || args.includes("-h")) {
 		return { kind: "help" };
 	}
 
-	if (args.length === 0) {
-		return { kind: "error", message: 'Missing required session id for "paw build".' };
+	const sessionIdError = validatePawBuildSessionId(args[0]);
+	if (sessionIdError !== undefined) {
+		return { kind: "error", message: sessionIdError };
 	}
 
-	const sessionId = args[0];
-	if (sessionId.startsWith("-")) {
-		return { kind: "error", message: 'Missing required session id for "paw build".' };
-	}
-
-	let once = false;
-	let native = false;
-	let maxSteps: number | undefined;
-	let handoff: string | undefined;
-	let timestamp: string | undefined;
-	const seenScalarOptions = new Set<string>();
-
+	const state: PawBuildParseState = {
+		once: false,
+		native: false,
+		seenScalarOptions: new Set<string>(),
+	};
 	for (let index = 1; index < args.length; ) {
-		const arg = args[index];
-
-		if (arg === "--once") {
-			if (once) {
-				return { kind: "error", message: 'Duplicate option for "paw build": --once' };
-			}
-			once = true;
-			index += 1;
-			continue;
+		const parsedOption = parsePawBuildOption(args, index, state);
+		if (parsedOption.status === "error") {
+			return { kind: "error", message: parsedOption.message };
 		}
-
-		if (arg === "--native") {
-			if (native) {
-				return { kind: "error", message: 'Duplicate option for "paw build": --native' };
-			}
-			native = true;
-			index += 1;
-			continue;
-		}
-
-		if (BUILD_SCALAR_OPTIONS.has(arg)) {
-			if (seenScalarOptions.has(arg)) {
-				return { kind: "error", message: `Duplicate option for "paw build": ${arg}` };
-			}
-			seenScalarOptions.add(arg);
-			if (index + 1 >= args.length) {
-				return { kind: "error", message: `Missing value for "paw build" option: ${arg}` };
-			}
-			const value = args[index + 1];
-			if (value.trim().length === 0) {
-				return { kind: "error", message: `Option ${arg} for "paw build" must be a non-empty string.` };
-			}
-			if (arg === "--handoff") {
-				handoff = value;
-			} else if (arg === "--timestamp") {
-				timestamp = value;
-			} else if (arg === "--max-steps") {
-				const parsedMaxSteps = parsePawBuildMaxSteps(value);
-				if (typeof parsedMaxSteps === "string") {
-					return { kind: "error", message: parsedMaxSteps };
-				}
-				maxSteps = parsedMaxSteps;
-			}
-			index += 2;
-			continue;
-		}
-
-		if (arg.startsWith("-")) {
-			return { kind: "error", message: `Unknown option for "paw build": ${arg}` };
-		}
-
-		return { kind: "error", message: `Unknown option for "paw build": ${arg}` };
+		index = parsedOption.nextIndex;
 	}
 
-	if (once && maxSteps !== undefined) {
-		return { kind: "error", message: 'Options for "paw build" are mutually exclusive: --once and --max-steps' };
+	const validationError = validatePawBuildParsedState(state);
+	if (validationError !== undefined) {
+		return { kind: "error", message: validationError };
 	}
 
-	if (!once && maxSteps === undefined) {
-		return { kind: "error", message: 'Missing required option for "paw build": --once or --max-steps <n>' };
-	}
-
-	if (timestamp !== undefined) {
-		const timestampError = validatePawBuildTimestamp(timestamp);
-		if (timestampError !== undefined) {
-			return { kind: "error", message: timestampError };
-		}
-	}
-
-	const input: PawBuildParsedInput = once ? { once } : { maxSteps: maxSteps ?? 1 };
-	if (handoff !== undefined) {
-		input.handoff = handoff;
-	}
-	if (timestamp !== undefined) {
-		input.timestamp = timestamp;
-	}
-	if (native) {
-		input.native = true;
-	}
-	return { kind: "ok", sessionId, input };
+	return { kind: "ok", sessionId: args[0], input: createPawBuildParsedInput(state) };
 }
 
 export async function createPawBuildCommandResult(
@@ -369,80 +307,66 @@ async function emitPawBuildLoopFinalReport(
 
 export function formatPawBuildCommandResult(result: PawBuildCommandResult): string {
 	if (isPawBuildLoopResult(result)) {
-		const lines = [
-			"Paw build",
-			`session: ${result.sessionId}`,
-			`status: ${result.status}`,
-			`steps run: ${result.stepsRun}`,
-			`max steps: ${result.maxSteps}`,
-			`stop reason: ${result.stopReason}`,
-			`final state: ${result.finalStateName ?? "unknown"}`,
-		];
-		if (result.finalReport?.status === "completed") {
-			lines.push(
-				`final report: ${result.finalReport.reportStatus}`,
-				`summary file: ${result.finalReport.summaryFile}`,
-				`report json file: ${result.finalReport.reportJsonFile}`,
-			);
-		}
-		return lines.join("\n");
+		return formatPawBuildLoopResult(result);
 	}
-
 	if (isPawBuildVerifyCompletedResult(result)) {
-		return [
-			"Paw build",
-			`session: ${result.sessionId}`,
-			`status: ${result.status}`,
-			`state: ${result.previousStateName} -> ${result.nextStateName}`,
-			`slice: ${result.currentSliceId}`,
-			`planned native gates: ${formatPlannedGateNames(result.nativeVerificationPlan)}`,
-			`native executed gates: ${formatNativeExecutedGateNames(result.nativeVerificationRunResults)}`,
-			`verified gates: ${formatGateNames(result.verifyDecisions.filter((decision) => decision.status === "verified"))}`,
-			`unverified gates: ${formatGateNames(result.unverifiedDecisions)}`,
-			`lock released: ${result.lockReleased ? "yes" : "no"}`,
-		].join("\n");
+		return formatPawBuildVerifyCompletedResult(result);
 	}
+	return formatPawBuildStepResult(result);
+}
 
+function formatPawBuildLoopResult(result: PawBuildLoopResult): string {
+	const lines = [
+		"Paw build",
+		`session: ${result.sessionId}`,
+		`status: ${result.status}`,
+		`steps run: ${result.stepsRun}`,
+		`max steps: ${result.maxSteps}`,
+		`stop reason: ${result.stopReason}`,
+		`final state: ${result.finalStateName ?? "unknown"}`,
+	];
+	if (result.finalReport?.status === "completed") {
+		lines.push(
+			`final report: ${result.finalReport.reportStatus}`,
+			`summary file: ${result.finalReport.summaryFile}`,
+			`report json file: ${result.finalReport.reportJsonFile}`,
+		);
+	}
+	return lines.join("\n");
+}
+
+function formatPawBuildVerifyCompletedResult(
+	result: Extract<PawVerifyCommandResult, { status: "completed" | "completed_with_unverified" }>,
+): string {
+	return [
+		"Paw build",
+		`session: ${result.sessionId}`,
+		`status: ${result.status}`,
+		`state: ${result.previousStateName} -> ${result.nextStateName}`,
+		`slice: ${result.currentSliceId}`,
+		`planned native gates: ${formatPlannedGateNames(result.nativeVerificationPlan)}`,
+		`native executed gates: ${formatNativeExecutedGateNames(result.nativeVerificationRunResults)}`,
+		`verified gates: ${formatGateNames(result.verifyDecisions.filter((decision) => decision.status === "verified"))}`,
+		`unverified gates: ${formatGateNames(result.unverifiedDecisions)}`,
+		`lock released: ${formatBooleanYesNo(result.lockReleased)}`,
+	].join("\n");
+}
+
+function formatPawBuildStepResult(
+	result: Exclude<
+		PawBuildCommandResult,
+		PawBuildLoopResult | Extract<PawVerifyCommandResult, { status: "completed" | "completed_with_unverified" }>
+	>,
+): string {
 	switch (result.status) {
 		case "advanced":
-			return [
-				"Paw build",
-				`session: ${result.sessionId}`,
-				`status: ${result.status}`,
-				`selected slice: ${result.selectedSliceId}`,
-				`state: ${result.previousStateName} -> ${result.nextStateName}`,
-				`lock released: ${result.lockReleased ? "yes" : "no"}`,
-			].join("\n");
+			return formatPawBuildAdvancedResult(result);
 		case "no_pending_slices":
-			return [
-				"Paw build",
-				`session: ${result.sessionId}`,
-				`status: ${result.status}`,
-				`state: ${result.previousStateName}`,
-				`lock released: ${result.lockReleased ? "yes" : "no"}`,
-			].join("\n");
+			return formatPawBuildNoPendingSlicesResult(result);
 		case "completed":
-			return [
-				"Paw build",
-				`session: ${result.sessionId}`,
-				`status: ${result.status}`,
-				`selected slice: ${result.selectedSliceId}`,
-				`state: ${result.previousStateName} -> ${result.nextStateName}`,
-				`attempts: ${result.attempts}`,
-				`journal entries: ${result.journalEntryCount}`,
-				`lock released: ${result.lockReleased ? "yes" : "no"}`,
-			].join("\n");
+			return formatPawBuildWorkerCompletedResult(result);
 		case "blocked":
-			return [
-				"Paw build",
-				`session: ${result.sessionId}`,
-				`status: ${result.status}`,
-				`selected slice: ${result.selectedSliceId}`,
-				`state: ${result.previousStateName} -> ${result.nextStateName}`,
-				`attempts: ${result.attempts}`,
-				`blocked reason: ${result.blockedReasonCode}: ${result.blockedReasonMessage}`,
-				`lock released: ${result.lockReleased ? "yes" : "no"}`,
-			].join("\n");
+			return formatPawBuildBlockedResult(result);
 		case "worker_failed":
 			return `Cannot build session ${result.sessionId}: worker output status is ${result.workerStatus}, expected pass, blocked, or needs_user_decision.`;
 		case "reviewer_failed":
@@ -450,17 +374,7 @@ export function formatPawBuildCommandResult(result: PawBuildCommandResult): stri
 		case "invalid_state":
 			return `Cannot build session ${result.sessionId} from ${result.previousStateName}: ${formatIssues(result.issues)}`;
 		case "no_selected_slice":
-			return "issues" in result
-				? `Cannot build session ${result.sessionId}: ${formatIssues(result.issues)}`
-				: `Cannot build session ${result.sessionId}: no selected slice in ${result.previousStateName}.`;
-		case "invalid_worker_output":
-			return `Cannot build session ${result.sessionId}: ${formatIssues(result.issues)}`;
-		case "invalid_reviewer_output":
-			return `Cannot build session ${result.sessionId}: ${formatIssues(result.issues)}`;
-		case "invalid_verification":
-			return `Cannot build session ${result.sessionId}: ${formatIssues(result.issues)}`;
-		case "invalid_blocked_reason":
-			return `Cannot build session ${result.sessionId}: ${formatIssues(result.issues)}`;
+			return formatPawBuildNoSelectedSliceResult(result);
 		case "invalid_transition":
 			return `Cannot build session ${result.sessionId} from ${result.previousStateName}: ${formatIssues(result.issues)}`;
 		case "missing_project":
@@ -470,12 +384,82 @@ export function formatPawBuildCommandResult(result: PawBuildCommandResult): stri
 		case "locked":
 			return `Paw session ${result.sessionId} is locked by pid ${result.lock.pid} on ${result.lock.host}.`;
 		case "not_locked":
-			return "reason" in result && result.reason === "stale"
-				? `Cannot build session ${result.sessionId}: session lock is stale (${result.staleReason ?? "unknown"}).`
-				: `Cannot build session ${result.sessionId}: session lock is not held by this process.`;
+			return formatPawBuildNotLockedResult(result);
 		case "locked_by_other":
 			return `Cannot build session ${result.sessionId}: locked by pid ${result.lock.pid} on ${result.lock.host}.`;
+		case "invalid_worker_output":
+		case "invalid_reviewer_output":
+		case "invalid_verification":
+		case "invalid_blocked_reason":
+			return `Cannot build session ${result.sessionId}: ${formatIssues(result.issues)}`;
 	}
+}
+
+function formatPawBuildAdvancedResult(result: Extract<PawBuildStepResult, { status: "advanced" }>): string {
+	return [
+		"Paw build",
+		`session: ${result.sessionId}`,
+		`status: ${result.status}`,
+		`selected slice: ${result.selectedSliceId}`,
+		`state: ${result.previousStateName} -> ${result.nextStateName}`,
+		`lock released: ${formatBooleanYesNo(result.lockReleased)}`,
+	].join("\n");
+}
+
+function formatPawBuildNoPendingSlicesResult(
+	result: Extract<PawBuildStepResult, { status: "no_pending_slices" }>,
+): string {
+	return [
+		"Paw build",
+		`session: ${result.sessionId}`,
+		`status: ${result.status}`,
+		`state: ${result.previousStateName}`,
+		`lock released: ${formatBooleanYesNo(result.lockReleased)}`,
+	].join("\n");
+}
+
+function formatPawBuildWorkerCompletedResult(result: Extract<PawBuildStepResult, { status: "completed" }>): string {
+	return [
+		"Paw build",
+		`session: ${result.sessionId}`,
+		`status: ${result.status}`,
+		`selected slice: ${result.selectedSliceId}`,
+		`state: ${result.previousStateName} -> ${result.nextStateName}`,
+		`attempts: ${result.attempts}`,
+		`journal entries: ${result.journalEntryCount}`,
+		`lock released: ${formatBooleanYesNo(result.lockReleased)}`,
+	].join("\n");
+}
+
+function formatPawBuildBlockedResult(result: Extract<PawBuildStepResult, { status: "blocked" }>): string {
+	return [
+		"Paw build",
+		`session: ${result.sessionId}`,
+		`status: ${result.status}`,
+		`selected slice: ${result.selectedSliceId}`,
+		`state: ${result.previousStateName} -> ${result.nextStateName}`,
+		`attempts: ${result.attempts}`,
+		`blocked reason: ${result.blockedReasonCode}: ${result.blockedReasonMessage}`,
+		`lock released: ${formatBooleanYesNo(result.lockReleased)}`,
+	].join("\n");
+}
+
+function formatPawBuildNoSelectedSliceResult(
+	result: Extract<PawBuildStepResult, { status: "no_selected_slice" }>,
+): string {
+	return "issues" in result
+		? `Cannot build session ${result.sessionId}: ${formatIssues(result.issues)}`
+		: `Cannot build session ${result.sessionId}: no selected slice in ${result.previousStateName}.`;
+}
+
+function formatPawBuildNotLockedResult(result: Extract<PawBuildStepResult, { status: "not_locked" }>): string {
+	return "reason" in result && result.reason === "stale"
+		? `Cannot build session ${result.sessionId}: session lock is stale (${result.staleReason ?? "unknown"}).`
+		: `Cannot build session ${result.sessionId}: session lock is not held by this process.`;
+}
+
+function formatBooleanYesNo(value: boolean): string {
+	return value ? "yes" : "no";
 }
 
 export async function runPawBuildCommand(args: string[]): Promise<void> {
@@ -586,6 +570,119 @@ function resolvePawBuildNativeVerificationExecutor(
 
 function isFileSystemError(error: unknown): error is NodeJS.ErrnoException {
 	return error instanceof Error;
+}
+
+function validatePawBuildSessionId(sessionId: string | undefined): string | undefined {
+	if (sessionId === undefined || sessionId.startsWith("-")) {
+		return 'Missing required session id for "paw build".';
+	}
+	return undefined;
+}
+
+function parsePawBuildOption(args: string[], index: number, state: PawBuildParseState): PawBuildOptionParseResult {
+	const arg = args[index];
+	if (arg === "--once") {
+		return parsePawBuildBooleanOption(arg, index, state);
+	}
+	if (arg === "--native") {
+		return parsePawBuildBooleanOption(arg, index, state);
+	}
+	if (BUILD_SCALAR_OPTIONS.has(arg)) {
+		return parsePawBuildScalarOption(args, index, state);
+	}
+	return { status: "error", message: `Unknown option for "paw build": ${arg}` };
+}
+
+function parsePawBuildBooleanOption(arg: string, index: number, state: PawBuildParseState): PawBuildOptionParseResult {
+	if (arg === "--once") {
+		if (state.once) {
+			return { status: "error", message: 'Duplicate option for "paw build": --once' };
+		}
+		state.once = true;
+		return { status: "ok", nextIndex: index + 1 };
+	}
+	if (state.native) {
+		return { status: "error", message: 'Duplicate option for "paw build": --native' };
+	}
+	state.native = true;
+	return { status: "ok", nextIndex: index + 1 };
+}
+
+function parsePawBuildScalarOption(
+	args: string[],
+	index: number,
+	state: PawBuildParseState,
+): PawBuildOptionParseResult {
+	const arg = args[index];
+	if (state.seenScalarOptions.has(arg)) {
+		return { status: "error", message: `Duplicate option for "paw build": ${arg}` };
+	}
+	state.seenScalarOptions.add(arg);
+	const value = args[index + 1];
+	const valueError = validatePawBuildScalarOptionValue(arg, value);
+	if (valueError !== undefined) {
+		return { status: "error", message: valueError };
+	}
+	return assignPawBuildScalarOption(arg, value, index, state);
+}
+
+function validatePawBuildScalarOptionValue(arg: string, value: string | undefined): string | undefined {
+	if (value === undefined) {
+		return `Missing value for "paw build" option: ${arg}`;
+	}
+	if (value.trim().length === 0) {
+		return `Option ${arg} for "paw build" must be a non-empty string.`;
+	}
+	return undefined;
+}
+
+function assignPawBuildScalarOption(
+	arg: string,
+	value: string,
+	index: number,
+	state: PawBuildParseState,
+): PawBuildOptionParseResult {
+	if (arg === "--handoff") {
+		state.handoff = value;
+		return { status: "ok", nextIndex: index + 2 };
+	}
+	if (arg === "--timestamp") {
+		state.timestamp = value;
+		return { status: "ok", nextIndex: index + 2 };
+	}
+	const parsedMaxSteps = parsePawBuildMaxSteps(value);
+	if (typeof parsedMaxSteps === "string") {
+		return { status: "error", message: parsedMaxSteps };
+	}
+	state.maxSteps = parsedMaxSteps;
+	return { status: "ok", nextIndex: index + 2 };
+}
+
+function validatePawBuildParsedState(state: PawBuildParseState): string | undefined {
+	if (state.once && state.maxSteps !== undefined) {
+		return 'Options for "paw build" are mutually exclusive: --once and --max-steps';
+	}
+	if (!state.once && state.maxSteps === undefined) {
+		return 'Missing required option for "paw build": --once or --max-steps <n>';
+	}
+	if (state.timestamp !== undefined) {
+		return validatePawBuildTimestamp(state.timestamp);
+	}
+	return undefined;
+}
+
+function createPawBuildParsedInput(state: PawBuildParseState): PawBuildParsedInput {
+	const input: PawBuildParsedInput = state.once ? { once: true } : { maxSteps: state.maxSteps ?? 1 };
+	if (state.handoff !== undefined) {
+		input.handoff = state.handoff;
+	}
+	if (state.timestamp !== undefined) {
+		input.timestamp = state.timestamp;
+	}
+	if (state.native) {
+		input.native = true;
+	}
+	return input;
 }
 
 function validatePawBuildTimestamp(timestamp: string): string | undefined {
