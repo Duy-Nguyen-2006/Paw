@@ -239,10 +239,30 @@ describe("Paw verify command with injected native executor", () => {
 		const unverifiedGates = result.unverifiedDecisions;
 		expect(unverifiedGates.length).toBeGreaterThan(0);
 
+		expect(result.nativeVerificationRunResults.length).toBeGreaterThan(0);
+		const verifiedRun = result.nativeVerificationRunResults.find((r) => r.gate === "working_tree_baseline");
+		expect(verifiedRun).toBeDefined();
+		if (verifiedRun !== undefined) {
+			expect(verifiedRun.status).toBe("verified");
+			expect(verifiedRun.verified).toBe(true);
+			expect(verifiedRun.executed).toBe(true);
+			expect(verifiedRun.exitCode).toBe(0);
+		}
+		const unverifiedRun = result.nativeVerificationRunResults.find(
+			(r) => r.gate === "build" || r.gate === "custom_gate",
+		);
+		if (unverifiedRun !== undefined) {
+			expect(unverifiedRun.status).toBe("unverified");
+			expect(unverifiedRun.verified).toBe(false);
+		}
+
 		const formatted = formatPawVerifyCommandResult(result);
 		expect(formatted).toContain("verified gates:");
 		expect(formatted).toContain("working_tree_baseline");
 		expect(formatted).toContain("unverified gates:");
+		expect(formatted).toContain("native executed gates:");
+		expect(formatted).toContain("working_tree_baseline(verified)");
+		expect(formatted).not.toContain("native executed gates: none");
 
 		expect(await readPawSessionState(projectRoot, "session-native")).toMatchObject({
 			name: "SLICE_DONE",
@@ -271,7 +291,15 @@ describe("Paw verify command with injected native executor", () => {
 		if (result.status !== "completed") return;
 		expect(result.unverifiedDecisions).toHaveLength(0);
 		expect(result.verifyDecisions.every((d) => d.status === "verified")).toBe(true);
+		expect(result.nativeVerificationRunResults.length).toBeGreaterThan(0);
+		expect(
+			result.nativeVerificationRunResults.every(
+				(r) => r.status === "verified" && r.verified === true && r.executed === true,
+			),
+		).toBe(true);
 		expect(formatPawVerifyCommandResult(result)).toContain("status: completed");
+		expect(formatPawVerifyCommandResult(result)).toContain("native executed gates:");
+		expect(formatPawVerifyCommandResult(result)).not.toContain("native executed gates: none");
 	});
 
 	test("without executor, default path still produces planned-but-not-executed unverified decisions", async () => {
@@ -289,6 +317,8 @@ describe("Paw verify command with injected native executor", () => {
 		if (result.status !== "completed_with_unverified") return;
 		expect(result.verifyDecisions.every((d) => d.status === "unverified")).toBe(true);
 		expect(formatPawVerifyCommandResult(result)).toContain("verified gates: none");
+		expect(result.nativeVerificationRunResults).toEqual([]);
+		expect(formatPawVerifyCommandResult(result)).toContain("native executed gates: none");
 	});
 });
 

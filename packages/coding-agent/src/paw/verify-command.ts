@@ -19,7 +19,7 @@ import {
 } from "./verification-command-policy.ts";
 import { createPawNativeSubprocessExecutor } from "./verification-executor.ts";
 import { createPawNativeVerificationPlan, type PawNativeVerificationPlanEntry } from "./verification-plan.ts";
-import type { PawNativeVerificationExecutor } from "./verification-runner.ts";
+import type { PawNativeVerificationExecutor, PawNativeVerificationRunResult } from "./verification-runner.ts";
 import { mapPawNativeVerificationRunResults, runPawNativeVerificationPlan } from "./verification-runner.ts";
 import { completePawVerification } from "./verifier-result.ts";
 
@@ -46,6 +46,7 @@ export interface PawVerifyCommandCompletedResult {
 	verifyDecisions: readonly PawVerifyGateDecision[];
 	unverifiedDecisions: readonly PawVerifyGateDecision[];
 	lockReleased: boolean;
+	nativeVerificationRunResults: readonly PawNativeVerificationRunResult[];
 }
 
 export interface PawVerifyCommandMissingProjectResult {
@@ -121,13 +122,19 @@ export async function createPawVerifyCommandResult(
 	const nativeVerificationPlan = createPawNativeVerificationPlan(runtimeConfig.verify.v1_gates);
 
 	let verifyDecisions: PawVerifyGateDecision[];
+	let nativeVerificationRunResults: PawNativeVerificationRunResult[];
 	if (input.nativeVerificationExecutor !== undefined) {
-		const runResults = await runPawNativeVerificationPlan(nativeVerificationPlan, input.nativeVerificationExecutor, {
-			timeoutSec: runtimeConfig.resilience.tool_call.timeout_sec,
-			outputMaxChars: runtimeConfig.verify.summary_max_tokens,
-		});
-		verifyDecisions = mapPawNativeVerificationRunResults(runResults, runtimeConfig.verify);
+		nativeVerificationRunResults = await runPawNativeVerificationPlan(
+			nativeVerificationPlan,
+			input.nativeVerificationExecutor,
+			{
+				timeoutSec: runtimeConfig.resilience.tool_call.timeout_sec,
+				outputMaxChars: runtimeConfig.verify.summary_max_tokens,
+			},
+		);
+		verifyDecisions = mapPawNativeVerificationRunResults(nativeVerificationRunResults, runtimeConfig.verify);
 	} else {
+		nativeVerificationRunResults = [];
 		verifyDecisions = nativeVerificationPlan.map((entry) =>
 			evaluatePawVerifyGate({
 				gate: entry.gate,
@@ -156,6 +163,7 @@ export async function createPawVerifyCommandResult(
 				nextStateName: verification.nextState.name,
 				currentSliceId: verification.previousState.current_slice_id ?? "",
 				nativeVerificationPlan,
+				nativeVerificationRunResults,
 				verifyDecisions: verification.verifyDecisions,
 				unverifiedDecisions: verification.unverifiedDecisions,
 				lockReleased,
@@ -204,6 +212,7 @@ export function formatPawVerifyCommandResult(result: PawVerifyCommandResult): st
 				`state: ${result.previousStateName} -> ${result.nextStateName}`,
 				`slice: ${result.currentSliceId}`,
 				`planned native gates: ${formatPlannedGateNames(result.nativeVerificationPlan)}`,
+				`native executed gates: ${formatNativeExecutedGateNames(result.nativeVerificationRunResults)}`,
 				`verified gates: ${formatGateNames(result.verifyDecisions.filter((decision) => decision.status === "verified"))}`,
 				`unverified gates: ${formatGateNames(result.unverifiedDecisions)}`,
 				`lock released: ${result.lockReleased ? "yes" : "no"}`,
@@ -320,6 +329,14 @@ function formatGateNames(decisions: readonly PawVerifyGateDecision[]): string {
 		return "none";
 	}
 	return decisions.map((decision) => decision.gate).join(", ");
+}
+
+function formatNativeExecutedGateNames(results: readonly PawNativeVerificationRunResult[]): string {
+	const executed = results.filter((result) => result.executed);
+	if (executed.length === 0) {
+		return "none";
+	}
+	return executed.map((result) => `${result.gate}(${result.status})`).join(", ");
 }
 
 function formatPlannedGateNames(entries: readonly PawNativeVerificationPlanEntry[]): string {
