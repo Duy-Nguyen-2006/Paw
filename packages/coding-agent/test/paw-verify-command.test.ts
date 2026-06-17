@@ -15,6 +15,7 @@ import {
 	writePawSessionState,
 } from "../src/paw/index.ts";
 import { handlePawCommand } from "../src/paw/init-command.ts";
+import type { PawNativeVerificationExecutor } from "../src/paw/verification-runner.ts";
 import { createPawVerifyCommandResult, formatPawVerifyCommandResult } from "../src/paw/verify-command.ts";
 
 const testDir = dirname(fileURLToPath(import.meta.url));
@@ -193,5 +194,93 @@ describe("Paw verify command", () => {
 		await expect(main(["paw", "verify", "session-1"])).resolves.toBeUndefined();
 
 		expect(process.exitCode).toBeUndefined();
+	});
+});
+
+describe("Paw verify command with injected native executor", () => {
+	test("runs native verification through injected executor and records verified decisions", async () => {
+		const projectRoot = await createTempProject();
+		process.chdir(projectRoot);
+		vi.spyOn(console, "log").mockImplementation(() => {});
+		await expect(handlePawCommand(["paw", "init"])).resolves.toBe(true);
+		await writePawSessionState(projectRoot, createVerifyingState("session-native"));
+
+		const executedGates: string[] = [];
+		const executor: PawNativeVerificationExecutor = async (input) => {
+			executedGates.push(input.gate);
+			if (input.gate === "working_tree_baseline" || input.gate === "unit_tests") {
+				return { exitCode: 0, stdout: "", stderr: "" };
+			}
+			return { exitCode: 1, stdout: "fail output", stderr: "" };
+		};
+
+		const result = await createPawVerifyCommandResult(projectRoot, "session-native", {
+			lockOptions: { nowMs: 5_000, ttlSec: 120 },
+			nativeVerificationExecutor: executor,
+		});
+
+		expect(result.status).toBe("completed_with_unverified");
+		if (result.status !== "completed_with_unverified") return;
+		expect(result.sessionId).toBe("session-native");
+		expect(result.previousStateName).toBe("VERIFYING");
+		expect(result.nextStateName).toBe("SLICE_DONE");
+
+		const verifiedGates = result.verifyDecisions.filter((d) => d.status === "verified");
+		expect(verifiedGates.map((d) => d.gate)).toContain("working_tree_baseline");
+		expect(verifiedGates.map((d) => d.gate)).toContain("unit_tests");
+
+		const unverifiedGates = result.unverifiedDecisions;
+		expect(unverifiedGates.length).toBeGreaterThan(0);
+
+		const formatted = formatPawVerifyCommandResult(result);
+		expect(formatted).toContain("verified gates:");
+		expect(formatted).toContain("working_tree_baseline");
+		expect(formatted).toContain("unverified gates:");
+
+		expect(await readPawSessionState(projectRoot, "session-native")).toMatchObject({
+			name: "SLICE_DONE",
+			current_slice_id: null,
+			completed_slice_ids: ["slice-1"],
+		});
+	});
+
+	test("with all gates verified by executor, result status is completed", async () => {
+		const projectRoot = await createTempProject();
+		process.chdir(projectRoot);
+		vi.spyOn(console, "log").mockImplementation(() => {});
+		await expect(handlePawCommand(["paw", "init"])).resolves.toBe(true);
+		await writePawSessionState(projectRoot, createVerifyingState("session-all-pass"));
+
+		const executor: PawNativeVerificationExecutor = async () => {
+			return { exitCode: 0, stdout: "", stderr: "" };
+		};
+
+		const result = await createPawVerifyCommandResult(projectRoot, "session-all-pass", {
+			lockOptions: { nowMs: 6_000, ttlSec: 120 },
+			nativeVerificationExecutor: executor,
+		});
+
+		expect(result.status).toBe("completed");
+		if (result.status !== "completed") return;
+		expect(result.unverifiedDecisions).toHaveLength(0);
+		expect(result.verifyDecisions.every((d) => d.status === "verified")).toBe(true);
+		expect(formatPawVerifyCommandResult(result)).toContain("status: completed");
+	});
+
+	test("without executor, default path still produces planned-but-not-executed unverified decisions", async () => {
+		const projectRoot = await createTempProject();
+		process.chdir(projectRoot);
+		vi.spyOn(console, "log").mockImplementation(() => {});
+		await expect(handlePawCommand(["paw", "init"])).resolves.toBe(true);
+		await writePawSessionState(projectRoot, createVerifyingState("session-default"));
+
+		const result = await createPawVerifyCommandResult(projectRoot, "session-default", {
+			lockOptions: { nowMs: 7_000, ttlSec: 120 },
+		});
+
+		expect(result.status).toBe("completed_with_unverified");
+		if (result.status !== "completed_with_unverified") return;
+		expect(result.verifyDecisions.every((d) => d.status === "unverified")).toBe(true);
+		expect(formatPawVerifyCommandResult(result)).toContain("verified gates: none");
 	});
 });

@@ -14,6 +14,8 @@ import {
 } from "./session-store.ts";
 import type { PawSessionStateName } from "./state.ts";
 import { createPawNativeVerificationPlan, type PawNativeVerificationPlanEntry } from "./verification-plan.ts";
+import type { PawNativeVerificationExecutor } from "./verification-runner.ts";
+import { mapPawNativeVerificationRunResults, runPawNativeVerificationPlan } from "./verification-runner.ts";
 import { completePawVerification } from "./verifier-result.ts";
 
 export type PawVerifyCommandResult =
@@ -26,6 +28,7 @@ export type PawVerifyCommandResult =
 
 export interface PawVerifyCommandInput {
 	lockOptions?: PawSessionLockOptions;
+	nativeVerificationExecutor?: PawNativeVerificationExecutor;
 }
 
 export interface PawVerifyCommandCompletedResult {
@@ -109,8 +112,27 @@ export async function createPawVerifyCommandResult(
 		};
 	}
 
-	const nativeVerificationPlan = createFoundationVerificationPlan(repoRoot);
-	const verifyDecisions = createFoundationVerifyDecisions(repoRoot, nativeVerificationPlan);
+	const runtimeConfig = loadDefaultPawRuntimeConfig(repoRoot);
+	const nativeVerificationPlan = createPawNativeVerificationPlan(runtimeConfig.verify.v1_gates);
+
+	let verifyDecisions: PawVerifyGateDecision[];
+	if (input.nativeVerificationExecutor !== undefined) {
+		const runResults = await runPawNativeVerificationPlan(nativeVerificationPlan, input.nativeVerificationExecutor, {
+			timeoutSec: runtimeConfig.resilience.tool_call.timeout_sec,
+			outputMaxChars: runtimeConfig.verify.summary_max_tokens,
+		});
+		verifyDecisions = mapPawNativeVerificationRunResults(runResults, runtimeConfig.verify);
+	} else {
+		verifyDecisions = nativeVerificationPlan.map((entry) =>
+			evaluatePawVerifyGate({
+				gate: entry.gate,
+				available: false,
+				config: runtimeConfig.verify,
+				reason: entry.reason,
+			}),
+		);
+	}
+
 	const verification = await completePawVerification({
 		repoRoot,
 		sessionId,
@@ -216,26 +238,6 @@ export async function runPawVerifyCommand(args: string[]): Promise<void> {
 		const message = error instanceof Error ? error.message : String(error);
 		printPawVerifyCommandError(message);
 	}
-}
-
-function createFoundationVerificationPlan(repoRoot: string): PawNativeVerificationPlanEntry[] {
-	const config = loadDefaultPawRuntimeConfig(repoRoot).verify;
-	return createPawNativeVerificationPlan(config.v1_gates);
-}
-
-function createFoundationVerifyDecisions(
-	repoRoot: string,
-	plan: readonly PawNativeVerificationPlanEntry[],
-): PawVerifyGateDecision[] {
-	const config = loadDefaultPawRuntimeConfig(repoRoot).verify;
-	return plan.map((entry) =>
-		evaluatePawVerifyGate({
-			gate: entry.gate,
-			available: false,
-			config,
-			reason: entry.reason,
-		}),
-	);
 }
 
 async function isDirectory(path: string): Promise<boolean> {
