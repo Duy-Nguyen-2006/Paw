@@ -311,6 +311,31 @@ export type {
 } from "./reviewer-result.ts";
 export { completePawReviewerPass } from "./reviewer-result.ts";
 export type {
+	PawCompleteReviewerCommandCompletedResult,
+	PawCompleteReviewerCommandInput,
+	PawCompleteReviewerCommandInvalidOutputFileResult,
+	PawCompleteReviewerCommandInvalidReviewerOutputResult,
+	PawCompleteReviewerCommandInvalidStateResult,
+	PawCompleteReviewerCommandInvalidTransitionResult,
+	PawCompleteReviewerCommandLockedByOtherResult,
+	PawCompleteReviewerCommandLockedResult,
+	PawCompleteReviewerCommandMissingOutputFileResult,
+	PawCompleteReviewerCommandMissingProjectResult,
+	PawCompleteReviewerCommandMissingSessionResult,
+	PawCompleteReviewerCommandNoSelectedSliceResult,
+	PawCompleteReviewerCommandNotLockedResult,
+	PawCompleteReviewerCommandResult,
+	PawCompleteReviewerCommandReviewerNotPassedResult,
+	PawCompleteReviewerParsedArgs,
+	PawCompleteReviewerParsedInput,
+} from "./reviewer-result-command.ts";
+export {
+	createPawCompleteReviewerCommandResult,
+	formatPawCompleteReviewerCommandResult,
+	parsePawCompleteReviewerArgs,
+	runPawCompleteReviewerCommand,
+} from "./reviewer-result-command.ts";
+export type {
 	PawRiskClassifierConfig,
 	PawRiskScore,
 	PawRiskScoringInput,

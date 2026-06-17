@@ -8,6 +8,7 @@ import { initializePawProject } from "./persistence.ts";
 import { runPawApprovePlanCommand } from "./plan-approval-command.ts";
 import { runPawReportCommand } from "./report-command.ts";
 import { runPawResumeCommand } from "./resume-command.ts";
+import { runPawCompleteReviewerCommand } from "./reviewer-result-command.ts";
 import { runPawPrepareCheckpointCommand } from "./slice-checkpoint-command.ts";
 import { runPawBeginImplementationCommand } from "./slice-implementation-command.ts";
 import { runPawSelectSliceCommand } from "./slice-selection-command.ts";
@@ -27,6 +28,7 @@ function printPawHelp(): void {
   ${APP_NAME} paw select-slice <session-id>
   ${APP_NAME} paw begin-implementation <session-id>
   ${APP_NAME} paw complete-worker <session-id> --output-file <path> [--timestamp <iso>]
+  ${APP_NAME} paw complete-reviewer <session-id> --output-file <path>
   ${APP_NAME} paw prepare-checkpoint <session-id> --base-tree <tree> --short-id <id> --timestamp <iso> --changed-file <path>=<hash|null>
   ${APP_NAME} paw finalize <session-id> --summary <text>
   ${APP_NAME} paw report <session-id>
@@ -49,9 +51,11 @@ Commands:
   ${APP_NAME} paw select-slice <session-id>          Select next pending plan slice
   ${APP_NAME} paw begin-implementation <session-id>   Begin implementing selected slice from SLICE_SELECT
   ${APP_NAME} paw complete-worker <session-id> --output-file <path>  Complete worker pass from IMPLEMENTING to REVIEWING
+  ${APP_NAME} paw complete-reviewer <session-id> --output-file <path>  Complete reviewer pass from REVIEWING to VERIFYING
   ${APP_NAME} paw select-slice --help                Show select-slice help
   ${APP_NAME} paw begin-implementation --help          Show begin-implementation help
   ${APP_NAME} paw complete-worker --help                   Show complete-worker help
+  ${APP_NAME} paw complete-reviewer --help                   Show complete-reviewer help
   ${APP_NAME} paw prepare-checkpoint <session-id> ... Prepare slice checkpoint metadata from SLICE_SELECT
   ${APP_NAME} paw prepare-checkpoint --help           Show prepare-checkpoint help
   ${APP_NAME} paw verify <session-id> Record configured verification decisions
@@ -165,6 +169,11 @@ export async function handlePawCommand(args: string[]): Promise<boolean> {
 
 	if (subcommand === "complete-worker") {
 		await runPawCompleteWorkerCommand(rest);
+		return true;
+	}
+
+	if (subcommand === "complete-reviewer") {
+		await runPawCompleteReviewerCommand(rest);
 		return true;
 	}
 
