@@ -316,10 +316,12 @@ export {
 	DEFAULT_PAW_SESSION_LOCK_TTL_SEC,
 	getPawSessionLockStatus,
 	readPawSessionState,
+	readPawVerificationEvidence,
 	refreshPawSessionLockHeartbeat,
 	releasePawSessionLock,
 	resolvePawSessionPaths,
 	writePawSessionState,
+	writePawVerificationEvidence,
 } from "./session-store.ts";
 export type {
 	PawSliceCheckpointInput,

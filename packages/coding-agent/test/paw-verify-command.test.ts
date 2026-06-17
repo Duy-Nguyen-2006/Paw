@@ -10,6 +10,7 @@ import {
 	type PawSessionLock,
 	type PawSessionState,
 	readPawSessionState,
+	readPawVerificationEvidence,
 	resolvePawSessionPaths,
 	writePawJsonAtomic,
 	writePawSessionState,
@@ -269,6 +270,9 @@ describe("Paw verify command with injected native executor", () => {
 			current_slice_id: null,
 			completed_slice_ids: ["slice-1"],
 		});
+		const evidence = await readPawVerificationEvidence(projectRoot, "session-native");
+		expect(evidence).toEqual(result.nativeVerificationRunResults);
+		expect(existsSync(resolvePawSessionPaths(projectRoot, "session-native").verificationEvidenceFile)).toBe(true);
 	});
 
 	test("with all gates verified by executor, result status is completed", async () => {
@@ -300,6 +304,8 @@ describe("Paw verify command with injected native executor", () => {
 		expect(formatPawVerifyCommandResult(result)).toContain("status: completed");
 		expect(formatPawVerifyCommandResult(result)).toContain("native executed gates:");
 		expect(formatPawVerifyCommandResult(result)).not.toContain("native executed gates: none");
+		const evidence = await readPawVerificationEvidence(projectRoot, "session-all-pass");
+		expect(evidence).toEqual(result.nativeVerificationRunResults);
 	});
 
 	test("without executor, default path still produces planned-but-not-executed unverified decisions", async () => {
@@ -319,6 +325,10 @@ describe("Paw verify command with injected native executor", () => {
 		expect(formatPawVerifyCommandResult(result)).toContain("verified gates: none");
 		expect(result.nativeVerificationRunResults).toEqual([]);
 		expect(formatPawVerifyCommandResult(result)).toContain("native executed gates: none");
+		const paths = resolvePawSessionPaths(projectRoot, "session-default");
+		expect(existsSync(paths.verificationEvidenceFile)).toBe(true);
+		expect(JSON.parse(await readFile(paths.verificationEvidenceFile, "utf-8"))).toEqual([]);
+		await expect(readPawVerificationEvidence(projectRoot, "session-default")).resolves.toEqual([]);
 	});
 });
 

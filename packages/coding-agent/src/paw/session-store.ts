@@ -3,6 +3,7 @@ import { hostname } from "node:os";
 import { dirname, join } from "node:path";
 import { readPawJson, resolvePawProjectPaths, writePawJsonAtomic } from "./persistence.ts";
 import { assertValidPawSessionState, type PawBlockedReason, type PawSessionState } from "./state.ts";
+import type { PawNativeVerificationRunResult } from "./verification-runner.ts";
 
 export const DEFAULT_PAW_SESSION_LOCK_TTL_SEC = 120;
 
@@ -15,6 +16,7 @@ export interface PawSessionPaths {
 	summaryFile: string;
 	transcriptFile: string;
 	lockFile: string;
+	verificationEvidenceFile: string;
 }
 
 export interface PawSessionLock {
@@ -77,6 +79,7 @@ export function resolvePawSessionPaths(repoRoot: string, sessionId: string): Paw
 		summaryFile: join(sessionDir, "summary.md"),
 		transcriptFile: join(sessionDir, "transcript.jsonl"),
 		lockFile: join(sessionDir, "session.lock"),
+		verificationEvidenceFile: join(sessionDir, "verification-evidence.json"),
 	};
 }
 
@@ -93,6 +96,30 @@ export async function writePawSessionState(repoRoot: string, state: PawSessionSt
 export async function readPawSessionState(repoRoot: string, sessionId: string): Promise<PawSessionState> {
 	const paths = resolvePawSessionPaths(repoRoot, sessionId);
 	return parsePawSessionState(await readPawJson<unknown>(paths.stateFile));
+}
+
+export async function writePawVerificationEvidence(
+	repoRoot: string,
+	sessionId: string,
+	results: readonly PawNativeVerificationRunResult[],
+): Promise<void> {
+	const paths = resolvePawSessionPaths(repoRoot, sessionId);
+	await writePawJsonAtomic(paths.verificationEvidenceFile, results);
+}
+
+export async function readPawVerificationEvidence(
+	repoRoot: string,
+	sessionId: string,
+): Promise<readonly PawNativeVerificationRunResult[]> {
+	const paths = resolvePawSessionPaths(repoRoot, sessionId);
+	try {
+		return await readPawJson<readonly PawNativeVerificationRunResult[]>(paths.verificationEvidenceFile);
+	} catch (error) {
+		if (isFileSystemError(error) && error.code === "ENOENT") {
+			return [];
+		}
+		throw error;
+	}
 }
 
 export async function acquirePawSessionLock(

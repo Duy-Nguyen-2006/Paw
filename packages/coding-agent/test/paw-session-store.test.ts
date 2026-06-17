@@ -6,13 +6,16 @@ import {
 	acquirePawSessionLock,
 	createInitialPawSessionState,
 	getPawSessionLockStatus,
+	type PawNativeVerificationRunResult,
 	type PawSessionLock,
 	readPawSessionState,
+	readPawVerificationEvidence,
 	refreshPawSessionLockHeartbeat,
 	releasePawSessionLock,
 	resolvePawSessionPaths,
 	writePawJsonAtomic,
 	writePawSessionState,
+	writePawVerificationEvidence,
 } from "../src/paw/index.ts";
 
 const tempRoots: string[] = [];
@@ -67,6 +70,63 @@ describe("Paw session store", () => {
 		await expect(readPawSessionState(repoRoot, state.session_id)).resolves.toEqual(state);
 		expect(JSON.parse(await readFile(paths.stateFile, "utf-8"))).toEqual(state);
 		expect(paths.sessionDir).toBe(join(repoRoot, ".paw", "sessions", "session-1"));
+	});
+	test("verificationEvidenceFile resolves under the session directory", async () => {
+		const repoRoot = await createTempRepo();
+		const paths = resolvePawSessionPaths(repoRoot, "session-1");
+
+		expect(paths.verificationEvidenceFile).toBe(
+			join(repoRoot, ".paw", "sessions", "session-1", "verification-evidence.json"),
+		);
+	});
+
+	test("readPawVerificationEvidence returns [] when the evidence file is missing", async () => {
+		const repoRoot = await createTempRepo();
+
+		await expect(readPawVerificationEvidence(repoRoot, "session-1")).resolves.toEqual([]);
+	});
+
+	test("writePawVerificationEvidence and readPawVerificationEvidence preserve run results", async () => {
+		const repoRoot = await createTempRepo();
+		const results: PawNativeVerificationRunResult[] = [
+			{
+				status: "verified" as const,
+				gate: "working_tree_baseline",
+				verified: true,
+				executed: true,
+				command: ["git", "diff", "--quiet"],
+				exitCode: 0,
+				stdout: "",
+				stderr: "",
+			},
+			{
+				status: "unverified" as const,
+				gate: "unit_tests",
+				verified: false,
+				executed: true,
+				command: ["npm", "test"],
+				exitCode: 1,
+				stdout: "fail",
+				stderr: "err",
+				reason: "tests failed",
+			},
+		];
+
+		await writePawVerificationEvidence(repoRoot, "session-1", results);
+
+		await expect(readPawVerificationEvidence(repoRoot, "session-1")).resolves.toEqual(results);
+		const paths = resolvePawSessionPaths(repoRoot, "session-1");
+		expect(JSON.parse(await readFile(paths.verificationEvidenceFile, "utf-8"))).toEqual(results);
+	});
+
+	test("writePawVerificationEvidence persists an empty array", async () => {
+		const repoRoot = await createTempRepo();
+
+		await writePawVerificationEvidence(repoRoot, "session-1", []);
+
+		await expect(readPawVerificationEvidence(repoRoot, "session-1")).resolves.toEqual([]);
+		const paths = resolvePawSessionPaths(repoRoot, "session-1");
+		expect(JSON.parse(await readFile(paths.verificationEvidenceFile, "utf-8"))).toEqual([]);
 	});
 
 	test("blocks non-waiting acquisition when a live fresh lock exists", async () => {

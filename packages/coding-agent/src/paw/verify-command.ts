@@ -11,6 +11,7 @@ import {
 	type PawSessionLockOptions,
 	releasePawSessionLock,
 	resolvePawSessionPaths,
+	writePawVerificationEvidence,
 } from "./session-store.ts";
 import type { PawSessionStateName } from "./state.ts";
 import {
@@ -151,6 +152,9 @@ export async function createPawVerifyCommandResult(
 		verifyDecisions,
 		lockOptions: input.lockOptions,
 	});
+	if (verification.status === "completed" || verification.status === "completed_with_unverified") {
+		await writePawVerificationEvidence(repoRoot, sessionId, nativeVerificationRunResults);
+	}
 	const lockReleased = await releasePawSessionLock(repoRoot, sessionId, input.lockOptions);
 
 	switch (verification.status) {
