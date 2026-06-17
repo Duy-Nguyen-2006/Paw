@@ -384,6 +384,26 @@ export type {
 } from "./slice-checkpoint.ts";
 export { preparePawSliceCheckpoint } from "./slice-checkpoint.ts";
 export type {
+	PawPrepareCheckpointCommandInput,
+	PawPrepareCheckpointCommandInvalidStateResult,
+	PawPrepareCheckpointCommandLockedByOtherResult,
+	PawPrepareCheckpointCommandLockedResult,
+	PawPrepareCheckpointCommandMissingProjectResult,
+	PawPrepareCheckpointCommandMissingSessionResult,
+	PawPrepareCheckpointCommandNoSelectedSliceResult,
+	PawPrepareCheckpointCommandNotLockedResult,
+	PawPrepareCheckpointCommandPreparedResult,
+	PawPrepareCheckpointCommandResult,
+	PawPrepareCheckpointParsedArgs,
+	PawPrepareCheckpointParsedInput,
+} from "./slice-checkpoint-command.ts";
+export {
+	createPawPrepareCheckpointCommandResult,
+	formatPawPrepareCheckpointCommandResult,
+	parsePawPrepareCheckpointArgs,
+	runPawPrepareCheckpointCommand,
+} from "./slice-checkpoint-command.ts";
+export type {
 	PawSliceImplementationAdvancedResult,
 	PawSliceImplementationInput,
 	PawSliceImplementationInvalidTransitionResult,
