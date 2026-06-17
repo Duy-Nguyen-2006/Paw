@@ -29,6 +29,7 @@ import {
 	writePawSessionState,
 } from "../src/paw/index.ts";
 import { handlePawCommand } from "../src/paw/init-command.ts";
+import * as verificationExecutorModule from "../src/paw/verification-executor.ts";
 
 const testDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(testDir, "..", "..", "..");
@@ -185,7 +186,7 @@ function createBlockedReviewerOutput(overrides: Partial<PawSubAgentOutput> = {})
 function createExecutor(outputs: string[]): PawSubAgentRuntimeExecutor {
 	let index = 0;
 	return () => {
-		const rawOutput = outputs[index] ?? outputs[outputs.length - 1] ?? "";
+		const rawOutput = outputs[index] ?? outputs.at(-1) ?? "";
 		index += 1;
 		return { raw_output: rawOutput, model_id: "executor-model" };
 	};
@@ -296,15 +297,17 @@ describe("parsePawBuildArgs", () => {
 			sessionId: "session-1",
 			input: { once: true },
 		});
-		expect(parsePawBuildArgs(["session-1", "--once", "--handoff", "Do work", "--timestamp", timestamp])).toEqual({
+		expect(
+			parsePawBuildArgs(["session-1", "--once", "--native", "--handoff", "Do work", "--timestamp", timestamp]),
+		).toEqual({
 			kind: "ok",
 			sessionId: "session-1",
-			input: { once: true, handoff: "Do work", timestamp },
+			input: { once: true, handoff: "Do work", timestamp, native: true },
 		});
-		expect(parsePawBuildArgs(["session-1", "--max-steps", "3", "--handoff", "Do work"])).toEqual({
+		expect(parsePawBuildArgs(["session-1", "--max-steps", "3", "--native", "--handoff", "Do work"])).toEqual({
 			kind: "ok",
 			sessionId: "session-1",
-			input: { maxSteps: 3, handoff: "Do work" },
+			input: { maxSteps: 3, handoff: "Do work", native: true },
 		});
 		expect(parsePawBuildArgs([])).toEqual({ kind: "error", message: 'Missing required session id for "paw build".' });
 		expect(parsePawBuildArgs(["--once"])).toEqual({
@@ -318,6 +321,10 @@ describe("parsePawBuildArgs", () => {
 		expect(parsePawBuildArgs(["session-1", "--once", "--once"])).toEqual({
 			kind: "error",
 			message: 'Duplicate option for "paw build": --once',
+		});
+		expect(parsePawBuildArgs(["session-1", "--once", "--native", "--native"])).toEqual({
+			kind: "error",
+			message: 'Duplicate option for "paw build": --native',
 		});
 		expect(parsePawBuildArgs(["session-1", "--once", "--max-steps", "3"])).toEqual({
 			kind: "error",
@@ -877,6 +884,36 @@ describe("Paw build command", () => {
 		expect(await getPawSessionLockStatus(projectRoot, "session-1", { nowMs: 2_500 })).toEqual({
 			status: "unlocked",
 		});
+	});
+
+	test("runs native subprocess verification from build when --native reaches VERIFYING", async () => {
+		const projectRoot = await createTempProject();
+		process.chdir(projectRoot);
+		const subprocessCalls: string[] = [];
+		await expect(handlePawCommand(["paw", "init"])).resolves.toBe(true);
+		await writePawSessionState(projectRoot, createVerifyingState("session-native", "slice-1"));
+		vi.spyOn(verificationExecutorModule, "createPawNativeSubprocessExecutor").mockReturnValue(async (input) => {
+			subprocessCalls.push(input.gate);
+			return { exitCode: 0, stdout: `${input.gate} ok`, stderr: "" };
+		});
+
+		const result = await createPawBuildCommandResult(projectRoot, "session-native", {
+			once: true,
+			native: true,
+		});
+
+		expect(verificationExecutorModule.createPawNativeSubprocessExecutor).toHaveBeenCalledWith({ cwd: projectRoot });
+		expect(subprocessCalls.length).toBeGreaterThan(0);
+		expect(result.status).toBe("completed");
+		if (result.status !== "completed" || !("verifyDecisions" in result)) return;
+		expect(result.nativeVerificationRunResults.length).toBe(subprocessCalls.length);
+		expect(result.nativeVerificationRunResults.every((entry) => entry.status === "verified" && entry.executed)).toBe(
+			true,
+		);
+		expect(result.unverifiedDecisions).toEqual([]);
+		await expect(readPawVerificationEvidence(projectRoot, "session-native")).resolves.toEqual(
+			result.nativeVerificationRunResults,
+		);
 	});
 
 	test("reports missing project, missing session, invalid state, and missing selected slice", async () => {

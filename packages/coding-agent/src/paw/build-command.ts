@@ -21,7 +21,12 @@ import {
 	type PawSubAgentRuntimeInvocation,
 } from "./subagent-runtime.ts";
 import type { PawSubAgentSandboxPreflightInput } from "./subagent-sandbox-preflight.ts";
-import type { PawNativeVerificationPlanEntry } from "./verification-plan.ts";
+import {
+	createPawNativeVerificationCommandPolicy,
+	createPawPolicyCheckedNativeVerificationExecutor,
+} from "./verification-command-policy.ts";
+import { createPawNativeSubprocessExecutor } from "./verification-executor.ts";
+import { createPawNativeVerificationPlan, type PawNativeVerificationPlanEntry } from "./verification-plan.ts";
 import type { PawNativeVerificationExecutor, PawNativeVerificationRunResult } from "./verification-runner.ts";
 import { createPawVerifyCommandResult, type PawVerifyCommandResult } from "./verify-command.ts";
 import { type PawWorkerOnceResult, runPawWorkerOnce } from "./worker-orchestrator.ts";
@@ -83,11 +88,13 @@ export type PawBuildParsedInput =
 			once: true;
 			handoff?: string;
 			timestamp?: string;
+			native?: boolean;
 	  }
 	| {
 			maxSteps: number;
 			handoff?: string;
 			timestamp?: string;
+			native?: boolean;
 	  };
 
 export type PawBuildParsedArgs =
@@ -98,7 +105,7 @@ export type PawBuildParsedArgs =
 const BUILD_SCALAR_OPTIONS = new Set(["--handoff", "--timestamp", "--max-steps"]);
 
 export function parsePawBuildArgs(args: string[]): PawBuildParsedArgs {
-	if (args.some((arg) => arg === "--help" || arg === "-h")) {
+	if (args.includes("--help") || args.includes("-h")) {
 		return { kind: "help" };
 	}
 
@@ -112,6 +119,7 @@ export function parsePawBuildArgs(args: string[]): PawBuildParsedArgs {
 	}
 
 	let once = false;
+	let native = false;
 	let maxSteps: number | undefined;
 	let handoff: string | undefined;
 	let timestamp: string | undefined;
@@ -125,6 +133,15 @@ export function parsePawBuildArgs(args: string[]): PawBuildParsedArgs {
 				return { kind: "error", message: 'Duplicate option for "paw build": --once' };
 			}
 			once = true;
+			index += 1;
+			continue;
+		}
+
+		if (arg === "--native") {
+			if (native) {
+				return { kind: "error", message: 'Duplicate option for "paw build": --native' };
+			}
+			native = true;
 			index += 1;
 			continue;
 		}
@@ -185,6 +202,9 @@ export function parsePawBuildArgs(args: string[]): PawBuildParsedArgs {
 	if (timestamp !== undefined) {
 		input.timestamp = timestamp;
 	}
+	if (native) {
+		input.native = true;
+	}
 	return { kind: "ok", sessionId, input };
 }
 
@@ -233,7 +253,7 @@ async function createPawBuildStepResult(
 	if (stateNameIsVerifying(state)) {
 		return createPawVerifyCommandResult(repoRoot, sessionId, {
 			lockOptions: commandInput.lockOptions,
-			nativeVerificationExecutor: commandInput.nativeVerificationExecutor,
+			nativeVerificationExecutor: resolvePawBuildNativeVerificationExecutor(repoRoot, config, input, commandInput),
 		});
 	}
 
@@ -262,7 +282,7 @@ async function createPawBuildLoopResult(
 		const stepResult = await createPawBuildStepResult(
 			repoRoot,
 			sessionId,
-			{ once: true, handoff: input.handoff, timestamp: input.timestamp },
+			{ once: true, handoff: input.handoff, timestamp: input.timestamp, native: input.native },
 			commandInput,
 		);
 		stepResults.push(stepResult);
@@ -359,9 +379,11 @@ export function formatPawBuildCommandResult(result: PawBuildCommandResult): stri
 			`final state: ${result.finalStateName ?? "unknown"}`,
 		];
 		if (result.finalReport?.status === "completed") {
-			lines.push(`final report: ${result.finalReport.reportStatus}`);
-			lines.push(`summary file: ${result.finalReport.summaryFile}`);
-			lines.push(`report json file: ${result.finalReport.reportJsonFile}`);
+			lines.push(
+				`final report: ${result.finalReport.reportStatus}`,
+				`summary file: ${result.finalReport.summaryFile}`,
+				`report json file: ${result.finalReport.reportJsonFile}`,
+			);
 		}
 		return lines.join("\n");
 	}
@@ -542,6 +564,26 @@ function resolveDefaultPawBuildModelId(config: PawRuntimeConfig, invocation: Paw
 	return `${route.providerName}/${route.model}`;
 }
 
+function resolvePawBuildNativeVerificationExecutor(
+	repoRoot: string,
+	config: PawRuntimeConfig,
+	input: Extract<PawBuildParsedInput, { once: true }>,
+	commandInput: PawBuildCommandInput,
+): PawNativeVerificationExecutor | undefined {
+	if (commandInput.nativeVerificationExecutor !== undefined) {
+		return commandInput.nativeVerificationExecutor;
+	}
+	if (input.native !== true) {
+		return undefined;
+	}
+	const plan = createPawNativeVerificationPlan(config.verify.v1_gates);
+	const policy = createPawNativeVerificationCommandPolicy(plan);
+	return createPawPolicyCheckedNativeVerificationExecutor(
+		createPawNativeSubprocessExecutor({ cwd: repoRoot }),
+		policy,
+	);
+}
+
 function isFileSystemError(error: unknown): error is NodeJS.ErrnoException {
 	return error instanceof Error;
 }
@@ -645,14 +687,15 @@ function formatIssues(issues: readonly PawValidationIssue[]): string {
 
 function printPawBuildHelp(): void {
 	console.log(`Usage:
-  ${APP_NAME} paw build <session-id> --once [--handoff <text>] [--timestamp <iso>]
-  ${APP_NAME} paw build <session-id> --max-steps <n> [--handoff <text>] [--timestamp <iso>]
+  ${APP_NAME} paw build <session-id> --once [--native] [--handoff <text>] [--timestamp <iso>]
+  ${APP_NAME} paw build <session-id> --max-steps <n> [--native] [--handoff <text>] [--timestamp <iso>]
 
 Run bounded Paw build orchestration for the current session state.
 
 Options:
   --once             Run exactly one build step
   --max-steps <n>    Run at most n build steps before stopping
+  --native           Execute native verification gates during VERIFYING steps
   --handoff <text>   Optional worker or reviewer handoff text
   --timestamp <iso>  Optional ISO-8601 timestamp for journal entries
 
