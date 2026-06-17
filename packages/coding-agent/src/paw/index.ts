@@ -396,6 +396,15 @@ export type {
 } from "./slice-selection.ts";
 export { selectNextPawPlanSlice } from "./slice-selection.ts";
 export type {
+	PawStartCommandExistingResult,
+	PawStartCommandInput,
+	PawStartCommandLockedResult,
+	PawStartCommandReclaimedLock,
+	PawStartCommandResult,
+	PawStartCommandStartedResult,
+} from "./start-command.ts";
+export { createPawStartCommandResult, formatPawStartCommandResult, runPawStartCommand } from "./start-command.ts";
+export type {
 	PawActiveStateName,
 	PawBlockedReason,
 	PawBlockedReasonCode,

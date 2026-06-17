@@ -7,6 +7,7 @@ import { runPawFinalizeCommand } from "./finalize-command.ts";
 import { initializePawProject } from "./persistence.ts";
 import { runPawReportCommand } from "./report-command.ts";
 import { runPawResumeCommand } from "./resume-command.ts";
+import { runPawStartCommand } from "./start-command.ts";
 import { runPawStatusCommand } from "./status-command.ts";
 import { runPawVerifyCommand } from "./verify-command.ts";
 
@@ -14,6 +15,7 @@ function printPawHelp(): void {
 	console.log(`Usage:
   ${APP_NAME} paw init
   ${APP_NAME} paw status
+  ${APP_NAME} paw start <session-id>
   ${APP_NAME} paw resume <session-id>
   ${APP_NAME} paw verify <session-id>
   ${APP_NAME} paw finalize <session-id> --summary <text>
@@ -28,6 +30,8 @@ Commands:
   ${APP_NAME} paw init --help   Show init help
   ${APP_NAME} paw status        Show read-only Paw project and session summary
   ${APP_NAME} paw status --help Show status help
+  ${APP_NAME} paw start <session-id>      Start or resume a Paw task session
+  ${APP_NAME} paw start --help           Show start help
   ${APP_NAME} paw resume <session-id> Show resumable session state and lock status
   ${APP_NAME} paw resume --help Show resume help
   ${APP_NAME} paw verify <session-id> Record configured verification decisions
@@ -106,6 +110,11 @@ export async function handlePawCommand(args: string[]): Promise<boolean> {
 
 	if (subcommand === "report") {
 		await runPawReportCommand(rest);
+		return true;
+	}
+
+	if (subcommand === "start") {
+		await runPawStartCommand(rest);
 		return true;
 	}
 
