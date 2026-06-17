@@ -426,6 +426,17 @@ export {
 	formatPawNativeVerificationCommand,
 } from "./verification-plan.ts";
 export type {
+	PawNativeVerificationExecutor,
+	PawNativeVerificationExecutorInput,
+	PawNativeVerificationExecutorResult,
+	PawNativeVerificationRunOptions,
+	PawNativeVerificationRunResult,
+} from "./verification-runner.ts";
+export {
+	runPawNativeVerificationPlan,
+	summarizeNativeVerificationOutput,
+} from "./verification-runner.ts";
+export type {
 	PawVerifierBlockedCompletedResult,
 	PawVerifierBlockedInput,
 	PawVerifierBlockedInvalidReasonResult,
