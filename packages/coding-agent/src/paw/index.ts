@@ -616,6 +616,31 @@ export type {
 } from "./verifier-result.ts";
 export { completePawVerification } from "./verifier-result.ts";
 export type {
+	PawCompleteVerificationCommandCompletedResult,
+	PawCompleteVerificationCommandCompletedWithUnverifiedResult,
+	PawCompleteVerificationCommandInput,
+	PawCompleteVerificationCommandInvalidDecisionFileResult,
+	PawCompleteVerificationCommandInvalidStateResult,
+	PawCompleteVerificationCommandInvalidTransitionResult,
+	PawCompleteVerificationCommandInvalidVerifyDecisionsResult,
+	PawCompleteVerificationCommandLockedByOtherResult,
+	PawCompleteVerificationCommandLockedResult,
+	PawCompleteVerificationCommandMissingDecisionFileResult,
+	PawCompleteVerificationCommandMissingProjectResult,
+	PawCompleteVerificationCommandMissingSessionResult,
+	PawCompleteVerificationCommandNoSelectedSliceResult,
+	PawCompleteVerificationCommandNotLockedResult,
+	PawCompleteVerificationCommandResult,
+	PawCompleteVerificationParsedArgs,
+	PawCompleteVerificationParsedInput,
+} from "./verifier-result-command.ts";
+export {
+	createPawCompleteVerificationCommandResult,
+	formatPawCompleteVerificationCommandResult,
+	parsePawCompleteVerificationArgs,
+	runPawCompleteVerificationCommand,
+} from "./verifier-result-command.ts";
+export type {
 	PawVerifyCommandCompletedResult,
 	PawVerifyCommandInput,
 	PawVerifyCommandInvalidStateResult,
