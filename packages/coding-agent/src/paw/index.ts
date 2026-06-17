@@ -125,6 +125,19 @@ export type {
 } from "./final-report.ts";
 export { createPawFinalReport, renderPawFinalReportMarkdown } from "./final-report.ts";
 export type {
+	PawFinalReportEmissionCompletedResult,
+	PawFinalReportEmissionInput,
+	PawFinalReportEmissionInvalidReportInputResult,
+	PawFinalReportEmissionInvalidStateResult,
+	PawFinalReportEmissionInvalidTransitionResult,
+	PawFinalReportEmissionLockedByOtherResult,
+	PawFinalReportEmissionLockOwner,
+	PawFinalReportEmissionNotLockedResult,
+	PawFinalReportEmissionPendingSlicesResult,
+	PawFinalReportEmissionResult,
+} from "./final-report-emission.ts";
+export { emitPawFinalReport } from "./final-report-emission.ts";
+export type {
 	PawFailoverRoute,
 	PawModelRoutingRole,
 	PawModelTier,
@@ -147,6 +160,17 @@ export {
 	resolvePawProjectPaths,
 	writePawJsonAtomic,
 } from "./persistence.ts";
+export type {
+	PawPlanApprovalAdvancedResult,
+	PawPlanApprovalInput,
+	PawPlanApprovalInvalidPlanResult,
+	PawPlanApprovalInvalidTransitionResult,
+	PawPlanApprovalLockedByOtherResult,
+	PawPlanApprovalNotLockedResult,
+	PawPlanApprovalResult,
+	PawPlanApprovalTransitionResult,
+} from "./plan-approval.ts";
+export { approvePawPlanSlices } from "./plan-approval.ts";
 export type { PawPlannerSlice, PawPlanSliceQueue } from "./plan-slices.ts";
 export { createPawPlanSliceQueue } from "./plan-slices.ts";
 export type {
@@ -190,6 +214,35 @@ export type {
 	PawRetentionSessionRecord,
 } from "./retention-policy.ts";
 export { createPawRetentionPlan } from "./retention-policy.ts";
+export type {
+	PawReviewerBlockedCompletedResult,
+	PawReviewerBlockedInput,
+	PawReviewerBlockedInvalidOutputResult,
+	PawReviewerBlockedInvalidReasonResult,
+	PawReviewerBlockedInvalidStateResult,
+	PawReviewerBlockedInvalidTransitionResult,
+	PawReviewerBlockedLockedByOtherResult,
+	PawReviewerBlockedLockOwner,
+	PawReviewerBlockedNoSelectedSliceResult,
+	PawReviewerBlockedNotBlockedResult,
+	PawReviewerBlockedNotLockedResult,
+	PawReviewerBlockedResult,
+} from "./reviewer-blocked-result.ts";
+export { blockPawReviewerResult } from "./reviewer-blocked-result.ts";
+export type {
+	PawReviewerPassCompletedResult,
+	PawReviewerPassInput,
+	PawReviewerPassInvalidOutputResult,
+	PawReviewerPassInvalidStateResult,
+	PawReviewerPassInvalidTransitionResult,
+	PawReviewerPassLockedByOtherResult,
+	PawReviewerPassLockOwner,
+	PawReviewerPassNoSelectedSliceResult,
+	PawReviewerPassNotLockedResult,
+	PawReviewerPassNotPassedResult,
+	PawReviewerPassResult,
+} from "./reviewer-result.ts";
+export { completePawReviewerPass } from "./reviewer-result.ts";
 export type {
 	PawRiskClassifierConfig,
 	PawRiskScore,
@@ -251,6 +304,27 @@ export {
 	writePawSessionState,
 } from "./session-store.ts";
 export type {
+	PawSliceCheckpointInput,
+	PawSliceCheckpointInvalidStateResult,
+	PawSliceCheckpointLockedByOtherResult,
+	PawSliceCheckpointLockOwner,
+	PawSliceCheckpointNoSelectedSliceResult,
+	PawSliceCheckpointNotLockedResult,
+	PawSliceCheckpointPreparedResult,
+	PawSliceCheckpointResult,
+} from "./slice-checkpoint.ts";
+export { preparePawSliceCheckpoint } from "./slice-checkpoint.ts";
+export type {
+	PawSliceImplementationAdvancedResult,
+	PawSliceImplementationInput,
+	PawSliceImplementationInvalidTransitionResult,
+	PawSliceImplementationLockedByOtherResult,
+	PawSliceImplementationNoSelectedSliceResult,
+	PawSliceImplementationNotLockedResult,
+	PawSliceImplementationResult,
+} from "./slice-implementation.ts";
+export { beginPawSliceImplementation } from "./slice-implementation.ts";
+export type {
 	PawAppliedChangeLookupInput,
 	PawSliceJournalApplyMethod,
 	PawSliceJournalChangeType,
@@ -262,6 +336,16 @@ export {
 	hasPawAppliedChange,
 	readPawSliceJournal,
 } from "./slice-journal.ts";
+export type {
+	PawSliceSelectionAdvancedResult,
+	PawSliceSelectionInput,
+	PawSliceSelectionInvalidTransitionResult,
+	PawSliceSelectionLockedByOtherResult,
+	PawSliceSelectionNoPendingResult,
+	PawSliceSelectionNotLockedResult,
+	PawSliceSelectionResult,
+} from "./slice-selection.ts";
+export { selectNextPawPlanSlice } from "./slice-selection.ts";
 export type {
 	PawActiveStateName,
 	PawBlockedReason,
@@ -299,3 +383,76 @@ export type {
 	PawSubAgentRuntimeInvocation,
 } from "./subagent-runtime.ts";
 export { runPawSubAgentRuntime } from "./subagent-runtime.ts";
+export type {
+	PawTaskSessionAdvancedResult,
+	PawTaskSessionAdvanceInput,
+	PawTaskSessionAdvanceResult,
+	PawTaskSessionExistingResult,
+	PawTaskSessionInvalidTransitionResult,
+	PawTaskSessionLockedByOtherResult,
+	PawTaskSessionLockedResult,
+	PawTaskSessionLockOwner,
+	PawTaskSessionNotLockedResult,
+	PawTaskSessionReclaimedLock,
+	PawTaskSessionStartedResult,
+	PawTaskSessionStartInput,
+	PawTaskSessionStartResult,
+} from "./task-session.ts";
+export { advancePawTaskSession, startPawTaskSession } from "./task-session.ts";
+export type {
+	PawVerifierBlockedCompletedResult,
+	PawVerifierBlockedInput,
+	PawVerifierBlockedInvalidReasonResult,
+	PawVerifierBlockedInvalidStateResult,
+	PawVerifierBlockedInvalidTransitionResult,
+	PawVerifierBlockedLockedByOtherResult,
+	PawVerifierBlockedLockOwner,
+	PawVerifierBlockedNoSelectedSliceResult,
+	PawVerifierBlockedNotLockedResult,
+	PawVerifierBlockedResult,
+} from "./verifier-blocked-result.ts";
+export { blockPawVerifierResult } from "./verifier-blocked-result.ts";
+export type {
+	PawVerificationCompletedResult,
+	PawVerificationCompletedWithUnverifiedResult,
+	PawVerificationInput,
+	PawVerificationInvalidDecisionsResult,
+	PawVerificationInvalidStateResult,
+	PawVerificationInvalidTransitionResult,
+	PawVerificationLockedByOtherResult,
+	PawVerificationLockOwner,
+	PawVerificationNoSelectedSliceResult,
+	PawVerificationNotLockedResult,
+	PawVerificationResult,
+} from "./verifier-result.ts";
+export { completePawVerification } from "./verifier-result.ts";
+
+export type {
+	PawWorkerBlockedCompletedResult,
+	PawWorkerBlockedInput,
+	PawWorkerBlockedInvalidOutputResult,
+	PawWorkerBlockedInvalidReasonResult,
+	PawWorkerBlockedInvalidStateResult,
+	PawWorkerBlockedInvalidTransitionResult,
+	PawWorkerBlockedLockedByOtherResult,
+	PawWorkerBlockedLockOwner,
+	PawWorkerBlockedNoSelectedSliceResult,
+	PawWorkerBlockedNotBlockedResult,
+	PawWorkerBlockedNotLockedResult,
+	PawWorkerBlockedResult,
+} from "./worker-blocked-result.ts";
+export { blockPawWorkerResult } from "./worker-blocked-result.ts";
+export type {
+	PawWorkerPassCompletedResult,
+	PawWorkerPassInput,
+	PawWorkerPassInvalidOutputResult,
+	PawWorkerPassInvalidStateResult,
+	PawWorkerPassInvalidTransitionResult,
+	PawWorkerPassLockedByOtherResult,
+	PawWorkerPassLockOwner,
+	PawWorkerPassNoSelectedSliceResult,
+	PawWorkerPassNotLockedResult,
+	PawWorkerPassNotPassedResult,
+	PawWorkerPassResult,
+} from "./worker-result.ts";
+export { completePawWorkerPass } from "./worker-result.ts";
