@@ -615,6 +615,31 @@ export {
 	summarizeNativeVerificationOutput,
 } from "./verification-runner.ts";
 export type {
+	PawBlockVerifierCommandBlockedResult,
+	PawBlockVerifierCommandInput,
+	PawBlockVerifierCommandInvalidBlockedDecisionsResult,
+	PawBlockVerifierCommandInvalidBlockedReasonResult,
+	PawBlockVerifierCommandInvalidDecisionFileResult,
+	PawBlockVerifierCommandInvalidStateResult,
+	PawBlockVerifierCommandInvalidTransitionResult,
+	PawBlockVerifierCommandLockedByOtherResult,
+	PawBlockVerifierCommandLockedResult,
+	PawBlockVerifierCommandMissingDecisionFileResult,
+	PawBlockVerifierCommandMissingProjectResult,
+	PawBlockVerifierCommandMissingSessionResult,
+	PawBlockVerifierCommandNoSelectedSliceResult,
+	PawBlockVerifierCommandNotLockedResult,
+	PawBlockVerifierCommandResult,
+	PawBlockVerifierParsedArgs,
+	PawBlockVerifierParsedInput,
+} from "./verifier-blocked-command.ts";
+export {
+	createPawBlockVerifierCommandResult,
+	formatPawBlockVerifierCommandResult,
+	parsePawBlockVerifierArgs,
+	runPawBlockVerifierCommand,
+} from "./verifier-blocked-command.ts";
+export type {
 	PawVerifierBlockedCompletedResult,
 	PawVerifierBlockedInput,
 	PawVerifierBlockedInvalidReasonResult,

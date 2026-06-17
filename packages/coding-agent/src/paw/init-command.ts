@@ -15,6 +15,7 @@ import { runPawBeginImplementationCommand } from "./slice-implementation-command
 import { runPawSelectSliceCommand } from "./slice-selection-command.ts";
 import { runPawStartCommand } from "./start-command.ts";
 import { runPawStatusCommand } from "./status-command.ts";
+import { runPawBlockVerifierCommand } from "./verifier-blocked-command.ts";
 import { runPawCompleteVerificationCommand } from "./verifier-result-command.ts";
 import { runPawVerifyCommand } from "./verify-command.ts";
 import { runPawBlockWorkerCommand } from "./worker-blocked-command.ts";
@@ -33,6 +34,7 @@ function printPawHelp(): void {
   ${APP_NAME} paw complete-worker <session-id> --output-file <path> [--timestamp <iso>]
   ${APP_NAME} paw block-worker <session-id> --output-file <path>
   ${APP_NAME} paw block-reviewer <session-id> --output-file <path>
+  ${APP_NAME} paw block-verifier <session-id> --decision-file <path>
   ${APP_NAME} paw complete-reviewer <session-id> --output-file <path>
   ${APP_NAME} paw complete-verification <session-id> --decision-file <path>
   ${APP_NAME} paw prepare-checkpoint <session-id> --base-tree <tree> --short-id <id> --timestamp <iso> --changed-file <path>=<hash|null>
@@ -59,6 +61,7 @@ Commands:
   ${APP_NAME} paw complete-worker <session-id> --output-file <path>  Complete worker pass from IMPLEMENTING to REVIEWING
   ${APP_NAME} paw block-worker <session-id> --output-file <path>  Record worker blocked result from IMPLEMENTING to BLOCKED_*
   ${APP_NAME} paw block-reviewer <session-id> --output-file <path>  Record reviewer blocked result from REVIEWING to BLOCKED_*
+  ${APP_NAME} paw block-verifier <session-id> --decision-file <path>  Record verifier blocked result from VERIFYING to BLOCKED_*
   ${APP_NAME} paw complete-reviewer <session-id> --output-file <path>  Complete reviewer pass from REVIEWING to VERIFYING
   ${APP_NAME} paw complete-verification <session-id> --decision-file <path>  Complete verification from VERIFYING to SLICE_DONE
   ${APP_NAME} paw select-slice --help                Show select-slice help
@@ -66,6 +69,7 @@ Commands:
   ${APP_NAME} paw complete-worker --help                   Show complete-worker help
   ${APP_NAME} paw block-worker --help                     Show block-worker help
   ${APP_NAME} paw block-reviewer --help                     Show block-reviewer help
+  ${APP_NAME} paw block-verifier --help                     Show block-verifier help
   ${APP_NAME} paw complete-reviewer --help                   Show complete-reviewer help
   ${APP_NAME} paw complete-verification --help                   Show complete-verification help
   ${APP_NAME} paw prepare-checkpoint <session-id> ... Prepare slice checkpoint metadata from SLICE_SELECT
@@ -196,6 +200,11 @@ export async function handlePawCommand(args: string[]): Promise<boolean> {
 
 	if (subcommand === "complete-reviewer") {
 		await runPawCompleteReviewerCommand(rest);
+		return true;
+	}
+
+	if (subcommand === "block-verifier") {
+		await runPawBlockVerifierCommand(rest);
 		return true;
 	}
 
