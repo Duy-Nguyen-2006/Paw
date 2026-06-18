@@ -1,4 +1,4 @@
-
+# --- env / secrets ---
 .env
 .env.*
 *.env
@@ -6,3 +6,34 @@ credentials.json
 *.pem
 *.key
 .credentials
+.sonar-token
+
+# --- node / build ---
+node_modules/
+**/node_modules/
+**/dist/
+**/dist-chrome/
+**/dist-firefox/
+coverage/
+*.cpuprofile
+**/*.min.js
+
+# --- local tool state ---
+.claude/
+.pi/
+.scannerwork/
+harness.db
+.repomix/
+
+# --- generated review packs ---
+docs/repomix-senior-review*.md
+repo.xml
+
+# --- workspace-specific ---
+packages/coding-agent/binaries/
+packages/coding-agent/test/fixtures/
+packages/coding-agent/src/core/export-html/vendor/
+packages/coding-agent/src/core/export-html/template.js
+compaction-results/
+packages/ai/src/models.generated.ts
+packages/ai/src/image-models.generated.ts

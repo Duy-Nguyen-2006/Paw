@@ -1,0 +1,41 @@
+{
+  "$schema": "https://repomix.com/schemas/repomix-schema.json",
+  "output": {
+    "filePath": "docs/repomix-senior-review-paw-core.md",
+    "style": "markdown",
+    "parsableStyle": true,
+    "headerText": "Paw core only (runtime, spec, stories, Paw tests) — senior review pack. Full monorepo: docs/repomix-senior-review.md",
+    "fileSummary": true,
+    "directoryStructure": true,
+    "topFilesLength": 15
+  },
+  "include": [
+    "packages/coding-agent/src/paw/**",
+    "packages/coding-agent/test/paw-*.test.ts",
+    "packages/coding-agent/test/paw-cli-e2e-validation.test.ts",
+    "paw-spec/**",
+    "SPEC.md",
+    "README.md",
+    "AGENTS.md",
+    "docs/TEST_MATRIX.md",
+    "docs/product/**",
+    "docs/HARNESS.md",
+    "docs/ARCHITECTURE.md",
+    "docs/stories/epics/E01-paw-foundation/**",
+    "repomix.config.json",
+    "repomix.config.paw-core.json"
+  ],
+  "ignore": {
+    "customPatterns": [
+      "node_modules/**",
+      "**/dist/**",
+      "harness.db",
+      ".scannerwork/**",
+      "docs/repomix-senior-review.md",
+      "docs/repomix-senior-review-paw-core.md"
+    ]
+  },
+  "security": {
+    "enableSecurityCheck": true
+  }
+}

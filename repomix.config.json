@@ -1,0 +1,42 @@
+{
+  "$schema": "https://repomix.com/schemas/repomix-schema.json",
+  "output": {
+    "filePath": "docs/repomix-senior-review.md",
+    "style": "markdown",
+    "parsableStyle": true,
+    "headerText": "Paw monorepo — single-file pack for senior review. Generated with repomix. Secrets redacted by repomix security check.",
+    "fileSummary": true,
+    "directoryStructure": true,
+    "removeComments": false,
+    "removeEmptyLines": false,
+    "topFilesLength": 25
+  },
+  "include": [],
+  "ignore": {
+    "customPatterns": [
+      "node_modules/**",
+      "**/dist/**",
+      "**/dist-chrome/**",
+      "**/dist-firefox/**",
+      "packages/coding-agent/binaries/**",
+      "coverage/**",
+      ".scannerwork/**",
+      "harness.db",
+      "**/*.cpuprofile",
+      "packages/coding-agent/test/fixtures/**",
+      "packages/coding-agent/src/core/export-html/vendor/**",
+      "packages/coding-agent/src/core/export-html/template.js",
+      "**/package-lock.json",
+      "**/npm-shrinkwrap.json",
+      ".pi/**",
+      "compaction-results/**",
+      "**/*.min.js",
+      "packages/ai/src/models.generated.ts",
+      "packages/ai/src/image-models.generated.ts",
+      "docs/repomix-senior-review.md"
+    ]
+  },
+  "security": {
+    "enableSecurityCheck": true
+  }
+}
