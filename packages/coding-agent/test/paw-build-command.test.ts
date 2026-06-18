@@ -214,12 +214,12 @@ function createAssistantMessage(text: string, overrides: Partial<AssistantMessag
 	};
 }
 
-function createModel(modelId: string): Model<"anthropic-messages"> {
+function createModel(modelId: string, provider = "fake-provider"): Model<"anthropic-messages"> {
 	return {
 		id: modelId,
 		name: `Fake ${modelId}`,
 		api: "anthropic-messages",
-		provider: "fake-provider",
+		provider,
 		baseUrl: "http://localhost:0",
 		reasoning: false,
 		input: ["text"],
@@ -231,7 +231,10 @@ function createModel(modelId: string): Model<"anthropic-messages"> {
 
 function createFakeModelRegistry(): PawProviderSubAgentModelRegistry {
 	return {
-		find: (provider, modelId) => (provider === "fake-provider" ? createModel(modelId) : undefined),
+		find: (provider, modelId) =>
+			provider === "fake-provider" || provider === "primary" || provider === "secondary"
+				? createModel(modelId, provider)
+				: undefined,
 		hasConfiguredAuth: () => true,
 		getApiKeyAndHeaders: () => ({ ok: true, apiKey: "fake-key", headers: { "x-fake": "1" } }),
 	};
@@ -1351,6 +1354,49 @@ describe("Paw build command", () => {
 		if (result.status !== "blocked") return;
 		expect(result.blockedReasonCode).toBe("PROVIDER_UNAVAILABLE");
 		expect(result.blockedReasonMessage).toContain("secondary/<configured-mid-model>");
+	});
+
+	test("default build executor selects failover provider after provider failure", async () => {
+		const projectRoot = await createTempProject();
+		process.chdir(projectRoot);
+		process.env[ENV_AGENT_DIR] = await createTempAgentDir();
+		const config = loadDefaultPawRuntimeConfig(projectRoot);
+		const seenModels: string[] = [];
+		await expect(handlePawCommand(["paw", "init"])).resolves.toBe(true);
+		await writePawSessionState(projectRoot, createImplementingState("worker-session", "slice-1"));
+
+		const result = await createPawBuildCommandResult(
+			projectRoot,
+			"worker-session",
+			{ once: true, timestamp },
+			{
+				config,
+				providerExecutor: {
+					modelRegistry: createFakeModelRegistry(),
+					defaultProvider: "primary",
+					completeSimple: async (model) => {
+						seenModels.push(`${model.provider}/${model.id}`);
+						if (model.provider !== "secondary") {
+							throw new Error("primary provider unavailable");
+						}
+						return createAssistantMessage(
+							JSON.stringify(
+								createWorkerOutput({
+									artifact_ref: ".paw/artifacts/worker-session/worker/report.md",
+									model_used: model.id,
+									session_id: "worker-session",
+								}),
+							),
+							{ model: model.id },
+						);
+					},
+				},
+				lockOptions: { nowMs: 2_000, ttlSec: 120 },
+			},
+		);
+
+		expect(result.status).toBe("completed");
+		expect(seenModels).toEqual(["primary/<configured-mid-model>", "secondary/<configured-mid-model>"]);
 	});
 
 	test("routes paw build and validates command arguments", async () => {

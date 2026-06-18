@@ -49,6 +49,7 @@ export type PawProviderSubAgentPrompt = {
 export type PawProviderSubAgentCompletionInput = {
 	invocation: PawSubAgentRuntimeInvocation;
 	model_id: string;
+	fallback_model_ids?: readonly string[];
 	prompt: PawProviderSubAgentPrompt;
 };
 
@@ -64,6 +65,7 @@ export type PawProviderSubAgentCompletion = (
 
 export type PawProviderSubAgentExecutorInput = {
 	complete: PawProviderSubAgentCompletion;
+	fallbackModelIdResolver?: PawProviderSubAgentFallbackModelIdResolver;
 };
 
 export type PawProviderSubAgentModelResolver = (
@@ -106,12 +108,16 @@ export type PawProviderSubAgentModelRegistry = {
 };
 
 export type PawProviderSubAgentModelIdResolver = (invocation: PawSubAgentRuntimeInvocation) => string;
+export type PawProviderSubAgentFallbackModelIdResolver = (
+	invocation: PawSubAgentRuntimeInvocation,
+) => readonly string[];
 
 export type PawProviderSubAgentRegistryResolverInput = {
 	modelRegistry: PawProviderSubAgentModelRegistry;
 	defaultProvider?: string;
 	defaultOptions?: SimpleStreamOptions;
 	modelIdResolver?: PawProviderSubAgentModelIdResolver;
+	fallbackModelIdResolver?: PawProviderSubAgentFallbackModelIdResolver;
 };
 
 export type PawProviderSubAgentRuntimeExecutorInput = PawProviderSubAgentRegistryResolverInput & {
@@ -130,7 +136,7 @@ type PawSubAgentRuntimeExecutorMetadata = {
 
 export function createPawProviderSubAgentExecutor(input: PawProviderSubAgentExecutorInput): PawSubAgentRuntimeExecutor {
 	return async (invocation) => {
-		const completionInput = createPawProviderSubAgentCompletionInput(invocation);
+		const completionInput = createPawProviderSubAgentCompletionInput(invocation, input.fallbackModelIdResolver);
 		if (completionInput === undefined) {
 			return createProviderUnavailableExecutorResult(invocation, null, "No Paw sub-agent model was selected.");
 		}
@@ -152,23 +158,16 @@ export function createPawCompleteSimpleSubAgentCompletion(
 	input: PawProviderSubAgentCompleteSimpleInput,
 ): PawProviderSubAgentCompletion {
 	return async (completionInput) => {
-		const resolved = await input.resolveModel(completionInput);
-		try {
-			const message = await (input.completeSimple ?? completeSimple)(
-				resolved.model,
-				createPawProviderSubAgentContext(completionInput.prompt),
-				resolved.options,
-			);
-			if (message.stopReason === "error" || message.stopReason === "aborted") {
-				throw new Error(message.errorMessage ?? `provider stopped with ${message.stopReason}`);
+		const attempts = createPawProviderCompletionAttempts(completionInput);
+		let lastError: unknown;
+		for (const attempt of attempts) {
+			try {
+				return await completePawProviderSubAgentAttempt(input, completionInput, attempt.model_id, attempt.degraded);
+			} catch (error) {
+				lastError = error;
 			}
-			return {
-				text: extractAssistantText(message),
-				model_id: message.responseModel ?? message.model ?? resolved.model.id,
-			};
-		} catch (error) {
-			throw new Error(`Paw sub-agent provider completion failed: ${getErrorMessage(error)}`);
 		}
+		throw new Error(`Paw sub-agent provider completion failed: ${getErrorMessage(lastError)}`);
 	};
 }
 
@@ -206,6 +205,7 @@ export function createPawProviderSubAgentRuntimeExecutor(
 			resolveModel: createPawModelRegistrySubAgentResolver(input),
 			completeSimple: input.completeSimple,
 		}),
+		fallbackModelIdResolver: input.fallbackModelIdResolver,
 	});
 }
 
@@ -266,8 +266,51 @@ function mergePawProviderSubAgentOptions(
 	};
 }
 
+type PawProviderCompletionAttempt = {
+	model_id: string;
+	degraded?: PawSubAgentRuntimeDegradedMetadata | null;
+};
+
+function createPawProviderCompletionAttempts(
+	completionInput: PawProviderSubAgentCompletionInput,
+): PawProviderCompletionAttempt[] {
+	return [
+		{ model_id: completionInput.model_id },
+		...(completionInput.fallback_model_ids ?? []).map((modelId) => ({
+			model_id: modelId,
+			degraded: {
+				reason: "provider_failover",
+				details: `Failed over from ${completionInput.model_id} to ${modelId}.`,
+			},
+		})),
+	];
+}
+
+async function completePawProviderSubAgentAttempt(
+	input: PawProviderSubAgentCompleteSimpleInput,
+	completionInput: PawProviderSubAgentCompletionInput,
+	modelId: string,
+	degraded: PawSubAgentRuntimeDegradedMetadata | null | undefined,
+): Promise<PawProviderSubAgentCompletionResult> {
+	const resolved = await input.resolveModel({ ...completionInput, model_id: modelId });
+	const message = await (input.completeSimple ?? completeSimple)(
+		resolved.model,
+		createPawProviderSubAgentContext(completionInput.prompt),
+		resolved.options,
+	);
+	if (message.stopReason === "error" || message.stopReason === "aborted") {
+		throw new Error(message.errorMessage ?? `provider stopped with ${message.stopReason}`);
+	}
+	return {
+		text: extractAssistantText(message),
+		model_id: message.responseModel ?? message.model ?? resolved.model.id,
+		degraded,
+	};
+}
+
 function createPawProviderSubAgentCompletionInput(
 	invocation: PawSubAgentRuntimeInvocation,
+	fallbackModelIdResolver: PawProviderSubAgentFallbackModelIdResolver | undefined,
 ): PawProviderSubAgentCompletionInput | undefined {
 	const modelId = invocation.model_id ?? null;
 	if (modelId === null || modelId.trim().length === 0) {
@@ -277,6 +320,7 @@ function createPawProviderSubAgentCompletionInput(
 	return {
 		invocation,
 		model_id: modelId,
+		fallback_model_ids: fallbackModelIdResolver?.(invocation),
 		prompt: createPawProviderSubAgentPrompt(invocation),
 	};
 }

@@ -472,6 +472,38 @@ describe("createPawCompleteSimpleSubAgentCompletion", () => {
 		expect(result).toEqual({ text: JSON.stringify(output), model_id: "response-model" });
 	});
 
+	test("tries failover models after a provider completion failure", async () => {
+		const output = createPawSubAgentOutput("worker", { model_used: "fallback-model" });
+		const seenModels: string[] = [];
+		const completion = createPawCompleteSimpleSubAgentCompletion({
+			resolveModel: (input) => ({ model: createModel({ id: input.model_id }), options: { maxTokens: 123 } }),
+			completeSimple: async (model) => {
+				seenModels.push(model.id);
+				if (model.id !== "fallback-model") {
+					throw new Error("primary provider unavailable");
+				}
+				return createAssistantMessage(JSON.stringify(output), { model: model.id });
+			},
+		});
+
+		const result = await completion({
+			invocation: createInvocation({ model_id: "primary-model" }),
+			model_id: "primary-model",
+			fallback_model_ids: ["fallback-model"],
+			prompt: { systemPrompt: "system", userPrompt: "user" },
+		});
+
+		expect(seenModels).toEqual(["primary-model", "fallback-model"]);
+		expect(result).toEqual({
+			text: JSON.stringify(output),
+			model_id: "fallback-model",
+			degraded: {
+				reason: "provider_failover",
+				details: "Failed over from primary-model to fallback-model.",
+			},
+		});
+	});
+
 	test("joins multiple assistant text blocks and ignores non-text blocks", async () => {
 		const completion = createPawCompleteSimpleSubAgentCompletion({
 			resolveModel: () => ({ model: createModel({ id: "resolved-model" }) }),

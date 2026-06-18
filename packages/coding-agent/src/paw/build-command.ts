@@ -4,7 +4,7 @@ import { ModelRegistry } from "../core/model-registry.ts";
 import { loadDefaultPawRuntimeConfig } from "./config.ts";
 import type { PawRuntimeConfig, PawValidationIssue } from "./contracts.ts";
 import { emitPawFinalReport } from "./final-report-emission.ts";
-import { resolvePawModelRoute } from "./model-routing.ts";
+import { getPawFailoverRoutes, resolvePawModelRoute } from "./model-routing.ts";
 import type { PawVerifyGateDecision } from "./resilience-policy.ts";
 import { type PawReviewerOnceResult, runPawReviewerOnce } from "./reviewer-orchestrator.ts";
 import { acquirePawSessionLock, readPawSessionState, releasePawSessionLock } from "./session-store.ts";
@@ -545,12 +545,18 @@ function resolvePawBuildSubAgentExecutor(
 		return commandInput.executor;
 	}
 	if (commandInput.providerExecutor !== undefined) {
-		return createPawProviderSubAgentRuntimeExecutor(commandInput.providerExecutor);
+		return createPawProviderSubAgentRuntimeExecutor({
+			...commandInput.providerExecutor,
+			fallbackModelIdResolver:
+				commandInput.providerExecutor.fallbackModelIdResolver ??
+				((invocation) => resolveDefaultPawBuildFallbackModelIds(config, invocation)),
+		});
 	}
 	return createPawProviderSubAgentRuntimeExecutor({
 		modelRegistry: ModelRegistry.create(AuthStorage.create()),
 		defaultProvider: "primary",
 		modelIdResolver: (invocation) => resolveDefaultPawBuildModelId(config, invocation),
+		fallbackModelIdResolver: (invocation) => resolveDefaultPawBuildFallbackModelIds(config, invocation),
 	});
 }
 
@@ -558,6 +564,15 @@ function resolveDefaultPawBuildModelId(config: PawRuntimeConfig, invocation: Paw
 	const role = invocation.role === "reviewer" ? "reviewer" : "worker_simple";
 	const route = resolvePawModelRoute(config, role, "standard");
 	return `${route.providerName}/${route.model}`;
+}
+
+function resolveDefaultPawBuildFallbackModelIds(
+	config: PawRuntimeConfig,
+	invocation: PawSubAgentRuntimeInvocation,
+): string[] {
+	const role = invocation.role === "reviewer" ? "reviewer" : "worker_simple";
+	const route = resolvePawModelRoute(config, role, "standard");
+	return getPawFailoverRoutes(config).map((failoverRoute) => `${failoverRoute.providerName}/${route.model}`);
 }
 
 function resolvePawBuildNativeVerificationExecutor(
