@@ -1,4 +1,3 @@
-
 /**
  * Shutdown Command Extension
  *

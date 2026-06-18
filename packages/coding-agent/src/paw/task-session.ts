@@ -1,4 +1,3 @@
-
 import { hostname } from "node:os";
 import { loadDefaultPawRuntimeConfig } from "./config.ts";
 import type { PawRuntimeConfig, PawValidationIssue } from "./contracts.ts";

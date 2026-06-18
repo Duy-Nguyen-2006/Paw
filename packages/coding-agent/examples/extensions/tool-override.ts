@@ -1,4 +1,3 @@
-
 /**
  * Tool Override Example - Demonstrates overriding built-in tools
  *

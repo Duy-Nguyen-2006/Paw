@@ -1,4 +1,3 @@
-
 /**
  * Resolve configuration values that may be shell commands, environment variables, or literals.
  * Used by auth-storage.ts and model-registry.ts.

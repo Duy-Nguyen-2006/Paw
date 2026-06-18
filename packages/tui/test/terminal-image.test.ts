@@ -1,4 +1,3 @@
-
 /**
  * Tests for terminal image detection and line handling
  */

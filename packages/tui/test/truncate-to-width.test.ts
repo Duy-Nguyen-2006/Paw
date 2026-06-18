@@ -1,4 +1,3 @@
-
 import assert from "node:assert";
 import { describe, it } from "node:test";
 import { normalizeTerminalOutput, truncateToWidth, visibleWidth } from "../src/utils.ts";

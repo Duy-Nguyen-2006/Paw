@@ -1,4 +1,3 @@
-
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
 

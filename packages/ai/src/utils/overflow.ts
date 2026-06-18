@@ -1,4 +1,3 @@
-
 import type { AssistantMessage } from "../types.ts";
 
 /**

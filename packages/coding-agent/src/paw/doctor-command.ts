@@ -1,4 +1,3 @@
-
 import { accessSync, constants, existsSync, readFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { APP_NAME } from "../config.ts";

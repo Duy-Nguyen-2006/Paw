@@ -1,4 +1,3 @@
-
 /**
  * Inline Bash Extension - expands inline bash commands in user prompts.
  *

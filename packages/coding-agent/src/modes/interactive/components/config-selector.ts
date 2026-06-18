@@ -1,4 +1,3 @@
-
 /**
  * TUI component for managing package resources (enable/disable)
  */

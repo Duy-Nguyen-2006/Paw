@@ -1,4 +1,3 @@
-
 /**
  * Custom Header Extension
  *

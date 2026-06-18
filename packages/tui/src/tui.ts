@@ -1,4 +1,3 @@
-
 /**
  * Minimal TUI implementation with differential rendering
  */

@@ -1,4 +1,3 @@
-
 import type { PawValidationIssue, PawValidationResult } from "./contracts.ts";
 
 export type PawRetentionConfig = {

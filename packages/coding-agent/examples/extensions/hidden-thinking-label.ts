@@ -1,4 +1,3 @@
-
 /**
  * Hidden Thinking Label Extension
  *

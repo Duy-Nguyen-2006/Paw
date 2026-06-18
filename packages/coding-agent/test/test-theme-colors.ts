@@ -1,4 +1,3 @@
-
 import fs from "node:fs";
 import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
 

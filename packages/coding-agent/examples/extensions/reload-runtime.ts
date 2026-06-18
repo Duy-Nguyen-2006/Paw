@@ -1,4 +1,3 @@
-
 /**
  * Reload Runtime Extension
  *

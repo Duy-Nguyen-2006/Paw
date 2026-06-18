@@ -1,4 +1,3 @@
-
 import { Mistral } from "@mistralai/mistralai";
 import type {
 	ChatCompletionStreamRequest,

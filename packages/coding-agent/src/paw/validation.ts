@@ -1,4 +1,3 @@
-
 import type { TLocalizedValidationError } from "typebox/error";
 import type { PawValidationIssue } from "./contracts.ts";
 

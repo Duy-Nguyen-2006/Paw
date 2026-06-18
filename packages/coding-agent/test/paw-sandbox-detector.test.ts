@@ -1,4 +1,3 @@
-
 import { describe, expect, test } from "vitest";
 import { detectPawSandboxPrimitives, evaluatePawSandbox, loadDefaultPawRuntimeConfig } from "../src/paw/index.ts";
 

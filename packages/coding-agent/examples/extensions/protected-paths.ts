@@ -1,4 +1,3 @@
-
 /**
  * Protected Paths Extension
  *

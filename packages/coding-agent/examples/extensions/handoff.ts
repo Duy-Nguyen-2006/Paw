@@ -1,4 +1,3 @@
-
 /**
  * Handoff extension - transfer context to a new focused session
  *

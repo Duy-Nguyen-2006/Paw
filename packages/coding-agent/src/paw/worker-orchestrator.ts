@@ -1,4 +1,3 @@
-
 import { stat } from "node:fs/promises";
 import { relative } from "node:path";
 import { getPawSubAgentHandoffCap } from "./context-budget.ts";

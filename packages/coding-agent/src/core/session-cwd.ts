@@ -1,4 +1,3 @@
-
 import { existsSync } from "node:fs";
 
 export interface SessionCwdIssue {

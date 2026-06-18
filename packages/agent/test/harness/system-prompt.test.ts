@@ -1,4 +1,3 @@
-
 import { describe, expect, it } from "vitest";
 import { formatSkillsForSystemPrompt } from "../../src/harness/system-prompt.ts";
 

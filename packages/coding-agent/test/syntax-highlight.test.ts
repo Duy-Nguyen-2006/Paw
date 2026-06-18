@@ -1,4 +1,3 @@
-
 import { resetCapabilitiesCache, setCapabilities } from "@earendil-works/pi-tui";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { highlightCode, initTheme } from "../src/modes/interactive/theme/theme.ts";

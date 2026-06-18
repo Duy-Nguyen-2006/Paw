@@ -1,4 +1,3 @@
-
 import { describe, expect, it } from "vitest";
 import { getModel } from "../src/models.ts";
 import { type BedrockOptions, streamBedrock } from "../src/providers/amazon-bedrock.ts";

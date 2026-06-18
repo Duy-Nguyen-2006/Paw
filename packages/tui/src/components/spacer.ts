@@ -1,4 +1,3 @@
-
 import type { Component } from "../tui.ts";
 
 /**

@@ -1,4 +1,3 @@
-
 /**
  * DOOM Overlay Demo - Play DOOM as an overlay
  *

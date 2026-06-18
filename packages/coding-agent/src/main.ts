@@ -1,4 +1,3 @@
-
 /**
  * Main entry point for the coding agent CLI.
  *

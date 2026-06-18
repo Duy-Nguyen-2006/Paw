@@ -1,4 +1,3 @@
-
 /**
  * Custom message rendering example.
  *

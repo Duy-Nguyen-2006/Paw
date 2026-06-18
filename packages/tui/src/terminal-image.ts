@@ -1,4 +1,3 @@
-
 import { execSync } from "node:child_process";
 
 export type ImageProtocol = "kitty" | "iterm2" | null;

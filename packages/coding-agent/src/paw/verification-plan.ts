@@ -1,4 +1,3 @@
-
 export type PawNativeVerificationGateStatus = "planned" | "unsupported";
 
 export type PawNativeVerificationPlanEntry =

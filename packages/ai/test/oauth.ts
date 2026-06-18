@@ -1,4 +1,3 @@
-
 /**
  * Test helper for resolving API keys from ~/.pi/agent/auth.json
  *

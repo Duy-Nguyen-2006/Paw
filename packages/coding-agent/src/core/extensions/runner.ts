@@ -1,4 +1,3 @@
-
 /**
  * Extension runner - executes extensions and manages their lifecycle.
  */

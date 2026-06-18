@@ -1,4 +1,3 @@
-
 import { describe, expect, it } from "vitest";
 import { convertMessages } from "../src/providers/google-shared.ts";
 import type { Context, Model } from "../src/types.ts";

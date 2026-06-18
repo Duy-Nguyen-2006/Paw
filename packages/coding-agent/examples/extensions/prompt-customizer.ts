@@ -1,4 +1,3 @@
-
 /**
  * Prompt Customizer Extension
  *

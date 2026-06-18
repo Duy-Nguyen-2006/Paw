@@ -1,4 +1,3 @@
-
 import { EventEmitter } from "node:events";
 import { mkdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

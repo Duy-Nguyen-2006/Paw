@@ -1,4 +1,3 @@
-
 import { type RgbColor, resetCapabilitiesCache, setCapabilities } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it } from "vitest";
 import {

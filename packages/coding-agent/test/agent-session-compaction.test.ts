@@ -1,4 +1,3 @@
-
 /**
  * E2E tests for AgentSession compaction behavior.
  *

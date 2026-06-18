@@ -1,4 +1,3 @@
-
 import { describe, expect, it } from "vitest";
 import { isThinkingPart, retainThoughtSignature } from "../src/providers/google-shared.ts";
 

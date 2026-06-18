@@ -1,4 +1,3 @@
-
 import { Worker } from "node:worker_threads";
 import { type ImageResizeOptions, type ResizedImage, resizeImageInProcess } from "./image-resize-core.ts";
 

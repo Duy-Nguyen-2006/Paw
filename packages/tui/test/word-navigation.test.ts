@@ -1,4 +1,3 @@
-
 import assert from "node:assert";
 import { describe, it } from "node:test";
 import { findWordBackward, findWordForward } from "../src/word-navigation.ts";

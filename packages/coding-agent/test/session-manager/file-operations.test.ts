@@ -1,4 +1,3 @@
-
 import { constants as bufferConstants } from "node:buffer";
 import {
 	appendFileSync,

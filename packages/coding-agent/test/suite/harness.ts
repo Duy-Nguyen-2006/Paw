@@ -1,4 +1,3 @@
-
 /**
  * Local test harness for the new coding-agent test suite.
  */

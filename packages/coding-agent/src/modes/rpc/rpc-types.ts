@@ -1,4 +1,3 @@
-
 /**
  * RPC protocol types for headless operation.
  *

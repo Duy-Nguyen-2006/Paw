@@ -1,4 +1,3 @@
-
 import type { PawNativeVerificationPlanEntry } from "./verification-plan.ts";
 import type {
 	PawNativeVerificationExecutor,

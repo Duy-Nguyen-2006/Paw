@@ -1,4 +1,3 @@
-
 /**
  * Minimal Mode Example - Demonstrates a "minimal" tool display mode
  *

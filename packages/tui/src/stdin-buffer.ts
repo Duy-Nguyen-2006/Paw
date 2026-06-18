@@ -1,4 +1,3 @@
-
 /**
  * StdinBuffer buffers input and emits complete sequences.
  *

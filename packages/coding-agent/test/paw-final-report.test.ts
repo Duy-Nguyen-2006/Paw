@@ -1,4 +1,3 @@
-
 import { describe, expect, test } from "vitest";
 import type { PawNativeVerificationRunResult } from "../src/paw/index.ts";
 import {

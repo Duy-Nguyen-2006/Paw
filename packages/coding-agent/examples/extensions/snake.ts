@@ -1,4 +1,3 @@
-
 /**
  * Snake game extension - play snake with /snake command
  */

@@ -1,4 +1,3 @@
-
 import { type FSWatcher, type WatchListener, watch } from "node:fs";
 
 export const FS_WATCH_RETRY_DELAY_MS = 5000;

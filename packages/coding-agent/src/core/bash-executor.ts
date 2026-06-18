@@ -1,4 +1,3 @@
-
 /**
  * Bash command execution with streaming support and cancellation.
  *

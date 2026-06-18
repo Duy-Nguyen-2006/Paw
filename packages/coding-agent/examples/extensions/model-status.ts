@@ -1,4 +1,3 @@
-
 /**
  * Model status extension - shows model changes in the status bar.
  *

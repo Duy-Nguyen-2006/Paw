@@ -1,4 +1,3 @@
-
 /**
  * Context compaction for long sessions.
  *

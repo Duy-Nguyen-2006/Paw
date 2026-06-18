@@ -1,4 +1,3 @@
-
 import type { Api, Model } from "../types.ts";
 
 /** Workers AI direct endpoint. */

@@ -1,4 +1,3 @@
-
 /**
  * Removes unpaired Unicode surrogate characters from a string.
  *

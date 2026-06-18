@@ -1,4 +1,3 @@
-
 /**
  * Tool wrappers for extension-registered tools.
  *

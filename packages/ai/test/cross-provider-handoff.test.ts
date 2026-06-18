@@ -1,4 +1,3 @@
-
 /**
  * Cross-Provider Handoff Test
  *

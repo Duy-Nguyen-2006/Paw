@@ -1,4 +1,3 @@
-
 /**
  * Tests for ExtensionRunner - conflict detection, error handling, tool wrapping.
  */

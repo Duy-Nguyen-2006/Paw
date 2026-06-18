@@ -1,4 +1,3 @@
-
 import { relative } from "node:path";
 import { APP_NAME } from "../config.ts";
 import { runPawBuildCommand } from "./build-command.ts";

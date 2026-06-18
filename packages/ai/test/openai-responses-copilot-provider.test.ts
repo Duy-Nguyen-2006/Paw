@@ -1,4 +1,3 @@
-
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getModel } from "../src/models.ts";
 import { streamOpenAIResponses } from "../src/providers/openai-responses.ts";

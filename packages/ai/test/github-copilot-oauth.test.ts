@@ -1,4 +1,3 @@
-
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loginGitHubCopilot } from "../src/utils/oauth/github-copilot.ts";
 

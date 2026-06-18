@@ -1,4 +1,3 @@
-
 /**
  * Session naming example.
  *

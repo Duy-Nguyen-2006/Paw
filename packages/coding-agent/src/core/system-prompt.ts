@@ -1,4 +1,3 @@
-
 /**
  * System prompt construction and project context loading
  */

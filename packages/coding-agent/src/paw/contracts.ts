@@ -1,4 +1,3 @@
-
 import { type Static, Type } from "typebox";
 
 export type PawValidationIssue = {

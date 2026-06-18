@@ -1,4 +1,3 @@
-
 /**
  * Tests for keyboard input handling
  */

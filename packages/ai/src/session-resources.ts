@@ -1,4 +1,3 @@
-
 export type SessionResourceCleanup = (sessionId?: string) => void;
 
 const sessionResourceCleanups = new Set<SessionResourceCleanup>();

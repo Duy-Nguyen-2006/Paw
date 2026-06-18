@@ -1,4 +1,3 @@
-
 import { readdir as fsReaddir, stat as fsStat } from "node:fs/promises";
 import nodePath from "node:path";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";

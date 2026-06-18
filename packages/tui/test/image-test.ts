@@ -1,4 +1,3 @@
-
 import { readFileSync } from "node:fs";
 import { Image } from "../src/components/image.ts";
 import { Spacer } from "../src/components/spacer.ts";

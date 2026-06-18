@@ -1,4 +1,3 @@
-
 /**
  * Reusable countdown timer for dialog components.
  */

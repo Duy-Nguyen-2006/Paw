@@ -1,4 +1,3 @@
-
 import type { Api, Model } from "../../types.ts";
 
 export type OAuthCredentials = {

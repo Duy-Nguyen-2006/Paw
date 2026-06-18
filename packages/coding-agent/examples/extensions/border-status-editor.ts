@@ -1,4 +1,3 @@
-
 import {
 	CustomEditor,
 	type ExtensionAPI,

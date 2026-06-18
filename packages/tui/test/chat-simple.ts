@@ -1,4 +1,3 @@
-
 /**
  * Simple chat interface demo using tui.ts
  */

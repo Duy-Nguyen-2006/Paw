@@ -1,4 +1,3 @@
-
 export interface RgbColor {
 	r: number;
 	g: number;

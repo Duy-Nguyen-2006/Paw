@@ -1,4 +1,3 @@
-
 /**
  * Context Files (AGENTS.md)
  *

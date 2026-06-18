@@ -1,4 +1,3 @@
-
 /**
  * Custom Footer Extension - demonstrates ctx.ui.setFooter()
  *

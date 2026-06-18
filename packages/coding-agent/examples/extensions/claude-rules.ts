@@ -1,4 +1,3 @@
-
 /**
  * Claude Rules Extension
  *

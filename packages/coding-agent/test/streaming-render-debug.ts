@@ -1,4 +1,3 @@
-
 /**
  * Debug script to reproduce streaming rendering issues.
  * Uses real fixture data that caused the bug.

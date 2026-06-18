@@ -1,4 +1,3 @@
-
 import { afterEach, describe, expect, it } from "vitest";
 import type { ExtensionAPI } from "../../../src/index.ts";
 import { createHarness, type Harness } from "../harness.ts";

@@ -1,4 +1,3 @@
-
 /**
  * Tests for compaction extension events (before_compact / compact).
  */

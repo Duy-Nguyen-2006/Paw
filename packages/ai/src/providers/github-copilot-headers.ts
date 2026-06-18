@@ -1,4 +1,3 @@
-
 import type { Message } from "../types.ts";
 
 // Copilot expects X-Initiator to indicate whether the request is user-initiated

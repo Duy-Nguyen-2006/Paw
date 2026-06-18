@@ -1,4 +1,3 @@
-
 /**
  * Streaming-Aware Input Gate
  *

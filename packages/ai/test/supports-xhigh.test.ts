@@ -1,4 +1,3 @@
-
 import { describe, expect, it } from "vitest";
 import { getModel, getSupportedThinkingLevels } from "../src/models.ts";
 

@@ -1,4 +1,3 @@
-
 import type { PawSubAgentOutput, PawSubAgentRole, PawValidationIssue } from "./contracts.ts";
 import { parsePawSubAgentOutputJson, validatePawSubAgentOutput } from "./subagent.ts";
 

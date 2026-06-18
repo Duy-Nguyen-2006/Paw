@@ -1,4 +1,3 @@
-
 import { hostname } from "node:os";
 import type { PawValidationIssue } from "./contracts.ts";
 import type { PawVerifyGateDecision } from "./resilience-policy.ts";

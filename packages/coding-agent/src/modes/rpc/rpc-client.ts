@@ -1,4 +1,3 @@
-
 /**
  * RPC Client for programmatic access to the coding agent.
  *

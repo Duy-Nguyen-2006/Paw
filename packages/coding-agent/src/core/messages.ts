@@ -1,4 +1,3 @@
-
 /**
  * Custom message types and transformers for the coding agent.
  *

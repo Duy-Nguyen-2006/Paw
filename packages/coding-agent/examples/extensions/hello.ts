@@ -1,4 +1,3 @@
-
 /**
  * Hello Tool - Minimal custom tool example
  */

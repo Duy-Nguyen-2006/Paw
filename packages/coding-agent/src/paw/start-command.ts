@@ -1,4 +1,3 @@
-
 import { APP_NAME } from "../config.ts";
 import {
 	type PawSessionLock,

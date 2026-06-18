@@ -1,4 +1,3 @@
-
 /*
  * Portions of this file are derived from:
  * - ansi-regex (https://github.com/chalk/ansi-regex)

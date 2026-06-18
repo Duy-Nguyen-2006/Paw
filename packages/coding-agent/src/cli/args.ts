@@ -1,4 +1,3 @@
-
 /**
  * CLI argument parsing and help display
  */

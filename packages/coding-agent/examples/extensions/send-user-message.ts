@@ -1,4 +1,3 @@
-
 /**
  * Send User Message Example
  *

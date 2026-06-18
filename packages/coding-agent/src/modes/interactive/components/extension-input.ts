@@ -1,4 +1,3 @@
-
 /**
  * Simple text input component for extensions.
  */

@@ -1,4 +1,3 @@
-
 import type { PawValidationIssue } from "./contracts.ts";
 
 export type PawScoutBenchmarkCommandName = "ripgrep" | "ctags" | "git";

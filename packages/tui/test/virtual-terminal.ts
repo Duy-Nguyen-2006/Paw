@@ -1,4 +1,3 @@
-
 import type { Terminal as XtermTerminalType } from "@xterm/headless";
 import xterm from "@xterm/headless";
 import type { Terminal } from "../src/terminal.ts";

@@ -1,4 +1,3 @@
-
 export interface DiagnosticErrorInfo {
 	name?: string;
 	message: string;

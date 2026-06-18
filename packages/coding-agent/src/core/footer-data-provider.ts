@@ -1,4 +1,3 @@
-
 import { type ExecFileException, execFile, spawnSync } from "node:child_process";
 import { existsSync, type FSWatcher, readFileSync, type Stats, statSync, unwatchFile, watchFile } from "node:fs";
 import { dirname, join, resolve } from "node:path";

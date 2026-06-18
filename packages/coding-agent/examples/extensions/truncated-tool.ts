@@ -1,4 +1,3 @@
-
 /**
  * Truncated Tool Example - Demonstrates proper output truncation for custom tools
  *

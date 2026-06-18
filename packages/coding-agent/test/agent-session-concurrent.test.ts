@@ -1,4 +1,3 @@
-
 /**
  * Tests for AgentSession concurrent prompt guard.
  */

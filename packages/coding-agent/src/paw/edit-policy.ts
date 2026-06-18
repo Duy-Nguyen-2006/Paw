@@ -1,4 +1,3 @@
-
 import type { PawRuntimeConfig } from "./contracts.ts";
 
 export type PawEditPolicyConfig = PawRuntimeConfig["edit"];

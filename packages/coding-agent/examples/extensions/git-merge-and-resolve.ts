@@ -1,4 +1,3 @@
-
 /**
  * Merge and Resolve
  *

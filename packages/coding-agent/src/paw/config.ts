@@ -1,4 +1,3 @@
-
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { Compile } from "typebox/compile";

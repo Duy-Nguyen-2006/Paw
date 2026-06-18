@@ -1,4 +1,3 @@
-
 import { describe, expect, it } from "vitest";
 import type { AssistantMessage } from "../src/types.ts";
 import { isContextOverflow } from "../src/utils/overflow.ts";

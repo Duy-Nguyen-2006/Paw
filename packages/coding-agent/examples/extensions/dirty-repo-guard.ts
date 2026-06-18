@@ -1,4 +1,3 @@
-
 /**
  * Dirty Repo Guard Extension
  *

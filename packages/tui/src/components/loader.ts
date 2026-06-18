@@ -1,4 +1,3 @@
-
 import type { TUI } from "../tui.ts";
 import { Text } from "./text.ts";
 

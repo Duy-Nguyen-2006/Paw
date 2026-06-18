@@ -1,4 +1,3 @@
-
 /**
  * Status Line Extension
  *

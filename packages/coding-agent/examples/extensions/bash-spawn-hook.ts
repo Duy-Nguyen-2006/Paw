@@ -1,4 +1,3 @@
-
 /**
  * Bash Spawn Hook Example
  *

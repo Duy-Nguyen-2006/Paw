@@ -1,4 +1,3 @@
-
 import {
 	type AssistantMessage,
 	type FauxProviderRegistration,

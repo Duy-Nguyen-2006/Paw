@@ -1,4 +1,3 @@
-
 import { Readable } from "node:stream";
 import { describe, expect, test } from "vitest";
 import { attachJsonlLineReader, serializeJsonLine } from "../src/modes/rpc/jsonl.ts";

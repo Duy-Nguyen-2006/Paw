@@ -1,4 +1,3 @@
-
 /**
  * Entry bookmarking example.
  *

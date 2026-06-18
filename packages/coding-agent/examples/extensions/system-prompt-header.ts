@@ -1,4 +1,3 @@
-
 /**
  * Displays a status widget showing the system prompt length.
  *

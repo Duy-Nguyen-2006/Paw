@@ -1,4 +1,3 @@
-
 import { describe, expect, it } from "vitest";
 import { formatPromptTemplateInvocation } from "../../src/harness/prompt-templates.ts";
 import { formatSkillInvocation } from "../../src/harness/skills.ts";

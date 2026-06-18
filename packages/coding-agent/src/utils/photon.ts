@@ -1,4 +1,3 @@
-
 /**
  * Photon image processing wrapper.
  *

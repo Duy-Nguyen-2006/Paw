@@ -1,4 +1,3 @@
-
 import type { Dirent } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
 import { join, relative } from "node:path";

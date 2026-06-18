@@ -1,4 +1,3 @@
-
 /**
  * Test that BashExecutionComponent's collapsed output respects the render-time width,
  * not a stale captured width. Regression test for #2569.

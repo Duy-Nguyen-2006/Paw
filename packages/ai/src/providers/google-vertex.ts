@@ -1,4 +1,3 @@
-
 import {
 	type GenerateContentConfig,
 	type GenerateContentParameters,

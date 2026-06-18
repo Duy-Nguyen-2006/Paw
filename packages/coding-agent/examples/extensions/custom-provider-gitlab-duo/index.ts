@@ -1,4 +1,3 @@
-
 /**
  * GitLab Duo Provider Extension
  *

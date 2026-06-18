@@ -1,4 +1,3 @@
-
 import { describe, expect, test } from "vitest";
 import { type ChangelogEntry, normalizeChangelogLinks } from "../src/utils/changelog.ts";
 

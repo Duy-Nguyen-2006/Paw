@@ -1,4 +1,3 @@
-
 /**
  * Interactive Shell Commands Extension
  *

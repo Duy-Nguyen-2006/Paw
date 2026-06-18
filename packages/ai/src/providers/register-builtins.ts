@@ -1,4 +1,3 @@
-
 import { clearApiProviders, registerApiProvider } from "../api-registry.ts";
 import type {
 	Api,

@@ -1,4 +1,3 @@
-
 import { describe, expect, it, vi } from "vitest";
 
 const readFileSync = vi.fn();

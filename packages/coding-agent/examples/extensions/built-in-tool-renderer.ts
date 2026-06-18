@@ -1,4 +1,3 @@
-
 /**
  * Built-in Tool Renderer Example - Custom rendering for built-in tools
  *

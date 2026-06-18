@@ -1,4 +1,3 @@
-
 /**
  * Test harness for AgentSession runtime testing.
  *

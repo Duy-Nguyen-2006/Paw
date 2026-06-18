@@ -1,4 +1,3 @@
-
 /**
  * OAuth credential management for AI providers.
  *

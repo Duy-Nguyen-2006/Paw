@@ -1,4 +1,3 @@
-
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import type { AgentState } from "@earendil-works/pi-agent-core";

@@ -1,4 +1,3 @@
-
 import { describe, expect, it } from "vitest";
 import { type LabelEntry, SessionManager } from "../../src/core/session-manager.ts";
 

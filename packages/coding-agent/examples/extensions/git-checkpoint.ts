@@ -1,4 +1,3 @@
-
 /**
  * Git Checkpoint Extension
  *

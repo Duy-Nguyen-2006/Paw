@@ -1,4 +1,3 @@
-
 import { describe, expect, test } from "vitest";
 import { calculatePawActiveTime, loadDefaultPawRuntimeConfig } from "../src/paw/index.ts";
 

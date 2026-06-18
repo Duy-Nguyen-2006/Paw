@@ -1,4 +1,3 @@
-
 import { hostname } from "node:os";
 import type { PawValidationIssue, PawValidationResult } from "./contracts.ts";
 import type { PawSessionLock, PawSessionLockOptions, PawSessionLockStaleReason } from "./session-store.ts";

@@ -1,4 +1,3 @@
-
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { PawSubAgentRole } from "./contracts.ts";

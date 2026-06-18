@@ -1,4 +1,3 @@
-
 import { describe, expect, it } from "vitest";
 import { transformMessages } from "../src/providers/transform-messages.ts";
 import type { AssistantMessage, Message, Model, ToolCall } from "../src/types.ts";

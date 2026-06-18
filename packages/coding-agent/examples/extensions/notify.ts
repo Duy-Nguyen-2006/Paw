@@ -1,4 +1,3 @@
-
 /**
  * Pi Notify Extension
  *

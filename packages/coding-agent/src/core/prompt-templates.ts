@@ -1,4 +1,3 @@
-
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { CONFIG_DIR_NAME } from "../config.ts";

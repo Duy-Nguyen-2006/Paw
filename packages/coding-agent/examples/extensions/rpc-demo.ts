@@ -1,4 +1,3 @@
-
 /**
  * RPC Extension UI Demo
  *

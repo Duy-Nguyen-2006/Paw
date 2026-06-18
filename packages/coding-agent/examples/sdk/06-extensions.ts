@@ -1,4 +1,3 @@
-
 /**
  * Extensions Configuration
  *

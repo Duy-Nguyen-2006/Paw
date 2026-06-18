@@ -1,4 +1,3 @@
-
 /**
  * Tool HTML renderer for custom tools in HTML export.
  *

@@ -1,4 +1,3 @@
-
 /**
  * Agent discovery and configuration
  */

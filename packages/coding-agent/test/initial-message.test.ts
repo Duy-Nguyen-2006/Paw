@@ -1,4 +1,3 @@
-
 import { describe, expect, test } from "vitest";
 import type { Args } from "../src/cli/args.ts";
 import { buildInitialMessage } from "../src/cli/initial-message.ts";

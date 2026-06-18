@@ -1,4 +1,3 @@
-
 /**
  * Permission Gate Extension
  *

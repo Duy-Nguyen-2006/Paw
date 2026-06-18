@@ -1,4 +1,3 @@
-
 /**
  * Shared utilities for compaction and branch summarization.
  */

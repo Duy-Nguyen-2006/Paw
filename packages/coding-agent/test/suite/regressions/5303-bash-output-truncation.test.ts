@@ -1,4 +1,3 @@
-
 import type { ChildProcessByStdio } from "node:child_process";
 import type { Readable } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";

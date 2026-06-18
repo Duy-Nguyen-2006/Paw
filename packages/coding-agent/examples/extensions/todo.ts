@@ -1,4 +1,3 @@
-
 /**
  * Todo Extension - Demonstrates state management via session entries
  *

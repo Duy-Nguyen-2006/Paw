@@ -1,4 +1,3 @@
-
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import type { Tool, ToolCall } from "../src/types.ts";
