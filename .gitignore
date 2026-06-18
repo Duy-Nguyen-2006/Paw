@@ -24,6 +24,7 @@ coverage/
 .scannerwork/
 harness.db
 .repomix/
+test_reports/
 
 # --- generated review packs ---
 docs/repomix-senior-review*.md
