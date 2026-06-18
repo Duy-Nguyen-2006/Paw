@@ -1,3 +1,4 @@
+
 # Harness Maturity Ladder
 
 This ladder defines how `repository-harness` should progress from static

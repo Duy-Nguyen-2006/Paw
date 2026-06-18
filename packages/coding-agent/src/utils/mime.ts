@@ -1,3 +1,4 @@
+
 import { open } from "node:fs/promises";
 
 const IMAGE_TYPE_SNIFF_BYTES = 4100;

@@ -1,3 +1,4 @@
+
 # 0003 Generic Spec Intake Harness
 
 Date: 2026-05-05

@@ -1,3 +1,4 @@
+
 #!/usr/bin/env node
 /**
  * Fix S4325 (unnecessary `as` and `!` non-null assertions).

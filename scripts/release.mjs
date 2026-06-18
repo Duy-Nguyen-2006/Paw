@@ -1,3 +1,4 @@
+
 #!/usr/bin/env node
 /**
  * Release script for pi-mono

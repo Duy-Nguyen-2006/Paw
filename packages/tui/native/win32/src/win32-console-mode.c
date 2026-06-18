@@ -1,3 +1,4 @@
+
 #include <windows.h>
 
 #ifndef ENABLE_VIRTUAL_TERMINAL_INPUT

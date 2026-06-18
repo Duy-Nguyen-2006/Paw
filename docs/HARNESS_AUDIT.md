@@ -1,3 +1,4 @@
+
 # Harness Audit
 
 `scripts/bin/harness-cli audit` detects drift in durable Harness state and

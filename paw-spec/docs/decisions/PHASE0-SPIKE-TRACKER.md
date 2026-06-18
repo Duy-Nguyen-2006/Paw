@@ -1,3 +1,4 @@
+
 # Paw v0.4 — Phase 0 Spike Tracker (kill-criteria gates)
 
 Use this to record P0 spike outcomes before Gate G0 closes. A spike must end in PASS or KILL with

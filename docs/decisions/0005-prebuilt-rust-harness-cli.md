@@ -1,3 +1,4 @@
+
 # 0005 Prebuilt Rust Harness CLI
 
 Date: 2026-05-23

@@ -1,3 +1,4 @@
+
 # ADR-10: Cost control
 
 - **Status:** Accepted

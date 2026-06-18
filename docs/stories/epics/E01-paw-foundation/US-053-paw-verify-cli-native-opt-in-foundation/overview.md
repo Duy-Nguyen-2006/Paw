@@ -1,3 +1,4 @@
+
 # US-053: Paw Verify CLI Native Execution Opt-in Foundation
 
 ## Summary

@@ -1,3 +1,4 @@
+
 #!/usr/bin/env bash
 #
 # Migrate sessions from ~/.pi/agent/*.jsonl to proper session directories.

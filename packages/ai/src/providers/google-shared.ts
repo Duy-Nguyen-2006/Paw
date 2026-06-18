@@ -1,3 +1,4 @@
+
 /**
  * Shared utilities for Google Generative AI and Google Vertex providers.
  */

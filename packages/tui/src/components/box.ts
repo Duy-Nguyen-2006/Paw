@@ -1,3 +1,4 @@
+
 import type { Component } from "../tui.ts";
 import { applyBackgroundToLine, visibleWidth } from "../utils.ts";
 

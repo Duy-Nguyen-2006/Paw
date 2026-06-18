@@ -1,3 +1,4 @@
+
 import { join } from "node:path";
 import { getDocsPath } from "../config.ts";
 

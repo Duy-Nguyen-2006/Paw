@@ -1,3 +1,4 @@
+
 # Execution Plan
 
 1. Implement `verifier-blocked-command.ts` mirroring `verifier-result-command.ts` lock-before-domain-call

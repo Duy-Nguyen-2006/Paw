@@ -1,3 +1,4 @@
+
 -- Harness v0 schema - migration 004
 -- Review, human, CI, or agent interventions separated from normal traces.
 

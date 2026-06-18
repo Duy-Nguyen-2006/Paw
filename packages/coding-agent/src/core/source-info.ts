@@ -1,3 +1,4 @@
+
 import type { PathMetadata } from "./package-manager.ts";
 
 export type SourceScope = "user" | "project" | "temporary";

@@ -1,3 +1,4 @@
+
 ---
 name: Invalid_Name
 description: A skill with invalid characters in the name.

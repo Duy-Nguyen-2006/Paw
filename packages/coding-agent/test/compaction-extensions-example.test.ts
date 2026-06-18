@@ -1,3 +1,4 @@
+
 /**
  * Verify the documentation example from extensions.md compiles and works.
  */

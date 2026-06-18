@@ -1,3 +1,4 @@
+
 import assert from "node:assert";
 import { describe, it, mock } from "node:test";
 import { setKittyProtocolActive } from "../src/keys.ts";

@@ -1,3 +1,4 @@
+
 ---
 name: dynamic-resources
 description: Example skill loaded from resources_discover

@@ -1,3 +1,4 @@
+
 # Paw — default runtime configuration (v0.4 FINAL)
 # Single source of runtime defaults. Numbers are adaptive starting defaults
 # tuned by the eval harness (SPEC §19). Model names are NEVER hardcoded in code;

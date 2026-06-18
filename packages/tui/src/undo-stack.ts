@@ -1,3 +1,4 @@
+
 /**
  * Generic undo stack with clone-on-push semantics.
  *

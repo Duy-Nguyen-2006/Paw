@@ -1,3 +1,4 @@
+
 /**
  * E2E tests for AgentSession tree navigation with branch summarization.
  *

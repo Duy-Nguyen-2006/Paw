@@ -1,3 +1,4 @@
+
 {
 	"name": "pi-monorepo",
 	"private": true,
@@ -12,6 +13,7 @@
 	],
 	"scripts": {
 		"clean": "npm run clean --workspaces",
+		"node22": "node -e \"const a=process.argv.slice(1); require('child_process').spawnSync('npx',['-y','node@22.19.0',...a],{stdio:'inherit',shell:process.platform==='win32'});\"",
 		"build": "cd packages/tui && npm run build && cd ../ai && npm run build && cd ../agent && npm run build && cd ../coding-agent && npm run build",
 		"check": "biome check --write --error-on-warnings . && npm run check:pinned-deps && npm run check:ts-imports && npm run check:shrinkwrap && tsgo --noEmit && npm run check:browser-smoke",
 		"check:browser-smoke": "node scripts/check-browser-smoke.mjs",
@@ -21,6 +23,8 @@
 		"profile:tui": "node scripts/profile-coding-agent-node.mjs --mode tui",
 		"profile:rpc": "node scripts/profile-coding-agent-node.mjs --mode rpc",
 		"test": "npm run test --workspaces --if-present",
+		"test:paw": "vitest --run packages/coding-agent/test/paw-*.test.ts",
+		"test:release": "npm run build && npm run check && npm run test:paw",
 		"version:patch": "npm version patch -ws --no-git-tag-version && node scripts/sync-versions.js && npm install --package-lock-only --ignore-scripts",
 		"version:minor": "npm version minor -ws --no-git-tag-version && node scripts/sync-versions.js && npm install --package-lock-only --ignore-scripts",
 		"version:major": "npm version major -ws --no-git-tag-version && node scripts/sync-versions.js && npm install --package-lock-only --ignore-scripts",

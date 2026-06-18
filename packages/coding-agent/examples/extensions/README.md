@@ -1,3 +1,4 @@
+
 # Extension Examples
 
 Example extensions for pi-coding-agent.

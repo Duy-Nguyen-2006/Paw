@@ -1,3 +1,4 @@
+
 declare module "highlight.js/lib/index.js" {
 	interface HighlightResult {
 		value: string;

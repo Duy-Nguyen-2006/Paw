@@ -1,3 +1,4 @@
+
 /**
  * Pure utility functions for plan mode.
  * Extracted for testability.

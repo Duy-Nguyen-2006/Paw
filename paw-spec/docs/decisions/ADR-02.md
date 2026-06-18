@@ -1,3 +1,4 @@
+
 # ADR-02: Implementation language
 
 - **Status:** Accepted

@@ -1,3 +1,4 @@
+
 /**
  * Utility functions for Azure OpenAI tests
  */

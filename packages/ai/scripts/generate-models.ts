@@ -1,3 +1,4 @@
+
 #!/usr/bin/env node
 
 import { writeFileSync } from "fs";
@@ -1239,11 +1240,21 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 
 		// Process MiniMax models
 		const minimaxVariants = [
-			{ key: "minimax", provider: "minimax", baseUrl: "https://api.minimax.io/anthropic" },
-			{ key: "minimax-cn", provider: "minimax-cn", baseUrl: "https://api.minimaxi.com/anthropic" },
+			{
+				key: "minimax",
+				provider: "minimax",
+				anthropicBaseUrl: "https://api.minimax.io/anthropic",
+				openAIBaseUrl: "https://api.minimax.io/v1",
+			},
+			{
+				key: "minimax-cn",
+				provider: "minimax-cn",
+				anthropicBaseUrl: "https://api.minimaxi.com/anthropic",
+				openAIBaseUrl: "https://api.minimaxi.com/v1",
+			},
 		] as const;
 
-		for (const { key, provider, baseUrl } of minimaxVariants) {
+		for (const { key, provider, anthropicBaseUrl, openAIBaseUrl } of minimaxVariants) {
 			if (data[key]?.models) {
 				for (const [modelId, model] of Object.entries(data[key].models)) {
 					const m = model as ModelsDevModel;
@@ -1252,10 +1263,11 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 					models.push({
 						id: modelId,
 						name: m.name || modelId,
-						api: "anthropic-messages",
+						api: modelId === "MiniMax-M3" ? "openai-completions" : "anthropic-messages",
 						provider,
-						// MiniMax's Anthropic-compatible API - SDK appends /v1/messages
-						baseUrl,
+						// MiniMax-M3 is validated against MiniMax's OpenAI-compatible endpoint.
+						// M2.x keeps the Anthropic-compatible endpoint used by existing releases.
+						baseUrl: modelId === "MiniMax-M3" ? openAIBaseUrl : anthropicBaseUrl,
 						reasoning: m.reasoning === true,
 						input: m.modalities?.input?.includes("image") ? ["text", "image"] : ["text"],
 						cost: {
@@ -1266,6 +1278,19 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 						},
 						contextWindow: m.limit?.context || 4096,
 						maxTokens: m.limit?.output || 4096,
+						...(modelId === "MiniMax-M3"
+							? {
+									compat: {
+										supportsStore: false,
+										supportsDeveloperRole: false,
+										supportsReasoningEffort: false,
+										maxTokensField: "max_tokens",
+										thinkingFormat: "zai",
+										supportsStrictMode: false,
+										supportsLongCacheRetention: false,
+									},
+								}
+							: {}),
 					});
 				}
 			}

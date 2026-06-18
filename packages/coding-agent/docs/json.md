@@ -1,3 +1,4 @@
+
 # JSON Event Stream Mode
 
 ```bash

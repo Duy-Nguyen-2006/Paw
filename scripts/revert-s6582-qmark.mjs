@@ -1,3 +1,4 @@
+
 #!/usr/bin/env node
 /**
  * Revert S6582 changes that broke TS null safety.

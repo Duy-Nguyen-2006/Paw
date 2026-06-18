@@ -1,3 +1,4 @@
+
 /**
  * Inter-extension event bus example.
  *

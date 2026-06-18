@@ -1,3 +1,4 @@
+
 export type PawSandboxPrimitiveName = "bubblewrap_landlock" | "bubblewrap_only" | "userns_only";
 
 export type PawSandboxDistroFacts = {

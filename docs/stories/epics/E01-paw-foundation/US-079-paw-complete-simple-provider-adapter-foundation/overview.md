@@ -1,3 +1,4 @@
+
 # US-079: Paw CompleteSimple Provider Adapter Foundation
 
 ## Summary

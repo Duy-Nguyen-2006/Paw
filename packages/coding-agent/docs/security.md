@@ -1,3 +1,4 @@
+
 # Security
 
 Pi is a local coding agent. It runs with the permissions of the user account that starts it, and it treats files writable by that user as inside the same local trust boundary.

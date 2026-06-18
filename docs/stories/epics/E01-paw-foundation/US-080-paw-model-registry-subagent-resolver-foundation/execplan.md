@@ -1,3 +1,4 @@
+
 # Execution Plan
 
 1. Add structural model-registry resolver types to Paw sub-agent runtime.

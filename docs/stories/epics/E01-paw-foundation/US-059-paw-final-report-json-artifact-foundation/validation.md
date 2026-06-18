@@ -1,3 +1,4 @@
+
 # Validation
 
 ## Proof Strategy
@@ -40,4 +41,3 @@ cd packages/coding-agent && node ../../node_modules/vitest/dist/cli.js --run tes
 scripts/bin/harness-cli story verify US-059
 npm run check
 ```
-

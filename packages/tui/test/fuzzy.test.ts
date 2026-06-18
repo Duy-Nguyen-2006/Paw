@@ -1,3 +1,4 @@
+
 import assert from "node:assert";
 import { describe, it } from "node:test";
 import { fuzzyFilter, fuzzyMatch } from "../src/fuzzy.ts";

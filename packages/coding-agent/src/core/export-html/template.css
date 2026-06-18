@@ -1,4 +1,5 @@
-    :root {
+
+:root {
       {{THEME_VARS}}
       --body-bg: {{BODY_BG}};
       --container-bg: {{CONTAINER_BG}};

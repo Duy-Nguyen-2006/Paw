@@ -1,3 +1,4 @@
+
 # Context Engineering Rules
 
 Context rules help agents decide what to read, when to read it, and when to

@@ -1,3 +1,4 @@
+
 name: Approve Contributor
 
 on:
@@ -176,4 +177,3 @@ jobs:
               issue_number: context.issue.number,
               body,
             });
-

@@ -1,3 +1,4 @@
+
 #!/usr/bin/env bash
 # Build DOOM for pi-doom using doomgeneric and Emscripten
 

@@ -1,3 +1,4 @@
+
 # Trace Specification
 
 The `trace` table records what happened during a Harness task. This document

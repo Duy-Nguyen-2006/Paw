@@ -1,3 +1,4 @@
+
 import assert from "node:assert";
 import { describe, it } from "node:test";
 import { type Component, parseOsc11BackgroundColor, type Terminal, TUI } from "../src/index.ts";

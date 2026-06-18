@@ -1,3 +1,4 @@
+
 # ADR-13: Context discipline
 
 - **Status:** Accepted

@@ -1,3 +1,4 @@
+
 /**
  * Tests for git-based extension updates, specifically handling force-push scenarios.
  *

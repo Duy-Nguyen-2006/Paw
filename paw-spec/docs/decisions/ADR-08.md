@@ -1,3 +1,4 @@
+
 # ADR-08: Default approval mode
 
 - **Status:** Accepted

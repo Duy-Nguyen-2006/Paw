@@ -1,3 +1,4 @@
+
 import { stripVTControlCharacters } from "node:util";
 import { setKeybindings, visibleWidth } from "@earendil-works/pi-tui";
 import { beforeAll, beforeEach, describe, expect, test } from "vitest";

@@ -1,3 +1,4 @@
+
 /** Fast deterministic hash to shorten long strings */
 export function shortHash(str: string): string {
 	let h1 = 0xdeadbeef;

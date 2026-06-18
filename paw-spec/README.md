@@ -1,3 +1,4 @@
+
 # Paw — Build Spec Bundle (v0.4 FINAL)
 
 This bundle is the complete, build-ready package for the Paw v1 (MVP) build.

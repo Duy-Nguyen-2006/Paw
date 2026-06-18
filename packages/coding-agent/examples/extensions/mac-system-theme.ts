@@ -1,3 +1,4 @@
+
 /**
  * Syncs pi theme with macOS system appearance (dark/light mode).
  *

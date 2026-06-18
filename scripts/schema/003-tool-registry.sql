@@ -1,3 +1,4 @@
+
 -- Harness v0 schema - migration 003
 -- Machine-readable registry for user-provided project tools.
 

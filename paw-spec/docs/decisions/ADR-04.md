@@ -1,3 +1,4 @@
+
 # ADR-04: Browser verification stack
 
 - **Status:** Accepted

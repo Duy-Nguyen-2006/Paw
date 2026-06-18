@@ -1,3 +1,4 @@
+
 # ADR-15: Liveness
 
 - **Status:** Accepted

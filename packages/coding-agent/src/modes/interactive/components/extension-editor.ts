@@ -1,3 +1,4 @@
+
 /**
  * Multi-line editor component for extensions.
  * Supports Ctrl+G for external editor.

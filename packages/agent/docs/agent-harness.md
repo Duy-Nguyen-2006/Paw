@@ -1,3 +1,4 @@
+
 # AgentHarness lifecycle
 
 `AgentHarness` is the orchestration layer above the low-level agent loop. It owns session persistence, runtime configuration, resource resolution, operation locking, and extension-facing mutation semantics.

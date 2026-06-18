@@ -1,3 +1,4 @@
+
 {
 	"name": "@earendil-works/pi-ai",
 	"version": "0.79.4",
@@ -62,9 +63,10 @@
 		"clean": "shx rm -rf dist",
 		"generate-models": "node scripts/generate-models.ts",
 		"generate-image-models": "node scripts/generate-image-models.ts",
-		"build": "npm run generate-models && npm run generate-image-models && tsgo -p tsconfig.build.json",
+		"refresh-models": "npm run generate-models && npm run generate-image-models",
+		"build": "tsgo -p tsconfig.build.json",
 		"test": "vitest --run",
-		"prepublishOnly": "npm run clean && npm run build"
+		"prepublishOnly": "npm run clean && npm run refresh-models && npm run build"
 	},
 	"dependencies": {
 		"@anthropic-ai/sdk": "0.91.1",

@@ -1,3 +1,4 @@
+
 # 0001 Harness-First Development
 
 Date: 2026-05-05
@@ -46,4 +47,3 @@ Tradeoffs:
 - Some docs are placeholders until real stories exercise them.
 - Validation commands are only contracts until implementation begins.
 - The harness must stay small enough to revise from real friction.
-

@@ -1,3 +1,4 @@
+
 # S2 Cost/Latency + Cache Spike
 
 ## Result

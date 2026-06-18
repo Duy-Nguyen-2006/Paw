@@ -1,3 +1,4 @@
+
 /**
  * Test for BMP to PNG conversion in clipboard image handling.
  * Separate from clipboard-image.test.ts due to different mocking requirements.

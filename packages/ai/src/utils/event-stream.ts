@@ -1,3 +1,4 @@
+
 import type { AssistantMessage, AssistantMessageEvent } from "../types.ts";
 
 // Generic event stream class for async iteration

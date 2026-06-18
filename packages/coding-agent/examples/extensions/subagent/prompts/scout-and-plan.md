@@ -1,3 +1,4 @@
+
 ---
 description: Scout gathers context, planner creates implementation plan (no implementation)
 ---

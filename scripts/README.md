@@ -1,12 +1,16 @@
+
 # Scripts
 
 This directory contains harness automation tools.
 
 ## Harness CLI
 
-The Rust Harness CLI is the primary interface for the durable layer. Installed
-projects use the prebuilt binary at `scripts/bin/harness-cli` on macOS/Linux or
-`scripts/bin/harness-cli.exe` on Windows for normal Harness work.
+The Harness CLI is the primary interface for the durable layer. Installed
+projects use `scripts/bin/harness-cli` on macOS/Linux or
+`scripts/bin/harness-cli.exe` on Windows for normal Harness work. Paw now ships a
+portable Node.js fallback at `scripts/bin/harness-cli` so repository-local
+harness work remains usable even when a prebuilt Rust binary for the current CPU
+architecture is unavailable.
 
 ```bash
 scripts/bin/harness-cli init          # Create the database
@@ -41,8 +45,8 @@ human-readable `yes`/`no`; use `query matrix --numeric` when copying values into
 The schema lives in `scripts/schema/` and is version-controlled. The database
 file (`harness.db`) is `.gitignore`d.
 
-Requires: the prebuilt Rust CLI at `scripts/bin/harness-cli` on macOS/Linux or
-`scripts/bin/harness-cli.exe` on Windows.
+Requires: Node.js 22.19+ for the portable CLI, or the platform-specific prebuilt
+Rust CLI at the same command path when installed by release tooling.
 
 Direct database inspection may still use SQLite tools, but normal Harness use
 should go through the Rust CLI.

@@ -1,3 +1,4 @@
+
 # ADR-17: Non-interactive / CI policy
 
 - **Status:** Accepted

@@ -1,3 +1,4 @@
+
 # Plan Mode Extension
 
 Read-only exploration mode for safe code analysis.

@@ -1,3 +1,4 @@
+
 # ADR-21: Edit strategy
 
 - **Status:** Accepted

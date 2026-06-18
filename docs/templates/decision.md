@@ -1,3 +1,4 @@
+
 # NNNN Decision Title
 
 Date: YYYY-MM-DD
@@ -31,4 +32,3 @@ Tradeoffs:
 ## Follow-Up
 
 - Item.
-

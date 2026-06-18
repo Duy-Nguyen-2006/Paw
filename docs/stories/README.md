@@ -1,3 +1,4 @@
+
 # Stories
 
 Stories are work packets. They turn product intent into bounded implementation

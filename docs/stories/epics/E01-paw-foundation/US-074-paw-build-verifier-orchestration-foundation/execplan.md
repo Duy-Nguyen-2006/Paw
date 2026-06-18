@@ -1,3 +1,4 @@
+
 # Execution Plan
 
 1. Add focused tests proving `VERIFYING -> SLICE_DONE` through `paw build <session-id> --once`, non-native evidence persistence, and formatter output.

@@ -1,3 +1,4 @@
+
 import * as fs from "node:fs";
 import { Container, Image, Spacer, Text } from "@earendil-works/pi-tui";
 import { getBundledInteractiveAssetPath } from "../../../config.ts";

@@ -1,3 +1,4 @@
+
 # US-022: Paw S1 Bounded Sub-Agent Artifact Isolation
 
 ## User Story

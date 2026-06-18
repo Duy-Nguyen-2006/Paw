@@ -1,3 +1,4 @@
+
 # Feature Intake
 
 Every implementation prompt enters the intake gate before code changes. A new

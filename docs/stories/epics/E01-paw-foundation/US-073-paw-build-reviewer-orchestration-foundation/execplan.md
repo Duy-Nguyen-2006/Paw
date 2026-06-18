@@ -1,3 +1,4 @@
+
 # Execution Plan
 
 1. Add focused tests for `paw build <session-id> --once` reviewer pass, reviewer blocked, invalid JSON retry, invalid JSON exhaustion, default fail-closed executor, and existing worker path regression coverage.

@@ -1,3 +1,4 @@
+
 # Paw
 
 Paw is a coding-agent workspace focused on disciplined software delivery:

@@ -1,3 +1,4 @@
+
 # Keybindings
 
 All keyboard shortcuts can be customized via `~/.pi/agent/keybindings.json`. Each action can be bound to one or more keys.

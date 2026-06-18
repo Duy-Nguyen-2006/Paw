@@ -1,3 +1,4 @@
+
 /**
  * Example extension with its own npm dependencies.
  * Tests that jiti resolves modules from the extension's own node_modules.

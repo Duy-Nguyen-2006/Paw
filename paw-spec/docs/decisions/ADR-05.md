@@ -1,3 +1,4 @@
+
 # ADR-05: Memory & rules storage
 
 - **Status:** Accepted

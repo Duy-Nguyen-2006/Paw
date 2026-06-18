@@ -1,3 +1,4 @@
+
 /**
  * Bug regression test for isImageLine() crash scenario
  *

@@ -1,3 +1,4 @@
+
 /**
  * ANSI escape code to HTML converter.
  *

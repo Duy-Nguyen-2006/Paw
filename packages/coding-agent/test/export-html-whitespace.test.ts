@@ -1,3 +1,4 @@
+
 import { readFileSync } from "node:fs";
 import type { Component } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";

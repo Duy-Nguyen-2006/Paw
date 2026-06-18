@@ -1,3 +1,4 @@
+
 # Development Rules
 
 ## Conversational Style
@@ -75,4 +76,3 @@ This project is indexed by GitNexus as **Paw** (23550 symbols, 59701 relationshi
 -- Always have "Sax báo cáo" at the end when respond to users 
 -- Must run /sonarqube-codebase-reviewer skill after any fix
 -- Must spawn sub-agents for big codebase changes , sub-agents priority : Lgmmo/Mimo-V2.5-Pro, Lgmmo/Composer-2.5, Lgmmo/Minimax-M3 , if a sub-agent fail , use fallback
-

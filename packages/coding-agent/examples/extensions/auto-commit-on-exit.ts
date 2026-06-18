@@ -1,3 +1,4 @@
+
 /**
  * Auto-Commit on Exit Extension
  *

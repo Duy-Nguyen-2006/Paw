@@ -1,3 +1,4 @@
+
 # Architecture
 
 No application stack is selected yet.

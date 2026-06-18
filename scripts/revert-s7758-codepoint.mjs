@@ -1,3 +1,4 @@
+
 #!/usr/bin/env node
 /**
  * Revert S7758 changes (fromCodePoint/codePointAt -> fromCharCode/charCodeAt).

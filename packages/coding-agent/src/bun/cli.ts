@@ -1,3 +1,4 @@
+
 #!/usr/bin/env node
 import { APP_NAME } from "../config.ts";
 

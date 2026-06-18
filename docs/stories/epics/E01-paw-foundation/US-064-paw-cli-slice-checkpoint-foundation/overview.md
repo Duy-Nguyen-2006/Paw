@@ -1,3 +1,4 @@
+
 # US-064: Paw CLI Slice Checkpoint Foundation
 
 Expose `paw prepare-checkpoint` as a bounded CLI command that acquires the session

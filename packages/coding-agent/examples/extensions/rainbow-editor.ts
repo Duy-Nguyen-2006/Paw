@@ -1,3 +1,4 @@
+
 /**
  * Rainbow Editor - highlights "ultrathink" with animated shine effect
  *

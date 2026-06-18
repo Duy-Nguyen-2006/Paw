@@ -1,3 +1,4 @@
+
 -- Harness v0 schema - migration 002
 -- Story-level mechanical verification.
 

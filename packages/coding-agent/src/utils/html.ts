@@ -1,3 +1,4 @@
+
 export interface DecodedHtmlEntity {
 	text: string;
 	length: number;

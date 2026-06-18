@@ -1,3 +1,4 @@
+
 ---
 name: disable-model-invocation
 description: A skill that cannot be invoked by the model.

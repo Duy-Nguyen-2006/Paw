@@ -1,3 +1,4 @@
+
 /**
  * Test script for GitLab Duo extension
  * Run: npx tsx test.ts [model-id] [--thinking]

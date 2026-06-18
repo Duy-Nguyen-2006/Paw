@@ -1,3 +1,4 @@
+
 # 0007 Improvement Proposal Rules
 
 Date: 2026-06-04

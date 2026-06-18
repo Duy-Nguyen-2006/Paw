@@ -1,3 +1,4 @@
+
 /**
  * Confirm Destructive Actions Extension
  *

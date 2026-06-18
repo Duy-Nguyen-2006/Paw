@@ -1,3 +1,4 @@
+
 /**
  * Branch summarization for tree navigation.
  *

@@ -1,3 +1,4 @@
+
 #!/usr/bin/env node
 /**
  * Revert broken S7781 changes that have extra closing parens.

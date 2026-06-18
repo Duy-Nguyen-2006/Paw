@@ -1,3 +1,4 @@
+
 # Compaction & Branch Summarization
 
 LLMs have limited context windows. When conversations grow too long, pi uses compaction to summarize older content while preserving recent work. This page covers both auto-compaction and branch summarization.

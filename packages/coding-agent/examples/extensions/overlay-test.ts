@@ -1,3 +1,4 @@
+
 /**
  * Overlay Test - validates overlay compositing with inline text inputs
  *

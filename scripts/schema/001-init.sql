@@ -1,3 +1,4 @@
+
 -- Harness v0 schema — migration 001
 -- Durable layer for operational harness data.
 -- Policy docs (HARNESS.md, FEATURE_INTAKE.md, ARCHITECTURE.md) stay as

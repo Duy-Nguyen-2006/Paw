@@ -1,3 +1,4 @@
+
 /**
  * Overlay QA Tests - comprehensive overlay positioning and edge case tests
  *

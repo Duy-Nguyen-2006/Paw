@@ -1,3 +1,4 @@
+
 import {
 	allocateImageId,
 	getCapabilities,

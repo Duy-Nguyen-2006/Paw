@@ -1,3 +1,4 @@
+
 import hostedGitInfo from "hosted-git-info";
 
 /**

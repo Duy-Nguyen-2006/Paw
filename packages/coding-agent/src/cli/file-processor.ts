@@ -1,3 +1,4 @@
+
 /**
  * Process @file CLI arguments into text content and image attachments
  */
@@ -57,43 +58,4 @@ export async function processFileArguments(fileArgs: string[], options?: Process
 			if (autoResizeImages) {
 				const resized = await resizeImage(content, mimeType);
 				if (!resized) {
-					text += `<file name="${absolutePath}">[Image omitted: could not be resized below the inline image size limit.]</file>\n`;
-					continue;
-				}
-				dimensionNote = formatDimensionNote(resized);
-				attachment = {
-					type: "image",
-					mimeType: resized.mimeType,
-					data: resized.data,
-				};
-			} else {
-				attachment = {
-					type: "image",
-					mimeType,
-					data: content.toString("base64"),
-				};
-			}
-
-			images.push(attachment);
-
-			// Add text reference to image with optional dimension note
-			if (dimensionNote) {
-				text += `<file name="${absolutePath}">${dimensionNote}</file>\n`;
-			} else {
-				text += `<file name="${absolutePath}"></file>\n`;
-			}
-		} else {
-			// Handle text file
-			try {
-				const content = await readFile(absolutePath, "utf-8");
-				text += `<file name="${absolutePath}">\n${content}\n</file>\n`;
-			} catch (error: unknown) {
-				const message = error instanceof Error ? error.message : String(error);
-				console.error(chalk.red(`Error: Could not read file ${absolutePath}: ${message}`));
-				process.exit(1);
-			}
-		}
-	}
-
-	return { text, images };
-}
+					text += `<file name="${absolutePath}">[Image omitted: could not be resized below the inline image size limit.]

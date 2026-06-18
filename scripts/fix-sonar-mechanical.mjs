@@ -1,3 +1,4 @@
+
 #!/usr/bin/env node
 /**
  * Apply mechanical SonarQube fixes across source files.

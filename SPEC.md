@@ -1,3 +1,4 @@
+
 # Paw — SPEC.md v0.4 (Definitive Build Spec — FINAL)
 
 > **Status:** FINAL / build-ready. This is the single source of truth for the v1 (MVP) build.

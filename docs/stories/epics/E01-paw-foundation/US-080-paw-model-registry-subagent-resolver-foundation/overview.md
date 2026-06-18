@@ -1,3 +1,4 @@
+
 # US-080: Paw Model-Registry Sub-Agent Resolver Foundation
 
 ## Summary

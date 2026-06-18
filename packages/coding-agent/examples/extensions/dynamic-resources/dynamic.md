@@ -1,3 +1,4 @@
+
 ---
 description: Example prompt template loaded from resources_discover
 ---

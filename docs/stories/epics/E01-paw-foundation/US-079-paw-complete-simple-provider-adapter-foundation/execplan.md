@@ -1,3 +1,4 @@
+
 # Execution Plan
 
 1. Add `completeSimple`-style adapter types to Paw sub-agent runtime.

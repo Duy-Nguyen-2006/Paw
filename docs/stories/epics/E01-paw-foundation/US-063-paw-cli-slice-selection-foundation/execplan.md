@@ -1,3 +1,4 @@
+
 # Execution Plan
 
 1. Add failing tests for parser, result builder, and CLI routing.

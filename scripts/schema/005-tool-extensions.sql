@@ -1,3 +1,4 @@
+
 -- Harness v0 schema - migration 005
 -- Inbound tool registry: kind-aware presence + capability binding.
 -- These columns turn the tool table from "declared intent" into

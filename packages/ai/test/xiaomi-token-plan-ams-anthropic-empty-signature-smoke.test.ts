@@ -1,3 +1,4 @@
+
 import { describe, expect, it } from "vitest";
 import { completeSimple, getEnvApiKey, streamSimple } from "../src/stream.ts";
 import type { AssistantMessage, Context, Model } from "../src/types.ts";

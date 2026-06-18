@@ -1,3 +1,4 @@
+
 ---
 description: Full implementation workflow - scout gathers context, planner creates plan, worker implements
 ---

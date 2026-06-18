@@ -1,3 +1,4 @@
+
 # ADR-11: Graph / embeddings code intelligence
 
 - **Status:** Accepted

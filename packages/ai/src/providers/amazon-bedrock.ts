@@ -1,3 +1,4 @@
+
 import {
 	BedrockRuntimeClient,
 	type BedrockRuntimeClientConfig,

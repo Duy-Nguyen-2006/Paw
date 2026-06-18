@@ -1,3 +1,4 @@
+
 # Development Rules
 
 ## Conversational Style

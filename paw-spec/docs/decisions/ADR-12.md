@@ -1,3 +1,4 @@
+
 # ADR-12: Target project types
 
 - **Status:** Accepted

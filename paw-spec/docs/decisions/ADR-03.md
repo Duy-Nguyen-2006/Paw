@@ -1,3 +1,4 @@
+
 # ADR-03: Static analysis / SonarQube
 
 - **Status:** Accepted

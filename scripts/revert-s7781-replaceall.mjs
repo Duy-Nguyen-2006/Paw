@@ -1,3 +1,4 @@
+
 #!/usr/bin/env node
 /**
  * Revert S7781 changes (.replace(/regex/g,...) -> .replace(/regex/g,...)).

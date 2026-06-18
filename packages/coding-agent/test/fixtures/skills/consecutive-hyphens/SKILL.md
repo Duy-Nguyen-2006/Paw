@@ -1,3 +1,4 @@
+
 ---
 name: bad--name
 description: A skill with consecutive hyphens in the name.

@@ -1,3 +1,4 @@
+
 #!/usr/bin/env bash
 #
 # Build pi binaries for all platforms locally.

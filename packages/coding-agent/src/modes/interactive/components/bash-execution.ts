@@ -1,3 +1,4 @@
+
 /**
  * Component for displaying bash command execution with streaming output.
  */

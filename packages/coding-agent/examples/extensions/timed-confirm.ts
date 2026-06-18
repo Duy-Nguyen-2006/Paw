@@ -1,3 +1,4 @@
+
 /**
  * Example extension demonstrating timed dialogs with live countdown.
  *

@@ -1,3 +1,4 @@
+
 # @earendil-works/pi-agent-core
 
 Stateful agent with tool execution and event streaming. Built on `@earendil-works/pi-ai`.

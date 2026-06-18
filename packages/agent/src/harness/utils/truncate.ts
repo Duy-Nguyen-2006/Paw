@@ -1,3 +1,4 @@
+
 /**
  * Shared truncation utilities for tool outputs.
  *

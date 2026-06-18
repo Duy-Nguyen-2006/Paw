@@ -1,3 +1,4 @@
+
 import { eastAsianWidth } from "get-east-asian-width";
 
 // segmenters (shared instance)

@@ -1,3 +1,4 @@
+
 /**
  * Extension system for lifecycle events and custom tools.
  */

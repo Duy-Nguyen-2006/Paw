@@ -1,3 +1,4 @@
+
 # ADR-18: Sandbox stack
 
 - **Status:** Accepted

@@ -1,3 +1,4 @@
+
 # 0002 Seed Specification Product Lifecycle
 
 Date: 2026-05-05

@@ -1,3 +1,4 @@
+
 # Execution Plan
 
 1. Add focused tests for `paw build <session-id> --once` parser, worker pass, blocked output, retry, invalid state, locks, default fail-closed executor, and routing.

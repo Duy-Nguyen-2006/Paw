@@ -1,3 +1,4 @@
+
 /**
  * Titlebar Spinner Extension
  *
