@@ -1,4 +1,3 @@
-
 #!/usr/bin/env node
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";

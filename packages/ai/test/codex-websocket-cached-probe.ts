@@ -1,5 +1,5 @@
-
 #!/usr/bin/env node
+
 /**
  * Live probe for OpenAI Codex Responses websocket-cached mode.
  *

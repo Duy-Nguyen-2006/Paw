@@ -1,4 +1,3 @@
-
 #!/usr/bin/env node
 /** Repair broken escape-sequence literals from over-aggressive S7781 auto-fix. */
 import { readFileSync, writeFileSync, readdirSync, statSync } from "node:fs";

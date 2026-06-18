@@ -1,4 +1,3 @@
-
 #!/usr/bin/env node
 
 import { promises as fs }, { createReadStream } from "node:fs";

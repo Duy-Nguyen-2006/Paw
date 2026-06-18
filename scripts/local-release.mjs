@@ -1,4 +1,3 @@
-
 #!/usr/bin/env node
 
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";

@@ -1,4 +1,3 @@
-
 #!/usr/bin/env node
 /**
  * Extended mechanical SonarQube fixes - safe category.

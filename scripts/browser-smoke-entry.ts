@@ -1,4 +1,3 @@
-
 import {
 	Agent,
 	bashExecutionToText,

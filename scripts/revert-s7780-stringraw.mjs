@@ -1,4 +1,3 @@
-
 #!/usr/bin/env node
 /**
  * Revert S7780 changes (String.raw -> "\\\\X").

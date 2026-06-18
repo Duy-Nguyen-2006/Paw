@@ -1,4 +1,3 @@
-
 #!/usr/bin/env node
 /**
  * Revert broken S7755 changes (LHS .at() = assignment).

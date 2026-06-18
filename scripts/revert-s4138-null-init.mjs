@@ -1,4 +1,3 @@
-
 #!/usr/bin/env node
 /**
  * Revert S4138 changes (useless null literal).
