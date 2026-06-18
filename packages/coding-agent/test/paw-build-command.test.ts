@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { hostname, tmpdir } from "node:os";
@@ -234,6 +235,26 @@ function createFakeModelRegistry(): PawProviderSubAgentModelRegistry {
 		hasConfiguredAuth: () => true,
 		getApiKeyAndHeaders: () => ({ ok: true, apiKey: "fake-key", headers: { "x-fake": "1" } }),
 	};
+}
+
+async function spawnKilledProcess(): Promise<number> {
+	const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000);"]);
+	if (child.pid === undefined) {
+		throw new Error("Expected spawned process to expose a pid.");
+	}
+	const pid = child.pid;
+	await new Promise<void>((resolvePromise, reject) => {
+		child.on("error", reject);
+		child.on("close", (_code, signal) => {
+			if (signal !== "SIGKILL") {
+				reject(new Error(`Expected spawned process to close with SIGKILL, got ${signal ?? "none"}.`));
+				return;
+			}
+			resolvePromise();
+		});
+		child.kill("SIGKILL");
+	});
+	return pid;
 }
 
 async function writeLock(repoRoot: string, sessionId: string, lock: PawSessionLock): Promise<void> {
@@ -681,6 +702,35 @@ describe("Paw build command", () => {
 		await expect(readPawSessionState(projectRoot, "session-1")).resolves.toMatchObject({ name: "REVIEWING" });
 		await expect(readPawSliceJournal(projectRoot, "session-1")).resolves.toHaveLength(1);
 		expect(formatPawBuildCommandResult(result)).toContain("IMPLEMENTING -> REVIEWING");
+		expect(await getPawSessionLockStatus(projectRoot, "session-1", { nowMs: 2_500 })).toEqual({
+			status: "unlocked",
+		});
+	});
+
+	test("recovers and reports a killed process lock during build", async () => {
+		const projectRoot = await createTempProject();
+		process.chdir(projectRoot);
+		const config = loadDefaultPawRuntimeConfig(projectRoot);
+		await expect(handlePawCommand(["paw", "init"])).resolves.toBe(true);
+		await writePawSessionState(projectRoot, createImplementingState("session-1", "slice-1"));
+		const deadPid = await spawnKilledProcess();
+		const abandonedLock: PawSessionLock = { pid: deadPid, host: hostname(), heartbeat_ts: 1_000, ttl: 120 };
+		await writeLock(projectRoot, "session-1", abandonedLock);
+		const executor = createExecutor([JSON.stringify(createWorkerOutput())]);
+
+		const result = await createPawBuildCommandResult(
+			projectRoot,
+			"session-1",
+			{ once: true, timestamp },
+			{ config, executor, lockOptions: { nowMs: 2_000, ttlSec: 120 } },
+		);
+
+		expect(result.status).toBe("completed");
+		if (result.status !== "completed" || !("reclaimedLock" in result)) return;
+		expect(result.reclaimedLock).toEqual({ reason: "dead_pid", lock: abandonedLock });
+		const formatted = formatPawBuildCommandResult(result);
+		expect(formatted).toContain("reclaimed lock: dead_pid");
+		expect(formatted).toContain(`previous lock owner: pid ${deadPid} on ${hostname()}`);
 		expect(await getPawSessionLockStatus(projectRoot, "session-1", { nowMs: 2_500 })).toEqual({
 			status: "unlocked",
 		});

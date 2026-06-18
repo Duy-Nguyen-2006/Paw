@@ -427,6 +427,7 @@ function formatPawBuildWorkerCompletedResult(result: Extract<PawBuildStepResult,
 		`state: ${result.previousStateName} -> ${result.nextStateName}`,
 		`attempts: ${result.attempts}`,
 		`journal entries: ${result.journalEntryCount}`,
+		...formatPawBuildReclaimedLockLines(result),
 		`lock released: ${formatBooleanYesNo(result.lockReleased)}`,
 	].join("\n");
 }
@@ -440,6 +441,7 @@ function formatPawBuildBlockedResult(result: Extract<PawBuildStepResult, { statu
 		`state: ${result.previousStateName} -> ${result.nextStateName}`,
 		`attempts: ${result.attempts}`,
 		`blocked reason: ${result.blockedReasonCode}: ${result.blockedReasonMessage}`,
+		...formatPawBuildReclaimedLockLines(result),
 		`lock released: ${formatBooleanYesNo(result.lockReleased)}`,
 	].join("\n");
 }
@@ -456,6 +458,16 @@ function formatPawBuildNotLockedResult(result: Extract<PawBuildStepResult, { sta
 	return "reason" in result && result.reason === "stale"
 		? `Cannot build session ${result.sessionId}: session lock is stale (${result.staleReason ?? "unknown"}).`
 		: `Cannot build session ${result.sessionId}: session lock is not held by this process.`;
+}
+
+function formatPawBuildReclaimedLockLines(result: Extract<PawBuildStepResult, { reclaimedLock: unknown }>): string[] {
+	if (result.reclaimedLock === null) {
+		return [];
+	}
+	return [
+		`reclaimed lock: ${result.reclaimedLock.reason}`,
+		`previous lock owner: pid ${result.reclaimedLock.lock.pid} on ${result.reclaimedLock.lock.host}`,
+	];
 }
 
 function formatBooleanYesNo(value: boolean): string {
