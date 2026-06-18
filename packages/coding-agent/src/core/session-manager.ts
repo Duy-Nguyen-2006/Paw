@@ -1,6 +1,4 @@
-import { type AgentMessage, uuidv7 } from "@earendil-works/pi-agent-core";
-import type { ImageContent, Message, TextContent } from "@earendil-works/pi-ai";
-import { randomUUID } from "crypto";
+import { randomUUID } from "node:crypto";
 import {
 	appendFileSync,
 	closeSync,
@@ -12,11 +10,13 @@ import {
 	readSync,
 	statSync,
 	writeFileSync,
-} from "fs";
-import { readdir, stat } from "fs/promises";
-import { join, resolve } from "path";
-import { createInterface } from "readline";
-import { StringDecoder } from "string_decoder";
+} from "node:fs";
+import { readdir, stat } from "node:fs/promises";
+import { join, resolve } from "node:path";
+import { createInterface } from "node:readline";
+import { StringDecoder } from "node:string_decoder";
+import { type AgentMessage, uuidv7 } from "@earendil-works/pi-agent-core";
+import type { ImageContent, Message, TextContent } from "@earendil-works/pi-ai";
 import { getAgentDir as getDefaultAgentDir, getSessionsDir } from "../config.ts";
 import { normalizePath, resolvePath } from "../utils/paths.ts";
 import {
@@ -226,7 +226,6 @@ function generateId(byId: { has(id: string): boolean }): string {
 function migrateV1ToV2(entries: FileEntry[]): void {
 	const ids = new Set<string>();
 	let prevId: string | null = null;
-
 	for (const entry of entries) {
 		if (entry.type === "session") {
 			entry.version = 2;
@@ -261,7 +260,7 @@ function migrateV2ToV3(entries: FileEntry[]): void {
 
 		// Update message entries with hookMessage role
 		if (entry.type === "message") {
-			const msgEntry = entry as SessionMessageEntry;
+			const msgEntry = entry;
 			if (msgEntry.message && (msgEntry.message as { role: string }).role === "hookMessage") {
 				(msgEntry.message as { role: string }).role = "custom";
 			}
@@ -327,7 +326,6 @@ export function buildSessionContext(
 	leafId?: string | null,
 	byId?: Map<string, SessionEntry>,
 ): SessionContext {
-	// Build uuid index if not available
 	if (!byId) {
 		byId = new Map<string, SessionEntry>();
 		for (const entry of entries) {
@@ -335,20 +333,11 @@ export function buildSessionContext(
 		}
 	}
 
-	// Find leaf
-	let leaf: SessionEntry | undefined;
 	if (leafId === null) {
-		// Explicitly null - return no messages (navigated to before first entry)
 		return { messages: [], thinkingLevel: "off", model: null };
 	}
-	if (leafId) {
-		leaf = byId.get(leafId);
-	}
-	if (!leaf) {
-		// Fallback to last entry (when leafId is undefined)
-		leaf = entries[entries.length - 1];
-	}
 
+	const leaf = leafId ? byId.get(leafId) : entries.at(-1);
 	if (!leaf) {
 		return { messages: [], thinkingLevel: "off", model: null };
 	}
@@ -361,7 +350,17 @@ export function buildSessionContext(
 		current = current.parentId ? byId.get(current.parentId) : undefined;
 	}
 
-	// Extract settings and find compaction
+	const { thinkingLevel, model, compaction } = extractPathSettings(path);
+	const messages = buildMessagesFromPath(path, compaction);
+
+	return { messages, thinkingLevel, model };
+}
+
+function extractPathSettings(path: SessionEntry[]): {
+	thinkingLevel: string;
+	model: { provider: string; modelId: string } | null;
+	compaction: CompactionEntry | null;
+} {
 	let thinkingLevel = "off";
 	let model: { provider: string; modelId: string } | null = null;
 	let compaction: CompactionEntry | null = null;
@@ -378,57 +377,54 @@ export function buildSessionContext(
 		}
 	}
 
-	// Build messages and collect corresponding entries
-	// When there's a compaction, we need to:
-	// 1. Emit summary first (entry = compaction)
-	// 2. Emit kept messages (from firstKeptEntryId up to compaction)
-	// 3. Emit messages after compaction
+	return { thinkingLevel, model, compaction };
+}
+
+function appendPathEntry(entry: SessionEntry, messages: AgentMessage[]): void {
+	if (entry.type === "message") {
+		messages.push(entry.message);
+	} else if (entry.type === "custom_message") {
+		messages.push(
+			createCustomMessage(entry.customType, entry.content, entry.display, entry.details, entry.timestamp),
+		);
+	} else if (entry.type === "branch_summary" && entry.summary) {
+		messages.push(createBranchSummaryMessage(entry.summary, entry.fromId, entry.timestamp));
+	}
+}
+
+function buildMessagesFromPath(path: SessionEntry[], compaction: CompactionEntry | null): AgentMessage[] {
 	const messages: AgentMessage[] = [];
 
-	const appendMessage = (entry: SessionEntry) => {
-		if (entry.type === "message") {
-			messages.push(entry.message);
-		} else if (entry.type === "custom_message") {
-			messages.push(
-				createCustomMessage(entry.customType, entry.content, entry.display, entry.details, entry.timestamp),
-			);
-		} else if (entry.type === "branch_summary" && entry.summary) {
-			messages.push(createBranchSummaryMessage(entry.summary, entry.fromId, entry.timestamp));
-		}
-	};
-
-	if (compaction) {
-		// Emit summary first
-		messages.push(createCompactionSummaryMessage(compaction.summary, compaction.tokensBefore, compaction.timestamp));
-
-		// Find compaction index in path
-		const compactionIdx = path.findIndex((e) => e.type === "compaction" && e.id === compaction.id);
-
-		// Emit kept messages (before compaction, starting from firstKeptEntryId)
-		let foundFirstKept = false;
-		for (let i = 0; i < compactionIdx; i++) {
-			const entry = path[i];
-			if (entry.id === compaction.firstKeptEntryId) {
-				foundFirstKept = true;
-			}
-			if (foundFirstKept) {
-				appendMessage(entry);
-			}
-		}
-
-		// Emit messages after compaction
-		for (let i = compactionIdx + 1; i < path.length; i++) {
-			const entry = path[i];
-			appendMessage(entry);
-		}
-	} else {
-		// No compaction - emit all messages, handle branch summaries and custom messages
+	if (!compaction) {
 		for (const entry of path) {
-			appendMessage(entry);
+			appendPathEntry(entry, messages);
+		}
+		return messages;
+	}
+
+	// Emit compaction summary first
+	messages.push(createCompactionSummaryMessage(compaction.summary, compaction.tokensBefore, compaction.timestamp));
+
+	const compactionIdx = path.findIndex((e) => e.type === "compaction" && e.id === compaction.id);
+
+	// Emit kept messages (before compaction, starting from firstKeptEntryId)
+	let foundFirstKept = false;
+	for (let i = 0; i < compactionIdx; i++) {
+		const entry = path[i];
+		if (entry.id === compaction.firstKeptEntryId) {
+			foundFirstKept = true;
+		}
+		if (foundFirstKept) {
+			appendPathEntry(entry, messages);
 		}
 	}
 
-	return { messages, thinkingLevel, model };
+	// Emit messages after compaction
+	for (let i = compactionIdx + 1; i < path.length; i++) {
+		appendPathEntry(path[i], messages);
+	}
+
+	return messages;
 }
 
 /**
@@ -586,15 +582,90 @@ function getMessageActivityTime(entry: SessionMessageEntry): number | undefined 
 	return Number.isNaN(t) ? undefined : t;
 }
 
+interface SessionInfoAccumulator {
+	header: SessionHeader | null;
+	messageCount: number;
+	firstMessage: string;
+	allMessages: string[];
+	name?: string;
+	lastActivityTime?: number;
+}
+
+function updateSessionInfoFromEntry(accumulator: SessionInfoAccumulator, entry: FileEntry): "continue" | "invalid" {
+	if (!accumulator.header) {
+		if (entry.type !== "session") return "invalid";
+		accumulator.header = entry;
+		return "continue";
+	}
+
+	if (entry.type === "session_info") {
+		accumulator.name = entry.name?.trim() || undefined;
+		return "continue";
+	}
+
+	if (entry.type !== "message") return "continue";
+	accumulator.messageCount++;
+
+	const activityTime = getMessageActivityTime(entry);
+	if (typeof activityTime === "number") {
+		accumulator.lastActivityTime = Math.max(accumulator.lastActivityTime ?? 0, activityTime);
+	}
+
+	const message = entry.message;
+	if (!isMessageWithContent(message)) return "continue";
+	if (message.role !== "user" && message.role !== "assistant") return "continue";
+
+	const textContent = extractTextContent(message);
+	if (!textContent) return "continue";
+
+	accumulator.allMessages.push(textContent);
+	if (!accumulator.firstMessage && message.role === "user") {
+		accumulator.firstMessage = textContent;
+	}
+	return "continue";
+}
+
+function finalizeSessionInfo(
+	filePath: string,
+	accumulator: SessionInfoAccumulator,
+	stats: Awaited<ReturnType<typeof stat>>,
+): SessionInfo | null {
+	if (!accumulator.header) return null;
+
+	const header = accumulator.header;
+	const cwd = typeof header.cwd === "string" ? header.cwd : "";
+	const parentSessionPath = header.parentSession;
+	const headerTime = typeof header.timestamp === "string" ? new Date(header.timestamp).getTime() : Number.NaN;
+	const modified =
+		typeof accumulator.lastActivityTime === "number" && accumulator.lastActivityTime > 0
+			? new Date(accumulator.lastActivityTime)
+			: !Number.isNaN(headerTime)
+				? new Date(headerTime)
+				: stats.mtime;
+
+	return {
+		path: filePath,
+		id: header.id,
+		cwd,
+		name: accumulator.name,
+		parentSessionPath,
+		created: new Date(header.timestamp),
+		modified,
+		messageCount: accumulator.messageCount,
+		firstMessage: accumulator.firstMessage || "(no messages)",
+		allMessagesText: accumulator.allMessages.join(" "),
+	};
+}
+
 async function buildSessionInfo(filePath: string): Promise<SessionInfo | null> {
 	try {
 		const stats = await stat(filePath);
-		let header: SessionHeader | null = null;
-		let messageCount = 0;
-		let firstMessage = "";
-		const allMessages: string[] = [];
-		let name: string | undefined;
-		let lastActivityTime: number | undefined;
+		const accumulator: SessionInfoAccumulator = {
+			header: null,
+			messageCount: 0,
+			firstMessage: "",
+			allMessages: [],
+		};
 
 		const rl = createInterface({
 			input: createReadStream(filePath, { encoding: "utf8" }),
@@ -604,63 +675,12 @@ async function buildSessionInfo(filePath: string): Promise<SessionInfo | null> {
 		for await (const line of rl) {
 			const entry = parseSessionEntryLine(line);
 			if (!entry) continue;
-
-			if (!header) {
-				if (entry.type !== "session") return null;
-				header = entry;
-				continue;
-			}
-
-			// Extract session name (use latest, including explicit clears)
-			if (entry.type === "session_info") {
-				name = entry.name?.trim() || undefined;
-			}
-
-			if (entry.type !== "message") continue;
-			messageCount++;
-
-			const activityTime = getMessageActivityTime(entry);
-			if (typeof activityTime === "number") {
-				lastActivityTime = Math.max(lastActivityTime ?? 0, activityTime);
-			}
-
-			const message = entry.message;
-			if (!isMessageWithContent(message)) continue;
-			if (message.role !== "user" && message.role !== "assistant") continue;
-
-			const textContent = extractTextContent(message);
-			if (!textContent) continue;
-
-			allMessages.push(textContent);
-			if (!firstMessage && message.role === "user") {
-				firstMessage = textContent;
+			if (updateSessionInfoFromEntry(accumulator, entry) === "invalid") {
+				return null;
 			}
 		}
 
-		if (!header) return null;
-
-		const cwd = typeof header.cwd === "string" ? header.cwd : "";
-		const parentSessionPath = header.parentSession;
-		const headerTime = typeof header.timestamp === "string" ? new Date(header.timestamp).getTime() : NaN;
-		const modified =
-			typeof lastActivityTime === "number" && lastActivityTime > 0
-				? new Date(lastActivityTime)
-				: !Number.isNaN(headerTime)
-					? new Date(headerTime)
-					: stats.mtime;
-
-		return {
-			path: filePath,
-			id: header.id,
-			cwd,
-			name,
-			parentSessionPath,
-			created: new Date(header.timestamp),
-			modified,
-			messageCount,
-			firstMessage: firstMessage || "(no messages)",
-			allMessagesText: allMessages.join(" "),
-		};
+		return finalizeSessionInfo(filePath, accumulator, stats);
 	} catch {
 		return null;
 	}
@@ -762,9 +782,9 @@ export class SessionManager {
 	private persist: boolean;
 	private flushed: boolean = false;
 	private fileEntries: FileEntry[] = [];
-	private byId: Map<string, SessionEntry> = new Map();
-	private labelsById: Map<string, string> = new Map();
-	private labelTimestampsById: Map<string, string> = new Map();
+	private readonly byId: Map<string, SessionEntry> = new Map();
+	private readonly labelsById: Map<string, string> = new Map();
+	private readonly labelTimestampsById: Map<string, string> = new Map();
 	private leafId: string | null = null;
 
 	private constructor(
@@ -870,7 +890,7 @@ export class SessionManager {
 	}
 
 	private _rewriteFile(): void {
-		if (!this.persist || !this.sessionFile) return;
+		if (!(this.persist && this.sessionFile)) return;
 		const fd = openSync(this.sessionFile, "w");
 		try {
 			for (const entry of this.fileEntries) {
@@ -906,7 +926,7 @@ export class SessionManager {
 	}
 
 	_persist(entry: SessionEntry): void {
-		if (!this.persist || !this.sessionFile) return;
+		if (!(this.persist && this.sessionFile)) return;
 
 		const hasAssistant = this.fileEntries.some((e) => e.type === "message" && e.message.role === "assistant");
 		if (!hasAssistant) {
@@ -1171,7 +1191,7 @@ export class SessionManager {
 	 */
 	getHeader(): SessionHeader | null {
 		const h = this.fileEntries.find((e) => e.type === "session");
-		return h ? (h as SessionHeader) : null;
+		return h ? h : null;
 	}
 
 	/**
@@ -1326,7 +1346,7 @@ export class SessionManager {
 
 		if (this.persist) {
 			// Build label entries
-			const lastEntryId = pathWithoutLabels[pathWithoutLabels.length - 1]?.id || null;
+			const lastEntryId = pathWithoutLabels.at(-1)?.id || null;
 			let parentId = lastEntryId;
 			const labelEntries: LabelEntry[] = [];
 			for (const { targetId, label, timestamp: labelTimestamp } of labelsToWrite) {
@@ -1366,7 +1386,7 @@ export class SessionManager {
 
 		// In-memory mode: replace current session with the path + labels
 		const labelEntries: LabelEntry[] = [];
-		let parentId = pathWithoutLabels[pathWithoutLabels.length - 1]?.id || null;
+		let parentId = pathWithoutLabels.at(-1)?.id || null;
 		for (const { targetId, label, timestamp: labelTimestamp } of labelsToWrite) {
 			const labelEntry: LabelEntry = {
 				type: "label",

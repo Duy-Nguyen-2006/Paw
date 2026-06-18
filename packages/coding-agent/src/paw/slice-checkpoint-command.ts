@@ -103,139 +103,46 @@ export type PawPrepareCheckpointParsedArgs =
 	| { kind: "ok"; sessionId: string; input: PawPrepareCheckpointParsedInput };
 
 const PREPARE_CHECKPOINT_SCALAR_OPTIONS = new Set(["--base-tree", "--short-id", "--timestamp", "--notes"]);
+const PREPARE_CHECKPOINT_COMMAND_LABEL = "paw prepare-checkpoint";
+
+interface PawPrepareCheckpointArgParseState {
+	baseTree: string | undefined;
+	shortId: string | undefined;
+	timestamp: string | undefined;
+	notes: string | undefined;
+	changedFiles: PawCheckpointChangedFile[];
+	seenScalarOptions: Set<string>;
+}
 
 export function parsePawPrepareCheckpointArgs(args: string[]): PawPrepareCheckpointParsedArgs {
 	if (args.some((arg) => arg === "--help" || arg === "-h")) {
 		return { kind: "help" };
 	}
 
-	if (args.length === 0) {
-		return { kind: "error", message: 'Missing required session id for "paw prepare-checkpoint".' };
+	const sessionIdResult = readPawPrepareCheckpointSessionId(args);
+	if ("kind" in sessionIdResult) {
+		return sessionIdResult;
 	}
 
-	const sessionId = args[0];
-	if (sessionId.startsWith("-")) {
-		return { kind: "error", message: 'Missing required session id for "paw prepare-checkpoint".' };
-	}
-
-	let baseTree: string | undefined;
-	let shortId: string | undefined;
-	let timestamp: string | undefined;
-	let notes: string | undefined;
-	const changedFiles: PawCheckpointChangedFile[] = [];
-	const seenScalarOptions = new Set<string>();
+	const state: PawPrepareCheckpointArgParseState = {
+		baseTree: undefined,
+		shortId: undefined,
+		timestamp: undefined,
+		notes: undefined,
+		changedFiles: [],
+		seenScalarOptions: new Set<string>(),
+	};
 
 	for (let index = 1; index < args.length; ) {
 		const arg = args[index];
-
-		if (arg === "--changed-file") {
-			if (index + 1 >= args.length) {
-				return { kind: "error", message: 'Missing value for "paw prepare-checkpoint" option: --changed-file' };
-			}
-			const value = args[index + 1];
-			if (value.trim().length === 0) {
-				return {
-					kind: "error",
-					message: 'Option --changed-file for "paw prepare-checkpoint" must be a non-empty string.',
-				};
-			}
-			const equalsIndex = value.indexOf("=");
-			if (equalsIndex === -1) {
-				return {
-					kind: "error",
-					message: 'Option --changed-file for "paw prepare-checkpoint" must use <path>=<hash|null>.',
-				};
-			}
-			const path = value.slice(0, equalsIndex).trim();
-			const hashPart = value.slice(equalsIndex + 1);
-			if (path.length === 0) {
-				return {
-					kind: "error",
-					message: 'Option --changed-file for "paw prepare-checkpoint" must include a non-empty path.',
-				};
-			}
-			if (hashPart.length === 0) {
-				return {
-					kind: "error",
-					message: 'Option --changed-file for "paw prepare-checkpoint" must include a hash or null.',
-				};
-			}
-			const contentHash = hashPart === "null" ? null : hashPart;
-			if (contentHash !== null && contentHash.trim().length === 0) {
-				return {
-					kind: "error",
-					message: 'Option --changed-file for "paw prepare-checkpoint" must include a non-empty hash or null.',
-				};
-			}
-			changedFiles.push({ path, content_hash: contentHash });
-			index += 2;
-			continue;
+		const nextIndex = parsePawPrepareCheckpointRemainingArg(arg, args, index, state);
+		if (typeof nextIndex !== "number") {
+			return nextIndex;
 		}
-
-		if (PREPARE_CHECKPOINT_SCALAR_OPTIONS.has(arg)) {
-			if (seenScalarOptions.has(arg)) {
-				return { kind: "error", message: `Duplicate option for "paw prepare-checkpoint": ${arg}` };
-			}
-			seenScalarOptions.add(arg);
-			if (index + 1 >= args.length) {
-				return { kind: "error", message: `Missing value for "paw prepare-checkpoint" option: ${arg}` };
-			}
-			const value = args[index + 1];
-			if (value.trim().length === 0) {
-				return {
-					kind: "error",
-					message: `Option ${arg} for "paw prepare-checkpoint" must be a non-empty string.`,
-				};
-			}
-			if (arg === "--base-tree") {
-				baseTree = value;
-			} else if (arg === "--short-id") {
-				shortId = value;
-			} else if (arg === "--timestamp") {
-				timestamp = value;
-			} else if (arg === "--notes") {
-				notes = value;
-			}
-			index += 2;
-			continue;
-		}
-
-		if (arg.startsWith("-")) {
-			return { kind: "error", message: `Unknown option for "paw prepare-checkpoint": ${arg}` };
-		}
-
-		return { kind: "error", message: `Unknown option for "paw prepare-checkpoint": ${arg}` };
+		index = nextIndex;
 	}
 
-	if (baseTree === undefined) {
-		return { kind: "error", message: 'Missing required option for "paw prepare-checkpoint": --base-tree' };
-	}
-	if (shortId === undefined) {
-		return { kind: "error", message: 'Missing required option for "paw prepare-checkpoint": --short-id' };
-	}
-	if (timestamp === undefined) {
-		return { kind: "error", message: 'Missing required option for "paw prepare-checkpoint": --timestamp' };
-	}
-
-	const timestampError = validatePawPrepareCheckpointTimestamp(timestamp);
-	if (timestampError !== undefined) {
-		return { kind: "error", message: timestampError };
-	}
-	if (changedFiles.length === 0) {
-		return { kind: "error", message: 'Missing required option for "paw prepare-checkpoint": --changed-file' };
-	}
-
-	const input: PawPrepareCheckpointParsedInput = {
-		baseTree,
-		shortId,
-		timestamp,
-		changedFiles,
-	};
-	if (notes !== undefined) {
-		input.notes = notes;
-	}
-
-	return { kind: "ok", sessionId, input };
+	return finalizePawPrepareCheckpointParsedArgs(sessionIdResult.sessionId, state);
 }
 
 export async function createPawPrepareCheckpointCommandResult(
@@ -406,6 +313,188 @@ function mapPawPrepareCheckpointResult(
 				lockReleased,
 			};
 	}
+}
+
+function readPawPrepareCheckpointSessionId(args: string[]): PawPrepareCheckpointParsedArgs | { sessionId: string } {
+	if (args.length === 0) {
+		return { kind: "error", message: `Missing required session id for "${PREPARE_CHECKPOINT_COMMAND_LABEL}".` };
+	}
+
+	const sessionId = args[0];
+	if (sessionId.startsWith("-")) {
+		return { kind: "error", message: `Missing required session id for "${PREPARE_CHECKPOINT_COMMAND_LABEL}".` };
+	}
+
+	return { sessionId };
+}
+
+function parsePawPrepareCheckpointRemainingArg(
+	arg: string,
+	args: string[],
+	index: number,
+	state: PawPrepareCheckpointArgParseState,
+): PawPrepareCheckpointParsedArgs | number {
+	if (arg === "--changed-file") {
+		return parsePawPrepareCheckpointChangedFileOption(args, index, state);
+	}
+
+	if (PREPARE_CHECKPOINT_SCALAR_OPTIONS.has(arg)) {
+		return parsePawPrepareCheckpointScalarOption(arg, args, index, state);
+	}
+
+	if (arg.startsWith("-")) {
+		return { kind: "error", message: `Unknown option for "${PREPARE_CHECKPOINT_COMMAND_LABEL}": ${arg}` };
+	}
+
+	return { kind: "error", message: `Unknown option for "${PREPARE_CHECKPOINT_COMMAND_LABEL}": ${arg}` };
+}
+
+function parsePawPrepareCheckpointChangedFileOption(
+	args: string[],
+	index: number,
+	state: PawPrepareCheckpointArgParseState,
+): PawPrepareCheckpointParsedArgs | number {
+	if (index + 1 >= args.length) {
+		return {
+			kind: "error",
+			message: `Missing value for "${PREPARE_CHECKPOINT_COMMAND_LABEL}" option: --changed-file`,
+		};
+	}
+
+	const value = args[index + 1];
+	const changedFileResult = parsePawPrepareCheckpointChangedFileValue(value);
+	if ("kind" in changedFileResult) {
+		return changedFileResult;
+	}
+
+	state.changedFiles.push(changedFileResult);
+	return index + 2;
+}
+
+function parsePawPrepareCheckpointChangedFileValue(
+	value: string,
+): PawPrepareCheckpointParsedArgs | PawCheckpointChangedFile {
+	if (value.trim().length === 0) {
+		return {
+			kind: "error",
+			message: `Option --changed-file for "${PREPARE_CHECKPOINT_COMMAND_LABEL}" must be a non-empty string.`,
+		};
+	}
+
+	const equalsIndex = value.indexOf("=");
+	if (equalsIndex === -1) {
+		return {
+			kind: "error",
+			message: `Option --changed-file for "${PREPARE_CHECKPOINT_COMMAND_LABEL}" must use <path>=<hash|null>.`,
+		};
+	}
+
+	const path = value.slice(0, equalsIndex).trim();
+	const hashPart = value.slice(equalsIndex + 1);
+	if (path.length === 0) {
+		return {
+			kind: "error",
+			message: `Option --changed-file for "${PREPARE_CHECKPOINT_COMMAND_LABEL}" must include a non-empty path.`,
+		};
+	}
+	if (hashPart.length === 0) {
+		return {
+			kind: "error",
+			message: `Option --changed-file for "${PREPARE_CHECKPOINT_COMMAND_LABEL}" must include a hash or null.`,
+		};
+	}
+
+	const contentHash = hashPart === "null" ? null : hashPart;
+	if (contentHash !== null && contentHash.trim().length === 0) {
+		return {
+			kind: "error",
+			message: `Option --changed-file for "${PREPARE_CHECKPOINT_COMMAND_LABEL}" must include a non-empty hash or null.`,
+		};
+	}
+
+	return { path, content_hash: contentHash };
+}
+
+function parsePawPrepareCheckpointScalarOption(
+	arg: string,
+	args: string[],
+	index: number,
+	state: PawPrepareCheckpointArgParseState,
+): PawPrepareCheckpointParsedArgs | number {
+	if (state.seenScalarOptions.has(arg)) {
+		return { kind: "error", message: `Duplicate option for "${PREPARE_CHECKPOINT_COMMAND_LABEL}": ${arg}` };
+	}
+	state.seenScalarOptions.add(arg);
+	if (index + 1 >= args.length) {
+		return { kind: "error", message: `Missing value for "${PREPARE_CHECKPOINT_COMMAND_LABEL}" option: ${arg}` };
+	}
+
+	const value = args[index + 1];
+	if (value.trim().length === 0) {
+		return {
+			kind: "error",
+			message: `Option ${arg} for "${PREPARE_CHECKPOINT_COMMAND_LABEL}" must be a non-empty string.`,
+		};
+	}
+
+	if (arg === "--base-tree") {
+		state.baseTree = value;
+	} else if (arg === "--short-id") {
+		state.shortId = value;
+	} else if (arg === "--timestamp") {
+		state.timestamp = value;
+	} else if (arg === "--notes") {
+		state.notes = value;
+	}
+
+	return index + 2;
+}
+
+function finalizePawPrepareCheckpointParsedArgs(
+	sessionId: string,
+	state: PawPrepareCheckpointArgParseState,
+): PawPrepareCheckpointParsedArgs {
+	if (state.baseTree === undefined) {
+		return {
+			kind: "error",
+			message: `Missing required option for "${PREPARE_CHECKPOINT_COMMAND_LABEL}": --base-tree`,
+		};
+	}
+	if (state.shortId === undefined) {
+		return {
+			kind: "error",
+			message: `Missing required option for "${PREPARE_CHECKPOINT_COMMAND_LABEL}": --short-id`,
+		};
+	}
+	if (state.timestamp === undefined) {
+		return {
+			kind: "error",
+			message: `Missing required option for "${PREPARE_CHECKPOINT_COMMAND_LABEL}": --timestamp`,
+		};
+	}
+
+	const timestampError = validatePawPrepareCheckpointTimestamp(state.timestamp);
+	if (timestampError !== undefined) {
+		return { kind: "error", message: timestampError };
+	}
+	if (state.changedFiles.length === 0) {
+		return {
+			kind: "error",
+			message: `Missing required option for "${PREPARE_CHECKPOINT_COMMAND_LABEL}": --changed-file`,
+		};
+	}
+
+	const input: PawPrepareCheckpointParsedInput = {
+		baseTree: state.baseTree,
+		shortId: state.shortId,
+		timestamp: state.timestamp,
+		changedFiles: state.changedFiles,
+	};
+	if (state.notes !== undefined) {
+		input.notes = state.notes;
+	}
+
+	return { kind: "ok", sessionId, input };
 }
 
 function validatePawPrepareCheckpointTimestamp(timestamp: string): string | undefined {

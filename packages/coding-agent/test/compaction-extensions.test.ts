@@ -350,7 +350,6 @@ describe.skipIf(!API_KEY)("Compaction extensions", () => {
 
 	it("should pass correct data in before_compact event", async () => {
 		let capturedBeforeEvent: SessionBeforeCompactEvent | null = null;
-
 		const extension = createExtension((event) => {
 			capturedBeforeEvent = event;
 			return undefined;

@@ -447,7 +447,7 @@ describe("ToolExecutionComponent parity", () => {
 			title: "outside AGENTS.md",
 			path: resolve(process.cwd(), "..", "AGENTS.md"),
 			content: "Hidden outside resource instructions",
-			compact: `read resource ${resolve(process.cwd(), "..", "AGENTS.md").replace(/\\/g, "/")}`,
+			compact: `read resource ${resolve(process.cwd(), "..", "AGENTS.md").replaceAll("\\", "/")}`,
 			hidden: "Hidden outside resource instructions",
 			absent: undefined,
 		},

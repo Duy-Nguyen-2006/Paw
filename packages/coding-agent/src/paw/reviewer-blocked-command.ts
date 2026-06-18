@@ -157,7 +157,7 @@ export type PawBlockReviewerParsedArgs =
 const BLOCK_REVIEWER_SCALAR_OPTIONS = new Set(["--output-file"]);
 
 export function parsePawBlockReviewerArgs(args: string[]): PawBlockReviewerParsedArgs {
-	if (args.some((arg) => arg === "--help" || arg === "-h")) {
+	if (args.includes("--help") || args.includes("-h")) {
 		return { kind: "help" };
 	}
 
@@ -176,33 +176,17 @@ export function parsePawBlockReviewerArgs(args: string[]): PawBlockReviewerParse
 	for (let index = 1; index < args.length; ) {
 		const arg = args[index];
 
-		if (BLOCK_REVIEWER_SCALAR_OPTIONS.has(arg)) {
-			if (seenScalarOptions.has(arg)) {
-				return { kind: "error", message: `Duplicate option for "paw block-reviewer": ${arg}` };
-			}
-			seenScalarOptions.add(arg);
-			if (index + 1 >= args.length) {
-				return { kind: "error", message: `Missing value for "paw block-reviewer" option: ${arg}` };
-			}
-			const value = args[index + 1];
-			if (value.trim().length === 0) {
-				return {
-					kind: "error",
-					message: `Option ${arg} for "paw block-reviewer" must be a non-empty string.`,
-				};
-			}
-			if (arg === "--output-file") {
-				outputFile = value;
-			}
-			index += 2;
-			continue;
-		}
-
-		if (arg.startsWith("-")) {
+		if (!BLOCK_REVIEWER_SCALAR_OPTIONS.has(arg)) {
 			return { kind: "error", message: `Unknown option for "paw block-reviewer": ${arg}` };
 		}
 
-		return { kind: "error", message: `Unknown option for "paw block-reviewer": ${arg}` };
+		const error = validateScalarOption(arg, args, index, seenScalarOptions);
+		if (error) return { kind: "error", message: error };
+		seenScalarOptions.add(arg);
+		if (arg === "--output-file") {
+			outputFile = args[index + 1];
+		}
+		index += 2;
 	}
 
 	if (outputFile === undefined) {
@@ -210,6 +194,19 @@ export function parsePawBlockReviewerArgs(args: string[]): PawBlockReviewerParse
 	}
 
 	return { kind: "ok", sessionId, input: { outputFile } };
+}
+
+function validateScalarOption(arg: string, args: string[], index: number, seen: Set<string>): string | null {
+	if (seen.has(arg)) {
+		return `Duplicate option for "paw block-reviewer": ${arg}`;
+	}
+	if (index + 1 >= args.length) {
+		return `Missing value for "paw block-reviewer" option: ${arg}`;
+	}
+	if (args[index + 1].trim().length === 0) {
+		return `Option ${arg} for "paw block-reviewer" must be a non-empty string.`;
+	}
+	return null;
 }
 
 export async function createPawBlockReviewerCommandResult(

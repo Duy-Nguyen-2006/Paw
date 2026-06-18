@@ -28,7 +28,7 @@ export class DoomEngine {
 	private module: DoomModule | null = null;
 	private frameBufferPtr: number = 0;
 	private initialized = false;
-	private wadPath: string;
+	private readonly wadPath: string;
 	private _width = 640;
 	private _height = 400;
 

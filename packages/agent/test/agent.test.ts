@@ -583,7 +583,7 @@ describe("Agent", () => {
 		});
 
 		expect(hasQueuedFollowUp).toBe(true);
-		expect(agent.state.messages[agent.state.messages.length - 1].role).toBe("assistant");
+		expect(agent.state.messages.at(-1)?.role).toBe("assistant");
 	});
 
 	it("continue() should keep one-at-a-time steering semantics from assistant tail", async () => {

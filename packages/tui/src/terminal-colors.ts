@@ -23,14 +23,20 @@ function parseOscHexChannel(channel: string): number | undefined {
 	return Math.round((parseInt(channel, 16) / max) * 255);
 }
 
-const OSC11_BACKGROUND_COLOR_RESPONSE_PATTERN = /^\x1b\]11;([^\x07\x1b]*)(?:\x07|\x1b\\)$/i;
+// OSC 11 escape sequence uses ESC (0x1B) and BEL (0x07) control characters
+const ESC = String.fromCharCode(0x1b);
+const BEL = String.fromCharCode(0x07);
+const OSC11_BACKGROUND_COLOR_RESPONSE_PATTERN = new RegExp(
+	`^${ESC}\\]11;([^${BEL}${ESC}]*)(?:${BEL}|${ESC}\\\\)$`,
+	"i",
+);
 
 export function isOsc11BackgroundColorResponse(data: string): boolean {
 	return OSC11_BACKGROUND_COLOR_RESPONSE_PATTERN.test(data);
 }
 
 export function parseOsc11BackgroundColor(data: string): RgbColor | undefined {
-	const match = data.match(OSC11_BACKGROUND_COLOR_RESPONSE_PATTERN);
+	const match = OSC11_BACKGROUND_COLOR_RESPONSE_PATTERN.exec(data);
 	if (!match) {
 		return undefined;
 	}

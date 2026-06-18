@@ -134,6 +134,7 @@ async function loadSkillsFromDirInternal(
 	}
 	const entries = entriesResult.value;
 
+	// First pass: look for SKILL.md
 	for (const entry of entries) {
 		if (entry.name !== "SKILL.md") continue;
 		const fullPath = entry.path;
@@ -141,13 +142,13 @@ async function loadSkillsFromDirInternal(
 		if (kind !== "file") continue;
 		const relPath = relativeEnvPath(rootDir, fullPath);
 		if (ignoreMatcher.ignores(relPath)) continue;
-
 		const result = await loadSkillFromFile(env, fullPath);
 		if (result.skill) skills.push(result.skill);
 		diagnostics.push(...result.diagnostics);
 		return { skills, diagnostics };
 	}
 
+	// Second pass: process remaining entries
 	for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
 		if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
 		const fullPath = entry.path;

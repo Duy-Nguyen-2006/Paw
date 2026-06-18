@@ -110,7 +110,7 @@ export type PawFinalizeParsedArgs =
 	| { kind: "ok"; sessionId: string; summary: string; evidence: string[] };
 
 export function parsePawFinalizeArgs(args: string[]): PawFinalizeParsedArgs {
-	if (args.some((arg) => arg === "--help" || arg === "-h")) {
+	if (args.includes("--help") || args.includes("-h")) {
 		return { kind: "help" };
 	}
 

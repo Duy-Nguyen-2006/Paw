@@ -40,7 +40,7 @@ function leafIdAfterEntry(entry: SessionTreeEntry): string | null {
 export class InMemorySessionStorage<TMetadata extends SessionMetadata = SessionMetadata>
 	implements SessionStorage<TMetadata>
 {
-	private readonly metadata: TMetadata;
+	private metadata: TMetadata;
 	private entries: SessionTreeEntry[];
 	private byId: Map<string, SessionTreeEntry>;
 	private labelsById: Map<string, string>;

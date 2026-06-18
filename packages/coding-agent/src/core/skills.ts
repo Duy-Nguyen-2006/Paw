@@ -1,6 +1,6 @@
-import { existsSync, readdirSync, readFileSync, statSync } from "fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import ignore from "ignore";
-import { basename, dirname, join, relative, resolve, sep } from "path";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.ts";
 import { parseFrontmatter } from "../utils/frontmatter.ts";
 import { canonicalizePath, resolvePath } from "../utils/paths.ts";
@@ -348,11 +348,13 @@ export function formatSkillsForPrompt(skills: Skill[]): string {
 	];
 
 	for (const skill of visibleSkills) {
-		lines.push("  <skill>");
-		lines.push(`    <name>${escapeXml(skill.name)}</name>`);
-		lines.push(`    <description>${escapeXml(skill.description)}</description>`);
-		lines.push(`    <location>${escapeXml(skill.filePath)}</location>`);
-		lines.push("  </skill>");
+		lines.push(
+			"  <skill>",
+			`    <name>${escapeXml(skill.name)}</name>`,
+			`    <description>${escapeXml(skill.description)}</description>`,
+			`    <location>${escapeXml(skill.filePath)}</location>`,
+			"  </skill>",
+		);
 	}
 
 	lines.push("</available_skills>");
@@ -384,6 +386,62 @@ export interface LoadSkillsOptions {
  * Load skills from all configured locations.
  * Returns skills and any validation diagnostics.
  */
+function isUnderPath(target: string, root: string): boolean {
+	const normalizedRoot = resolve(root);
+	if (target === normalizedRoot) {
+		return true;
+	}
+	const prefix = normalizedRoot.endsWith(sep) ? normalizedRoot : `${normalizedRoot}${sep}`;
+	return target.startsWith(prefix);
+}
+
+function getSkillSource(
+	resolvedPath: string,
+	userSkillsDir: string,
+	projectSkillsDir: string,
+	includeDefaults: boolean,
+): "user" | "project" | "path" {
+	if (!includeDefaults) {
+		if (isUnderPath(resolvedPath, userSkillsDir)) return "user";
+		if (isUnderPath(resolvedPath, projectSkillsDir)) return "project";
+	}
+	return "path";
+}
+
+function loadSkillFromPath(
+	rawPath: string,
+	resolvedCwd: string,
+	userSkillsDir: string,
+	projectSkillsDir: string,
+	includeDefaults: boolean,
+	addSkills: (result: LoadSkillsResult) => void,
+): { message?: string; skillFound: boolean } {
+	const resolvedPath = resolvePath(rawPath, resolvedCwd, { trim: true });
+	if (!existsSync(resolvedPath)) {
+		return { message: "skill path does not exist", skillFound: false };
+	}
+	try {
+		const stats = statSync(resolvedPath);
+		const source = getSkillSource(resolvedPath, userSkillsDir, projectSkillsDir, includeDefaults);
+		if (stats.isDirectory()) {
+			addSkills(loadSkillsFromDirInternal(resolvedPath, source, true));
+			return { skillFound: true };
+		}
+		if (stats.isFile() && resolvedPath.endsWith(".md")) {
+			const result = loadSkillFromFile(resolvedPath, source);
+			if (result.skill) {
+				addSkills({ skills: [result.skill], diagnostics: result.diagnostics });
+				return { skillFound: true };
+			}
+			return { message: result.diagnostics.map((d) => d.message).join("; "), skillFound: false };
+		}
+		return { message: "skill path is not a markdown file", skillFound: false };
+	} catch (error) {
+		const message = error instanceof Error ? error.message : "failed to read skill path";
+		return { message, skillFound: false };
+	}
+}
+
 export function loadSkills(options: LoadSkillsOptions): LoadSkillsResult {
 	const { agentDir, skillPaths, includeDefaults } = options;
 
@@ -435,48 +493,21 @@ export function loadSkills(options: LoadSkillsOptions): LoadSkillsResult {
 	const userSkillsDir = join(resolvedAgentDir, "skills");
 	const projectSkillsDir = resolve(resolvedCwd, CONFIG_DIR_NAME, "skills");
 
-	const isUnderPath = (target: string, root: string): boolean => {
-		const normalizedRoot = resolve(root);
-		if (target === normalizedRoot) {
-			return true;
-		}
-		const prefix = normalizedRoot.endsWith(sep) ? normalizedRoot : `${normalizedRoot}${sep}`;
-		return target.startsWith(prefix);
-	};
-
-	const getSource = (resolvedPath: string): "user" | "project" | "path" => {
-		if (!includeDefaults) {
-			if (isUnderPath(resolvedPath, userSkillsDir)) return "user";
-			if (isUnderPath(resolvedPath, projectSkillsDir)) return "project";
-		}
-		return "path";
-	};
-
 	for (const rawPath of skillPaths) {
-		const resolvedPath = resolvePath(rawPath, resolvedCwd, { trim: true });
-		if (!existsSync(resolvedPath)) {
-			allDiagnostics.push({ type: "warning", message: "skill path does not exist", path: resolvedPath });
-			continue;
-		}
-
-		try {
-			const stats = statSync(resolvedPath);
-			const source = getSource(resolvedPath);
-			if (stats.isDirectory()) {
-				addSkills(loadSkillsFromDirInternal(resolvedPath, source, true));
-			} else if (stats.isFile() && resolvedPath.endsWith(".md")) {
-				const result = loadSkillFromFile(resolvedPath, source);
-				if (result.skill) {
-					addSkills({ skills: [result.skill], diagnostics: result.diagnostics });
-				} else {
-					allDiagnostics.push(...result.diagnostics);
-				}
-			} else {
-				allDiagnostics.push({ type: "warning", message: "skill path is not a markdown file", path: resolvedPath });
-			}
-		} catch (error) {
-			const message = error instanceof Error ? error.message : "failed to read skill path";
-			allDiagnostics.push({ type: "warning", message, path: resolvedPath });
+		const result = loadSkillFromPath(
+			rawPath,
+			resolvedCwd,
+			userSkillsDir,
+			projectSkillsDir,
+			includeDefaults,
+			addSkills,
+		);
+		if (result.message && !result.skillFound) {
+			allDiagnostics.push({
+				type: "warning",
+				message: result.message,
+				path: resolvePath(rawPath, resolvedCwd, { trim: true }),
+			});
 		}
 	}
 

@@ -77,6 +77,20 @@ function isSpanOpenTagStart(html: string, index: number): boolean {
 	return nextChar === ">" || nextChar === " " || nextChar === "\t" || nextChar === "\n" || nextChar === "\r";
 }
 
+function handleSpanOpenTag(html: string, index: number, scopes: Array<string | undefined>): number | undefined {
+	if (!isSpanOpenTagStart(html, index)) return undefined;
+	const tagEndIndex = html.indexOf(">", index + 5);
+	if (tagEndIndex === -1) return undefined;
+	const tag = html.slice(index, tagEndIndex + 1);
+	scopes.push(getScopeFromSpanTag(tag));
+	return tagEndIndex + 1;
+}
+
+function handleHtmlEntity(html: string, index: number): { text: string; length: number } | undefined {
+	if (html[index] !== "&") return undefined;
+	return decodeHtmlEntityAt(html, index);
+}
+
 export function renderHighlightedHtml(html: string, theme: HighlightTheme = {}): string {
 	let output = "";
 	let textBuffer = "";
@@ -93,16 +107,11 @@ export function renderHighlightedHtml(html: string, theme: HighlightTheme = {}):
 
 	let index = 0;
 	while (index < html.length) {
-		if (isSpanOpenTagStart(html, index)) {
-			const tagEndIndex = html.indexOf(">", index + 5);
-			if (tagEndIndex !== -1) {
-				flushText();
-				const tag = html.slice(index, tagEndIndex + 1);
-				const scope = getScopeFromSpanTag(tag);
-				scopes.push(scope);
-				index = tagEndIndex + 1;
-				continue;
-			}
+		const spanNext = handleSpanOpenTag(html, index, scopes);
+		if (spanNext !== undefined) {
+			flushText();
+			index = spanNext;
+			continue;
 		}
 
 		if (html.startsWith(SPAN_CLOSE, index)) {
@@ -114,13 +123,11 @@ export function renderHighlightedHtml(html: string, theme: HighlightTheme = {}):
 			continue;
 		}
 
-		if (html[index] === "&") {
-			const decoded = decodeHtmlEntityAt(html, index);
-			if (decoded) {
-				textBuffer += decoded.text;
-				index += decoded.length;
-				continue;
-			}
+		const entity = handleHtmlEntity(html, index);
+		if (entity) {
+			textBuffer += entity.text;
+			index += entity.length;
+			continue;
 		}
 
 		textBuffer += html[index];

@@ -1,5 +1,5 @@
-import { execSync, spawn } from "child_process";
-import { platform } from "os";
+import { execSync, spawn } from "node:child_process";
+import { platform } from "node:os";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { copyToClipboard } from "../src/utils/clipboard.ts";
 

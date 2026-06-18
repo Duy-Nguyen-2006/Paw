@@ -59,7 +59,7 @@ describe("ModelRegistry", () => {
 	}
 
 	function toShPath(value: string): string {
-		return value.replace(/\\/g, "/").replace(/"/g, '\\"');
+		return value.replaceAll("\\", "/").replace(/"/g, '\\"');
 	}
 
 	/** Create a baseUrl-only override (no custom models) */
@@ -1414,7 +1414,7 @@ describe("ModelRegistry", () => {
 				await registry.getApiKeyForProvider("custom-provider");
 				await registry.getApiKeyForProvider("custom-provider");
 
-				const count = parseInt(readFileSync(counterFile, "utf-8").trim(), 10);
+				const count = Number.parseInt(readFileSync(counterFile, "utf-8").trim(), 10);
 				expect(count).toBe(3);
 			});
 
@@ -1434,7 +1434,7 @@ describe("ModelRegistry", () => {
 				const registry2 = ModelRegistry.create(authStorage, modelsJsonPath);
 				await registry2.getApiKeyForProvider("custom-provider");
 
-				const count = parseInt(readFileSync(counterFile, "utf-8").trim(), 10);
+				const count = Number.parseInt(readFileSync(counterFile, "utf-8").trim(), 10);
 				expect(count).toBe(2);
 			});
 
@@ -1470,7 +1470,7 @@ describe("ModelRegistry", () => {
 				expect(key1).toBeUndefined();
 				expect(key2).toBeUndefined();
 
-				const count = parseInt(readFileSync(counterFile, "utf-8").trim(), 10);
+				const count = Number.parseInt(readFileSync(counterFile, "utf-8").trim(), 10);
 				expect(count).toBe(2);
 			});
 
@@ -1633,7 +1633,7 @@ describe("ModelRegistry", () => {
 				const available = registry.getAvailable();
 
 				expect(available.some((m) => m.provider === "custom-provider")).toBe(true);
-				const count = parseInt(readFileSync(counterFile, "utf-8").trim(), 10);
+				const count = Number.parseInt(readFileSync(counterFile, "utf-8").trim(), 10);
 				expect(count).toBe(0);
 			});
 

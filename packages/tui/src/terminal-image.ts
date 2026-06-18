@@ -29,7 +29,6 @@ export interface ImageRenderOptions {
 }
 
 let cachedCapabilities: TerminalCapabilities | null = null;
-
 // Default cell dimensions - updated by TUI when terminal responds to query
 let cellDimensions: CellDimensions = { widthPx: 9, heightPx: 18 };
 
@@ -120,9 +119,7 @@ export function detectCapabilities(tmuxForwardsHyperlink: () => boolean = probeT
 }
 
 export function getCapabilities(): TerminalCapabilities {
-	if (!cachedCapabilities) {
-		cachedCapabilities = detectCapabilities();
-	}
+	cachedCapabilities ??= detectCapabilities();
 	return cachedCapabilities;
 }
 

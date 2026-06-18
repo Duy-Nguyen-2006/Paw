@@ -6,7 +6,7 @@ const imageModelRegistry: Map<string, Map<string, ImagesModel<ImagesApi>>> = new
 for (const [provider, models] of Object.entries(IMAGE_MODELS)) {
 	const providerModels = new Map<string, ImagesModel<ImagesApi>>();
 	for (const [id, model] of Object.entries(models)) {
-		providerModels.set(id, model as ImagesModel<ImagesApi>);
+		providerModels.set(id, model);
 	}
 	imageModelRegistry.set(provider, providerModels);
 }

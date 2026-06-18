@@ -3,7 +3,7 @@ import { parse as partialParse } from "partial-json";
 const VALID_JSON_ESCAPES = new Set(['"', "\\", "/", "b", "f", "n", "r", "t", "u"]);
 
 function isControlCharacter(char: string): boolean {
-	const codePoint = char.codePointAt(0);
+	const codePoint = char.codePointAt(0)!;
 	return codePoint !== undefined && codePoint >= 0x00 && codePoint <= 0x1f;
 }
 

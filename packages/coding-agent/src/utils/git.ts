@@ -19,7 +19,7 @@ export type GitSource = {
 };
 
 function splitRef(url: string): { repo: string; ref?: string } {
-	const scpLikeMatch = url.match(/^git@([^:]+):(.+)$/);
+	const scpLikeMatch = /^git@([^:]+):(.+)$/.exec(url);
 	if (scpLikeMatch) {
 		const pathWithMaybeRef = scpLikeMatch[2] ?? "";
 		const refSeparator = pathWithMaybeRef.indexOf("@");
@@ -129,7 +129,7 @@ function parseGenericGitUrl(url: string): GitSource | null {
 	let host = "";
 	let path = "";
 
-	const scpLikeMatch = repoWithoutRef.match(/^git@([^:]+):(.+)$/);
+	const scpLikeMatch = /^git@([^:]+):(.+)$/.exec(repoWithoutRef);
 	if (scpLikeMatch) {
 		host = scpLikeMatch[1] ?? "";
 		path = scpLikeMatch[2] ?? "";
@@ -180,47 +180,76 @@ export function parseGitUrl(source: string): GitSource | null {
 
 	const split = splitRef(url);
 
-	const hostedCandidates = [split.ref ? `${split.repo}#${split.ref}` : undefined, url].filter(
-		(value): value is string => Boolean(value),
-	);
-	for (const candidate of hostedCandidates) {
-		const info = hostedGitInfo.fromUrl(candidate);
-		if (info) {
-			if (split.ref && info.project?.includes("@")) {
-				continue;
-			}
-			const useHttpsPrefix =
-				!split.repo.startsWith("http://") &&
-				!split.repo.startsWith("https://") &&
-				!split.repo.startsWith("ssh://") &&
-				!split.repo.startsWith("git://") &&
-				!split.repo.startsWith("git@");
-			return buildGitSource({
-				repo: useHttpsPrefix ? `https://${split.repo}` : split.repo,
-				host: info.domain || "",
-				path: `${info.user}/${info.project}`,
-				ref: info.committish || split.ref || undefined,
-			});
-		}
-	}
+	const hosted = resolveHostedGitSource(split.repo, split.ref, url, false);
+	if (hosted) return hosted;
 
-	const httpsCandidates = [split.ref ? `https://${split.repo}#${split.ref}` : undefined, `https://${url}`].filter(
-		(value): value is string => Boolean(value),
-	);
-	for (const candidate of httpsCandidates) {
-		const info = hostedGitInfo.fromUrl(candidate);
-		if (info) {
-			if (split.ref && info.project?.includes("@")) {
-				continue;
-			}
-			return buildGitSource({
-				repo: `https://${split.repo}`,
-				host: info.domain || "",
-				path: `${info.user}/${info.project}`,
-				ref: info.committish || split.ref || undefined,
-			});
-		}
-	}
+	const httpsHosted = resolveHostedGitSource(split.repo, split.ref, url, true);
+	if (httpsHosted) return httpsHosted;
 
 	return parseGenericGitUrl(url);
+}
+
+/**
+ * Try to resolve the source via hosted-git-info, optionally prepending an
+ * https:// prefix. Returns null when the source isn't a known hosted provider.
+ */
+function resolveHostedGitSource(
+	repo: string,
+	ref: string | undefined,
+	url: string,
+	forceHttps: boolean,
+): GitSource | null {
+	const candidates = buildHostedCandidates(repo, ref, url, forceHttps);
+	for (const candidate of candidates) {
+		const source = tryBuildFromHostedInfo(candidate, repo, ref, forceHttps);
+		if (source) return source;
+	}
+	return null;
+}
+
+/** Build the list of hosted-git-info URL candidates for the given inputs. */
+function buildHostedCandidates(repo: string, ref: string | undefined, url: string, forceHttps: boolean): string[] {
+	if (forceHttps) {
+		return [ref ? `https://${repo}#${ref}` : undefined, `https://${url}`].filter((value): value is string =>
+			Boolean(value),
+		);
+	}
+	return [ref ? `${repo}#${ref}` : undefined, url].filter((value): value is string => Boolean(value));
+}
+
+/**
+ * Try to build a GitSource from hosted-git-info for a single candidate URL.
+ * Skips candidates whose project already includes a ref ("@").
+ */
+function tryBuildFromHostedInfo(
+	candidate: string,
+	repo: string,
+	ref: string | undefined,
+	forceHttps: boolean,
+): GitSource | null {
+	const info = hostedGitInfo.fromUrl(candidate);
+	if (!info) return null;
+	if (ref && info.project?.includes("@")) return null;
+
+	const resolvedRepo = forceHttps || shouldAddHttpsPrefix(repo) ? `https://${repo}` : repo;
+	return buildGitSource({
+		repo: resolvedRepo,
+		host: info.domain || "",
+		path: `${info.user}/${info.project}`,
+		ref: info.committish || ref || undefined,
+	});
+}
+
+/**
+ * Whether the repo string is missing a known protocol prefix and should be
+ * rewritten with an https:// scheme.
+ */
+function shouldAddHttpsPrefix(repo: string): boolean {
+	return (
+		!repo.startsWith("http://") &&
+		!repo.startsWith("https://") &&
+		!repo.startsWith("ssh://") &&
+		!repo.startsWith("git://") &&
+		!repo.startsWith("git@")
+	);
 }

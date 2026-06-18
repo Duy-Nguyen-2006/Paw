@@ -255,8 +255,8 @@ export function parseModelPattern(
  * The algorithm tries to match the full pattern first, then progressively
  * strips colon-suffixes to find a match.
  */
-export async function resolveModelScope(patterns: string[], modelRegistry: ModelRegistry): Promise<ScopedModel[]> {
-	const availableModels = await modelRegistry.getAvailable();
+export function resolveModelScope(patterns: string[], modelRegistry: ModelRegistry): Promise<ScopedModel[]> {
+	const availableModels = modelRegistry.getAvailable();
 	const scopedModels: ScopedModel[] = [];
 
 	for (const pattern of patterns) {
@@ -312,7 +312,7 @@ export async function resolveModelScope(patterns: string[], modelRegistry: Model
 		}
 	}
 
-	return scopedModels;
+	return Promise.resolve(scopedModels);
 }
 
 export interface ResolveCliModelResult {
@@ -524,7 +524,7 @@ export interface InitialModelResult {
  * 4. Saved default from settings
  * 5. First available model with valid API key
  */
-export async function findInitialModel(options: {
+export function findInitialModel(options: {
 	cliProvider?: string;
 	cliModel?: string;
 	scopedModels: ScopedModel[];
@@ -547,6 +547,7 @@ export async function findInitialModel(options: {
 
 	let model: Model<Api> | undefined;
 	let thinkingLevel: ThinkingLevel = DEFAULT_THINKING_LEVEL;
+	let result: InitialModelResult;
 
 	// 1. CLI args take priority
 	if (cliProvider && cliModel) {
@@ -560,17 +561,19 @@ export async function findInitialModel(options: {
 			process.exit(1);
 		}
 		if (resolved.model) {
-			return { model: resolved.model, thinkingLevel: DEFAULT_THINKING_LEVEL, fallbackMessage: undefined };
+			result = { model: resolved.model, thinkingLevel: DEFAULT_THINKING_LEVEL, fallbackMessage: undefined };
+			return Promise.resolve(result);
 		}
 	}
 
 	// 2. Use first model from scoped models (skip if continuing/resuming)
 	if (scopedModels.length > 0 && !isContinuing) {
-		return {
+		result = {
 			model: scopedModels[0].model,
 			thinkingLevel: scopedModels[0].thinkingLevel ?? defaultThinkingLevel ?? DEFAULT_THINKING_LEVEL,
 			fallbackMessage: undefined,
 		};
+		return Promise.resolve(result);
 	}
 
 	// 3. Try saved default from settings
@@ -581,12 +584,13 @@ export async function findInitialModel(options: {
 			if (defaultThinkingLevel) {
 				thinkingLevel = defaultThinkingLevel;
 			}
-			return { model, thinkingLevel, fallbackMessage: undefined };
+			result = { model, thinkingLevel, fallbackMessage: undefined };
+			return Promise.resolve(result);
 		}
 	}
 
 	// 4. Try first available model with valid API key
-	const availableModels = await modelRegistry.getAvailable();
+	const availableModels = modelRegistry.getAvailable();
 
 	if (availableModels.length > 0) {
 		// Try to find a default model from known providers
@@ -594,22 +598,43 @@ export async function findInitialModel(options: {
 			const defaultId = defaultModelPerProvider[provider];
 			const match = availableModels.find((m) => m.provider === provider && m.id === defaultId);
 			if (match) {
-				return { model: match, thinkingLevel: DEFAULT_THINKING_LEVEL, fallbackMessage: undefined };
+				result = { model: match, thinkingLevel: DEFAULT_THINKING_LEVEL, fallbackMessage: undefined };
+				return Promise.resolve(result);
 			}
 		}
 
 		// If no default found, use first available
-		return { model: availableModels[0], thinkingLevel: DEFAULT_THINKING_LEVEL, fallbackMessage: undefined };
+		result = { model: availableModels[0], thinkingLevel: DEFAULT_THINKING_LEVEL, fallbackMessage: undefined };
+		return Promise.resolve(result);
 	}
 
 	// 5. No model found
-	return { model: undefined, thinkingLevel: DEFAULT_THINKING_LEVEL, fallbackMessage: undefined };
+	result = { model: undefined, thinkingLevel: DEFAULT_THINKING_LEVEL, fallbackMessage: undefined };
+	return Promise.resolve(result);
 }
 
 /**
  * Restore model from session, with fallback to available models
  */
-export async function restoreModelFromSession(
+function pickDefaultFallbackModel(availableModels: Model<Api>[]): Model<Api> | undefined {
+	for (const provider of Object.keys(defaultModelPerProvider) as KnownProvider[]) {
+		const defaultId = defaultModelPerProvider[provider];
+		const match = availableModels.find((m) => m.provider === provider && m.id === defaultId);
+		if (match) return match;
+	}
+	return availableModels[0];
+}
+
+function formatFallbackMessage(
+	savedProvider: string,
+	savedModelId: string,
+	reason: string,
+	fallbackModel: Model<Api>,
+): string {
+	return `Could not restore model ${savedProvider}/${savedModelId} (${reason}). Using ${fallbackModel.provider}/${fallbackModel.id}.`;
+}
+
+export function restoreModelFromSession(
 	savedProvider: string,
 	savedModelId: string,
 	currentModel: Model<Api> | undefined,
@@ -625,7 +650,7 @@ export async function restoreModelFromSession(
 		if (shouldPrintMessages) {
 			console.log(chalk.dim(`Restored model: ${savedProvider}/${savedModelId}`));
 		}
-		return { model: restoredModel, fallbackMessage: undefined };
+		return Promise.resolve({ model: restoredModel, fallbackMessage: undefined });
 	}
 
 	// Model not found or no API key - fall back
@@ -640,42 +665,27 @@ export async function restoreModelFromSession(
 		if (shouldPrintMessages) {
 			console.log(chalk.dim(`Falling back to: ${currentModel.provider}/${currentModel.id}`));
 		}
-		return {
+		return Promise.resolve({
 			model: currentModel,
-			fallbackMessage: `Could not restore model ${savedProvider}/${savedModelId} (${reason}). Using ${currentModel.provider}/${currentModel.id}.`,
-		};
+			fallbackMessage: formatFallbackMessage(savedProvider, savedModelId, reason, currentModel),
+		});
 	}
 
 	// Try to find any available model
-	const availableModels = await modelRegistry.getAvailable();
-
-	if (availableModels.length > 0) {
-		// Try to find a default model from known providers
-		let fallbackModel: Model<Api> | undefined;
-		for (const provider of Object.keys(defaultModelPerProvider) as KnownProvider[]) {
-			const defaultId = defaultModelPerProvider[provider];
-			const match = availableModels.find((m) => m.provider === provider && m.id === defaultId);
-			if (match) {
-				fallbackModel = match;
-				break;
-			}
-		}
-
-		// If no default found, use first available
-		if (!fallbackModel) {
-			fallbackModel = availableModels[0];
-		}
-
-		if (shouldPrintMessages) {
-			console.log(chalk.dim(`Falling back to: ${fallbackModel.provider}/${fallbackModel.id}`));
-		}
-
-		return {
-			model: fallbackModel,
-			fallbackMessage: `Could not restore model ${savedProvider}/${savedModelId} (${reason}). Using ${fallbackModel.provider}/${fallbackModel.id}.`,
-		};
+	const availableModels = modelRegistry.getAvailable();
+	if (availableModels.length === 0) {
+		return Promise.resolve({ model: undefined, fallbackMessage: undefined });
 	}
 
-	// No models available
-	return { model: undefined, fallbackMessage: undefined };
+	const fallbackModel = pickDefaultFallbackModel(availableModels);
+	if (!fallbackModel) {
+		return Promise.resolve({ model: undefined, fallbackMessage: undefined });
+	}
+	if (shouldPrintMessages) {
+		console.log(chalk.dim(`Falling back to: ${fallbackModel.provider}/${fallbackModel.id}`));
+	}
+	return Promise.resolve({
+		model: fallbackModel,
+		fallbackMessage: formatFallbackMessage(savedProvider, savedModelId, reason, fallbackModel),
+	});
 }

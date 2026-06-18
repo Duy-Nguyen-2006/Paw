@@ -397,21 +397,20 @@ function readRestorableFile(value: unknown, index: number, issues: PawValidation
 	const prefix = `/restore_files/${index}`;
 	const record = readRecord(value, prefix, CHECKPOINT_RESTORABLE_FILE_KEYS, issues);
 
+	validatePawOwnedTrue(record, index, issues);
+
 	return {
 		path: readNonEmptyString(record, "path", issues, prefix),
-		paw_owned: readPawOwnedTrue(record, index, issues),
+		paw_owned: true,
 		restore_content: readNullableContent(record, "restore_content", issues, prefix),
 		current_content_hash: readNullableContentHash(record, "current_content_hash", issues, prefix),
 	};
 }
 
-function readPawOwnedTrue(record: Record<string, unknown>, index: number, issues: PawValidationIssue[]): true {
-	if (record.paw_owned === true) {
-		return true;
+function validatePawOwnedTrue(record: Record<string, unknown>, index: number, issues: PawValidationIssue[]): void {
+	if (record.paw_owned !== true) {
+		issues.push({ path: `/restore_files/${index}/paw_owned`, message: "Expected true." });
 	}
-
-	issues.push({ path: `/restore_files/${index}/paw_owned`, message: "Expected true." });
-	return true;
 }
 
 function readNullableContent(

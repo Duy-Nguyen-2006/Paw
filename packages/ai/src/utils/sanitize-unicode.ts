@@ -15,7 +15,7 @@
  * sanitizeSurrogates("Hello 🙈 World") // => "Hello 🙈 World"
  *
  * // Unpaired high surrogate is removed
- * const unpaired = String.fromCharCode(0xD83D); // high surrogate without low
+ * const unpaired = String.fromCodePoint(0xD83D); // high surrogate without low
  * sanitizeSurrogates(`Text ${unpaired} here`) // => "Text  here"
  */
 export function sanitizeSurrogates(text: string): string {

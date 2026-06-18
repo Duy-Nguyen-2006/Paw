@@ -86,10 +86,10 @@ describe("Paw init command", () => {
 		process.chdir(projectRoot);
 		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
-		await expect(handlePawCommand(["paw", "build"])).resolves.toBe(true);
+		await expect(handlePawCommand(["paw", "not-a-real-command"])).resolves.toBe(true);
 
 		const stderr = errorSpy.mock.calls.map(([message]) => String(message)).join("\n");
-		expect(stderr).toContain('Missing required session id for "paw build"');
+		expect(stderr).toContain("Unknown Paw command: not-a-real-command");
 		expect(process.exitCode).toBe(1);
 	});
 

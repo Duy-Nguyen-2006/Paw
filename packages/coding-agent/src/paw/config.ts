@@ -43,7 +43,7 @@ export function parsePawRuntimeConfigYaml(content: string): PawValidationResult<
 		};
 	}
 
-	return { ok: true, value: parsed as PawRuntimeConfig };
+	return { ok: true, value: parsed };
 }
 
 export function loadPawRuntimeConfig(configPath: string): PawRuntimeConfig {

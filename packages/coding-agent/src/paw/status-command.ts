@@ -62,15 +62,16 @@ export function formatPawStatusReport(report: PawStatusReport): string {
 	const lines = ["Paw status", `.paw path: ${report.pawDir}`];
 
 	if (!report.initialized) {
-		lines.push("initialized: no");
-		lines.push(`Paw is not initialized. Run \`${APP_NAME} paw init\`.`);
+		lines.push("initialized: no", `Paw is not initialized. Run \`${APP_NAME} paw init\`.`);
 		return lines.join("\n");
 	}
 
-	lines.push("initialized: yes");
-	lines.push(`config: ${formatConfigSummary(report.config)}`);
-	lines.push(`version: ${formatVersionSummary(report.version)}`);
-	lines.push(`sessions: ${report.sessionDirectoryCount}`);
+	lines.push(
+		"initialized: yes",
+		`config: ${formatConfigSummary(report.config)}`,
+		`version: ${formatVersionSummary(report.version)}`,
+		`sessions: ${report.sessionDirectoryCount}`,
+	);
 
 	const stateLines = formatStateCountLines(report.stateCounts);
 	if (stateLines.length === 0) {

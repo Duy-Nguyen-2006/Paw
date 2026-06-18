@@ -123,7 +123,7 @@ function readTrustFile(path: string): TrustFile {
 
 function writeTrustFile(path: string, data: TrustFile): void {
 	const sorted: TrustFile = {};
-	for (const key of Object.keys(data).sort()) {
+	for (const key of Object.keys(data).sort((a, b) => a.localeCompare(b))) {
 		const value = data[key];
 		if (value === true || value === false || value === null) {
 			sorted[key] = value;

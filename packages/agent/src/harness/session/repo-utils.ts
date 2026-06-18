@@ -38,7 +38,7 @@ export async function getEntriesToFork(
 	if (!target) {
 		throw new SessionError("invalid_fork_target", `Entry ${options.entryId} not found`);
 	}
-	let effectiveLeafId: string | null;
+	let effectiveLeafId: string | null = null;
 	if ((options.position ?? "before") === "at") {
 		effectiveLeafId = target.id;
 	} else {

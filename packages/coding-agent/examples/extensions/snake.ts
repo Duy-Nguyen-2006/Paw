@@ -54,9 +54,9 @@ function spawnFood(snake: Point[]): Point {
 class SnakeComponent {
 	private state: GameState;
 	private interval: ReturnType<typeof setInterval> | null = null;
-	private onClose: () => void;
-	private onSave: (state: GameState | null) => void;
-	private tui: { requestRender: () => void };
+	private readonly onClose: () => void;
+	private readonly onSave: (state: GameState | null) => void;
+	private readonly tui: { requestRender: () => void };
 	private cachedLines: string[] = [];
 	private cachedWidth = 0;
 	private version = 0;

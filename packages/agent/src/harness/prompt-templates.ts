@@ -224,7 +224,6 @@ export function parseCommandArgs(argsString: string): string[] {
 	const args: string[] = [];
 	let current = "";
 	let inQuote: string | null = null;
-
 	for (let i = 0; i < argsString.length; i++) {
 		const char = argsString[i]!;
 		if (inQuote) {
@@ -248,11 +247,11 @@ export function parseCommandArgs(argsString: string): string[] {
 /** Substitute prompt template placeholders (`$1`, `$@`, `$ARGUMENTS`, `${@:N}`, `${@:N:L}`) with command arguments. */
 export function substituteArgs(content: string, args: string[]): string {
 	let result = content;
-	result = result.replace(/\$(\d+)/g, (_, num: string) => args[parseInt(num, 10) - 1] ?? "");
+	result = result.replace(/\$(\d+)/g, (_, num: string) => args[Number.parseInt(num, 10) - 1] ?? "");
 	result = result.replace(/\$\{@:(\d+)(?::(\d+))?\}/g, (_, startStr: string, lengthStr?: string) => {
-		let start = parseInt(startStr, 10) - 1;
+		let start = Number.parseInt(startStr, 10) - 1;
 		if (start < 0) start = 0;
-		if (lengthStr) return args.slice(start, start + parseInt(lengthStr, 10)).join(" ");
+		if (lengthStr) return args.slice(start, start + Number.parseInt(lengthStr, 10)).join(" ");
 		return args.slice(start).join(" ");
 	});
 	const allArgs = args.join(" ");

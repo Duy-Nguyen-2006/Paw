@@ -88,8 +88,8 @@ export interface ModelsCallbacks {
  * Changes are session-only until explicitly persisted with Ctrl+S.
  */
 export class ScopedModelsSelectorComponent extends Container implements Focusable {
-	private modelsById: Map<string, Model<any>> = new Map();
-	private allIds: string[] = [];
+	private readonly modelsById: Map<string, Model<any>> = new Map();
+	private readonly allIds: string[] = [];
 	private enabledIds: EnabledIds = null;
 	private filteredItems: ModelItem[] = [];
 	private selectedIndex = 0;
@@ -107,7 +107,7 @@ export class ScopedModelsSelectorComponent extends Container implements Focusabl
 	private listContainer: Container;
 	private footerText: Text;
 	private callbacks: ModelsCallbacks;
-	private maxVisible = 8;
+	private readonly maxVisible = 8;
 	private isDirty = false;
 
 	constructor(config: ModelsConfig, callbacks: ModelsCallbacks) {

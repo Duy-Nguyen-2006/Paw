@@ -126,7 +126,7 @@ export type PawRollbackParsedArgs =
 	| { kind: "ok"; sessionId: string; input: PawRollbackParsedInput };
 
 export function parsePawRollbackArgs(args: string[]): PawRollbackParsedArgs {
-	if (args.some((arg) => arg === "--help" || arg === "-h")) {
+	if (args.includes("--help") || args.includes("-h")) {
 		return { kind: "help" };
 	}
 
@@ -519,7 +519,7 @@ async function findLatestPawCheckpointName(repoRoot: string, sessionId: string):
 			directories.push(entry);
 		}
 	}
-	return directories.sort().at(-1) ?? null;
+	return directories.sort((a, b) => a.localeCompare(b)).at(-1) ?? null;
 }
 
 function formatRollbackInspectionLines(

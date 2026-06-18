@@ -2,8 +2,8 @@ import type { AssistantMessage, AssistantMessageEvent } from "../types.ts";
 
 // Generic event stream class for async iteration
 export class EventStream<T, R = T> implements AsyncIterable<T> {
-	private queue: T[] = [];
-	private waiting: ((value: IteratorResult<T>) => void)[] = [];
+	private readonly queue: T[] = [];
+	private readonly waiting: ((value: IteratorResult<T>) => void)[] = [];
 	private done = false;
 	private finalResultPromise: Promise<R>;
 	private resolveFinalResult!: (result: R) => void;

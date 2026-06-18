@@ -65,9 +65,9 @@ function formatBaseDir(baseDir: string): string {
 	} else if (baseDir.startsWith(homeDir)) {
 		// Replace home prefix with ~, normalize separators for display
 		const rest = baseDir.slice(homeDir.length);
-		displayPath = `~${rest.replace(/\\/g, "/")}`;
+		displayPath = `~${rest.replaceAll("\\", "/")}`;
 	} else {
-		displayPath = baseDir.replace(/\\/g, "/");
+		displayPath = baseDir.replaceAll("\\", "/");
 	}
 
 	return displayPath.endsWith("/") ? displayPath : `${displayPath}/`;
@@ -178,7 +178,9 @@ type FlatEntry =
 	| { type: "item"; item: ResourceItem };
 
 class ConfigSelectorHeader implements Component {
-	invalidate(): void {}
+	invalidate(): void {
+		// No-op: header state is immutable
+	}
 
 	render(width: number): string[] {
 		const title = theme.bold("Resource Configuration");
@@ -335,14 +337,15 @@ class ResourceList implements Component, Focusable {
 		}
 	}
 
-	invalidate(): void {}
+	invalidate(): void {
+		// No-op: component state is managed directly
+	}
 
 	render(width: number): string[] {
 		const lines: string[] = [];
 
 		// Search input
-		lines.push(...this.searchInput.render(width));
-		lines.push("");
+		lines.push(...this.searchInput.render(width), "");
 
 		if (this.filteredItems.length === 0) {
 			lines.push(theme.fg("muted", "  No resources found"));
@@ -357,36 +360,42 @@ class ResourceList implements Component, Focusable {
 		const endIndex = Math.min(startIndex + this.maxVisible, this.filteredItems.length);
 
 		for (let i = startIndex; i < endIndex; i++) {
-			const entry = this.filteredItems[i];
-			const isSelected = i === this.selectedIndex;
-
-			if (entry.type === "group") {
-				// Main group header (no cursor)
-				const groupLine = theme.fg("accent", theme.bold(entry.group.label));
-				lines.push(truncateToWidth(`  ${groupLine}`, width, ""));
-			} else if (entry.type === "subgroup") {
-				// Subgroup header (indented, no cursor)
-				const subgroupLine = theme.fg("muted", entry.subgroup.label);
-				lines.push(truncateToWidth(`    ${subgroupLine}`, width, ""));
-			} else {
-				// Resource item (cursor only on items)
-				const item = entry.item;
-				const cursor = isSelected ? "> " : "  ";
-				const checkbox = item.enabled ? theme.fg("success", "[x]") : theme.fg("dim", "[ ]");
-				const name = isSelected ? theme.bold(item.displayName) : item.displayName;
-				lines.push(truncateToWidth(`${cursor}    ${checkbox} ${name}`, width, "..."));
-			}
+			lines.push(this.renderFilteredEntry(i, width));
 		}
 
 		// Scroll indicator
 		if (startIndex > 0 || endIndex < this.filteredItems.length) {
-			const itemCount = this.filteredItems.filter((e) => e.type === "item").length;
-			const currentItemIndex =
-				this.filteredItems.slice(0, this.selectedIndex).filter((e) => e.type === "item").length + 1;
-			lines.push(theme.fg("dim", `  (${currentItemIndex}/${itemCount})`));
+			lines.push(this.renderScrollIndicator());
 		}
 
 		return lines;
+	}
+
+	private renderFilteredEntry(index: number, width: number): string {
+		const entry = this.filteredItems[index];
+		const isSelected = index === this.selectedIndex;
+
+		if (entry.type === "group") {
+			const groupLine = theme.fg("accent", theme.bold(entry.group.label));
+			return truncateToWidth(`  ${groupLine}`, width, "");
+		}
+		if (entry.type === "subgroup") {
+			const subgroupLine = theme.fg("muted", entry.subgroup.label);
+			return truncateToWidth(`    ${subgroupLine}`, width, "");
+		}
+
+		const item = entry.item;
+		const cursor = isSelected ? "> " : "  ";
+		const checkbox = item.enabled ? theme.fg("success", "[x]") : theme.fg("dim", "[ ]");
+		const name = isSelected ? theme.bold(item.displayName) : item.displayName;
+		return truncateToWidth(`${cursor}    ${checkbox} ${name}`, width, "...");
+	}
+
+	private renderScrollIndicator(): string {
+		const itemCount = this.filteredItems.filter((e) => e.type === "item").length;
+		const currentItemIndex =
+			this.filteredItems.slice(0, this.selectedIndex).filter((e) => e.type === "item").length + 1;
+		return theme.fg("dim", `  (${currentItemIndex}/${itemCount})`);
 	}
 
 	handleInput(data: string): void {
@@ -460,7 +469,7 @@ class ResourceList implements Component, Focusable {
 			scope === "project" ? this.settingsManager.getProjectSettings() : this.settingsManager.getGlobalSettings();
 
 		const arrayKey = item.resourceType as "extensions" | "skills" | "prompts" | "themes";
-		const current = (settings[arrayKey] ?? []) as string[];
+		const current = settings[arrayKey] ?? [];
 
 		// Generate pattern for this resource
 		const pattern = this.getResourcePattern(item);
@@ -525,7 +534,7 @@ class ResourceList implements Component, Focusable {
 
 		// Get the resource array for this type
 		const arrayKey = item.resourceType as "extensions" | "skills" | "prompts" | "themes";
-		const current = (pkg[arrayKey] ?? []) as string[];
+		const current = pkg[arrayKey] ?? [];
 
 		// Generate pattern relative to package root
 		const pattern = this.getPackageResourcePattern(item);

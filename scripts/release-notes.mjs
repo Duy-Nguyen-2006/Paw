@@ -57,8 +57,11 @@ function run(command, args, options = {}) {
 	return result.stdout ?? "";
 }
 
-function parseOptions(args) {
-	const options = {
+const FLAG_OPTIONS = new Set(["--dry-run"]);
+const VALUE_OPTIONS = new Set(["--base-path", "--changelog", "--out", "--repo", "--since-tag", "--tag", "--version"]);
+
+function createDefaultOptions() {
+	return {
 		basePath: DEFAULT_BASE_PATH,
 		changelog: DEFAULT_CHANGELOG,
 		dryRun: false,
@@ -68,6 +71,25 @@ function parseOptions(args) {
 		tag: undefined,
 		version: undefined,
 	};
+}
+
+const STRING_OPTION_TARGETS = {
+	"--base-path": "basePath",
+	"--changelog": "changelog",
+	"--out": "out",
+	"--repo": "repo",
+	"--since-tag": "sinceTag",
+	"--tag": "tag",
+	"--version": "version",
+};
+
+function applyStringOption(options, name, value) {
+	const target = STRING_OPTION_TARGETS[name];
+	if (target) options[target] = value;
+}
+
+function parseOptions(args) {
+	const options = createDefaultOptions();
 
 	for (let i = 0; i < args.length; i++) {
 		const arg = args[i];
@@ -80,8 +102,8 @@ function parseOptions(args) {
 			continue;
 		}
 
-		const optionNames = new Set(["--base-path", "--changelog", "--out", "--repo", "--since-tag", "--tag", "--version"]);
-		if (!optionNames.has(arg)) {
+		if (FLAG_OPTIONS.has(arg)) continue;
+		if (!VALUE_OPTIONS.has(arg)) {
 			throw new Error(`Unknown option: ${arg}`);
 		}
 
@@ -90,13 +112,7 @@ function parseOptions(args) {
 			throw new Error(`${arg} requires a value`);
 		}
 
-		if (arg === "--base-path") options.basePath = value;
-		if (arg === "--changelog") options.changelog = value;
-		if (arg === "--out") options.out = value;
-		if (arg === "--repo") options.repo = value;
-		if (arg === "--since-tag") options.sinceTag = value;
-		if (arg === "--tag") options.tag = value;
-		if (arg === "--version") options.version = value;
+		applyStringOption(options, arg, value);
 	}
 
 	return options;
@@ -317,14 +333,19 @@ function fixGithubReleases(options) {
 		return;
 	}
 
+	const changedCount = applyGithubReleaseFixes(releases, options);
+	const prefix = options.dryRun ? "Would update" : "Updated";
+	console.log(`${prefix} ${changedCount} release${changedCount === 1 ? "" : "s"}.`);
+}
+
+/** Apply the link-fix pass to every release, returning the number of changes. */
+function applyGithubReleaseFixes(releases, options) {
 	let changedCount = 0;
 	for (const release of releases) {
 		const tag = release.tag_name;
 		const body = release.body ?? "";
 		const result = normalizeReleaseNoteLinks(body, { basePath: options.basePath, repo: options.repo, tag });
-		if (result.markdown === body) {
-			continue;
-		}
+		if (result.markdown === body) continue;
 
 		changedCount++;
 		const unique = uniqueChanges(result.changes);
@@ -338,9 +359,7 @@ function fixGithubReleases(options) {
 			updateGithubRelease(options.repo, tag, result.markdown);
 		}
 	}
-
-	const prefix = options.dryRun ? "Would update" : "Updated";
-	console.log(`${prefix} ${changedCount} release${changedCount === 1 ? "" : "s"}.`);
+	return changedCount;
 }
 
 try {

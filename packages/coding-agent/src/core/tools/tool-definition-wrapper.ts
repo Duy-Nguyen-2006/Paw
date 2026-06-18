@@ -37,7 +37,7 @@ export function createToolDefinitionFromAgentTool(tool: AgentTool<any>): ToolDef
 		name: tool.name,
 		label: tool.label,
 		description: tool.description,
-		parameters: tool.parameters as any,
+		parameters: tool.parameters,
 		prepareArguments: tool.prepareArguments,
 		executionMode: tool.executionMode,
 		execute: async (toolCallId, params, signal, onUpdate) => tool.execute(toolCallId, params, signal, onUpdate),

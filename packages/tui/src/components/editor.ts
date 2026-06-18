@@ -595,7 +595,7 @@ export class Editor implements Component, Focusable {
 				return;
 			}
 
-			const printable = decodePrintableKey(data) ?? (data.charCodeAt(0) >= 32 ? data : undefined);
+			const printable = decodePrintableKey(data) ?? (data.codePointAt(0)! >= 32 ? data : undefined);
 			if (printable !== undefined) {
 				// Printable character - perform the jump
 				const direction = this.jumpMode;
@@ -769,7 +769,7 @@ export class Editor implements Component, Focusable {
 		// New line
 		if (
 			kb.matches(data, "tui.input.newLine") ||
-			(data.charCodeAt(0) === 10 && data.length > 1) ||
+			(data.codePointAt(0)! === 10 && data.length > 1) ||
 			data === "\x1b\r" ||
 			data === "\x1b[13;2~" ||
 			(data.length > 1 && data.includes("\x1b") && data.includes("\r")) ||
@@ -866,7 +866,7 @@ export class Editor implements Component, Focusable {
 		}
 
 		// Regular characters
-		if (data.charCodeAt(0) >= 32) {
+		if (data.codePointAt(0)! >= 32) {
 			this.insertCharacter(data);
 		}
 	}
@@ -1146,8 +1146,8 @@ export class Editor implements Component, Focusable {
 		// leaking the printable tail (e.g. "[106;5u") into the editor.
 		const decodedText = pastedText.replace(/\x1b\[(\d+);5u/g, (match, code) => {
 			const cp = Number(code);
-			if (cp >= 97 && cp <= 122) return String.fromCharCode(cp - 96);
-			if (cp >= 65 && cp <= 90) return String.fromCharCode(cp - 64);
+			if (cp >= 97 && cp <= 122) return String.fromCodePoint(cp - 96);
+			if (cp >= 65 && cp <= 90) return String.fromCodePoint(cp - 64);
 			return match;
 		});
 
@@ -1157,7 +1157,7 @@ export class Editor implements Component, Focusable {
 		// Filter out non-printable characters except newlines
 		let filteredText = cleanText
 			.split("")
-			.filter((char) => char === "\n" || char.charCodeAt(0) >= 32)
+			.filter((char) => char === "\n" || char.codePointAt(0)! >= 32)
 			.join("");
 
 		// If pasting a file path (starts with /, ~, or .) and the character before
@@ -1988,7 +1988,7 @@ export class Editor implements Component, Focusable {
 		const end = isForward ? lines.length : -1;
 		const step = isForward ? 1 : -1;
 
-		for (let lineIdx = this.state.cursorLine; lineIdx !== end; lineIdx += step) {
+		for (let lineIdx = this.state.cursorLine; isForward ? lineIdx < end : lineIdx > end; lineIdx += step) {
 			const line = lines[lineIdx] || "";
 			const isCurrentLine = lineIdx === this.state.cursorLine;
 

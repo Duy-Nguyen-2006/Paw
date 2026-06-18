@@ -5,8 +5,8 @@
  * This ensures lockstep versioning across the monorepo.
  */
 
-import { readFileSync, writeFileSync, readdirSync } from 'fs';
-import { join } from 'path';
+import { readFileSync, writeFileSync, readdirSync } from "node:fs";
+import { join } from "node:path";
 
 const packagesDir = join(process.cwd(), 'packages');
 const packageDirs = readdirSync(packagesDir, { withFileTypes: true })
@@ -29,7 +29,7 @@ for (const dir of packageDirs) {
 }
 
 console.log('Current versions:');
-for (const [name, version] of Object.entries(versionMap).sort()) {
+for (const [name, version] of Object.entries(versionMap).sort(([a], [b]) => a.localeCompare(b))) {
 	console.log(`  ${name}: ${version}`);
 }
 

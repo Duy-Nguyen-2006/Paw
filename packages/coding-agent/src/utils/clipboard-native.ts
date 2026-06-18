@@ -1,6 +1,6 @@
-import { createRequire } from "module";
-import { dirname, join } from "path";
-import { pathToFileURL } from "url";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
+import { pathToFileURL } from "node:url";
 
 export type ClipboardModule = {
 	setText: (text: string) => Promise<void>;

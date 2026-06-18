@@ -89,7 +89,7 @@ export async function collectEntriesForBranchSummary(
 	while (current && current !== commonAncestorId) {
 		const entry = await session.getEntry(current);
 		if (!entry) throw new SessionError("invalid_session", `Entry ${current} not found`);
-		entries.push(entry as SessionTreeEntry);
+		entries.push(entry);
 		current = entry.parentId;
 	}
 	entries.reverse();
@@ -121,24 +121,30 @@ function getMessageFromEntry(entry: SessionTreeEntry): AgentMessage | undefined 
 	}
 }
 
+function collectFileOpsFromBranchSummaries(entries: SessionTreeEntry[], fileOps: FileOperations): void {
+	for (const entry of entries) {
+		if (entry.type !== "branch_summary" || entry.fromHook || !entry.details) continue;
+		const details = entry.details as BranchSummaryDetails;
+		if (Array.isArray(details.readFiles)) {
+			for (const f of details.readFiles) fileOps.read.add(f);
+		}
+		if (Array.isArray(details.modifiedFiles)) {
+			for (const f of details.modifiedFiles) fileOps.edited.add(f);
+		}
+	}
+}
+
+function shouldKeepOverBudgetEntry(entry: SessionTreeEntry, totalTokens: number, tokenBudget: number): boolean {
+	return (entry.type === "compaction" || entry.type === "branch_summary") && totalTokens < tokenBudget * 0.9;
+}
+
 /** Prepare branch entries for summarization within an optional token budget. */
 export function prepareBranchEntries(entries: SessionTreeEntry[], tokenBudget: number = 0): BranchPreparation {
 	const messages: AgentMessage[] = [];
 	const fileOps = createFileOps();
 	let totalTokens = 0;
-	for (const entry of entries) {
-		if (entry.type === "branch_summary" && !entry.fromHook && entry.details) {
-			const details = entry.details as BranchSummaryDetails;
-			if (Array.isArray(details.readFiles)) {
-				for (const f of details.readFiles) fileOps.read.add(f);
-			}
-			if (Array.isArray(details.modifiedFiles)) {
-				for (const f of details.modifiedFiles) {
-					fileOps.edited.add(f);
-				}
-			}
-		}
-	}
+	collectFileOpsFromBranchSummaries(entries, fileOps);
+
 	for (let i = entries.length - 1; i >= 0; i--) {
 		const entry = entries[i];
 		const message = getMessageFromEntry(entry);
@@ -146,15 +152,9 @@ export function prepareBranchEntries(entries: SessionTreeEntry[], tokenBudget: n
 		extractFileOpsFromMessage(message, fileOps);
 
 		const tokens = estimateTokens(message);
-		if (tokenBudget > 0 && totalTokens + tokens > tokenBudget) {
-			if (entry.type === "compaction" || entry.type === "branch_summary") {
-				if (totalTokens < tokenBudget * 0.9) {
-					messages.unshift(message);
-					totalTokens += tokens;
-				}
-			}
-			break;
-		}
+		const overBudget = tokenBudget > 0 && totalTokens + tokens > tokenBudget;
+		if (overBudget && !shouldKeepOverBudgetEntry(entry, totalTokens, tokenBudget)) break;
+		if (overBudget) break;
 
 		messages.unshift(message);
 		totalTokens += tokens;
@@ -197,6 +197,19 @@ Use this EXACT format:
 
 Keep each section concise. Preserve exact file paths, function names, and error messages.`;
 
+function buildSummaryInstructions(replaceInstructions?: boolean, customInstructions?: string): string {
+	if (replaceInstructions && customInstructions) return customInstructions;
+	if (customInstructions) return `${BRANCH_SUMMARY_PROMPT}\n\nAdditional focus: ${customInstructions}`;
+	return BRANCH_SUMMARY_PROMPT;
+}
+
+function extractSummaryText(response: { content: Array<{ type: string; text?: string }> }): string {
+	return response.content
+		.filter((c): c is { type: "text"; text: string } => c.type === "text")
+		.map((c) => c.text)
+		.join("\n");
+}
+
 /** Generate a summary for abandoned branch entries. */
 export async function generateBranchSummary(
 	entries: SessionTreeEntry[],
@@ -213,14 +226,7 @@ export async function generateBranchSummary(
 	}
 	const llmMessages = convertToLlm(messages);
 	const conversationText = serializeConversation(llmMessages);
-	let instructions: string;
-	if (replaceInstructions && customInstructions) {
-		instructions = customInstructions;
-	} else if (customInstructions) {
-		instructions = `${BRANCH_SUMMARY_PROMPT}\n\nAdditional focus: ${customInstructions}`;
-	} else {
-		instructions = BRANCH_SUMMARY_PROMPT;
-	}
+	const instructions = buildSummaryInstructions(replaceInstructions, customInstructions);
 	const promptText = `<conversation>\n${conversationText}\n</conversation>\n\n${instructions}`;
 
 	const summarizationMessages = [
@@ -247,11 +253,7 @@ export async function generateBranchSummary(
 		);
 	}
 
-	let summary = response.content
-		.filter((c): c is { type: "text"; text: string } => c.type === "text")
-		.map((c) => c.text)
-		.join("\n");
-	summary = BRANCH_SUMMARY_PREAMBLE + summary;
+	let summary = BRANCH_SUMMARY_PREAMBLE + extractSummaryText(response);
 	const { readFiles, modifiedFiles } = computeFileLists(fileOps);
 	summary += formatFileOperations(readFiles, modifiedFiles);
 

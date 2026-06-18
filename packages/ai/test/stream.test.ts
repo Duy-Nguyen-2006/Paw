@@ -1,8 +1,8 @@
-import { type ChildProcess, execSync, spawn } from "child_process";
-import { readFileSync } from "fs";
-import { dirname, join } from "path";
+import { type ChildProcess, execSync, spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { Type } from "typebox";
-import { fileURLToPath } from "url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { getModel } from "../src/models.ts";
 import { complete, stream } from "../src/stream.ts";
@@ -1545,7 +1545,6 @@ describe("Generate E2E Tests", () => {
 	describe.skipIf(!ollamaInstalled)("Ollama Provider (gpt-oss-20b via OpenAI Completions)", () => {
 		let llm: Model<"openai-completions">;
 		let ollamaProcess: ChildProcess | null = null;
-
 		beforeAll(async () => {
 			// Check if model is available, if not pull it
 			try {

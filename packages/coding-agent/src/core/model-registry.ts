@@ -2,6 +2,8 @@
  * Model registry - manages built-in and custom models, provides API key resolution.
  */
 
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
 	type AnthropicMessagesCompat,
 	type Api,
@@ -19,8 +21,6 @@ import {
 	type SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
 import { registerOAuthProvider, resetOAuthProviders } from "@earendil-works/pi-ai/oauth";
-import { existsSync, readFileSync } from "fs";
-import { join } from "path";
 import { type Static, Type } from "typebox";
 import { Compile } from "typebox/compile";
 import type { TLocalizedValidationError } from "typebox/error";
@@ -30,7 +30,6 @@ import { normalizePath } from "../utils/paths.ts";
 import type { AuthStatus, AuthStorage } from "./auth-storage.ts";
 import { BUILT_IN_PROVIDER_DISPLAY_NAMES } from "./provider-display-names.ts";
 import {
-	clearConfigValueCache,
 	getConfigValueEnvVarNames,
 	isCommandConfigValue,
 	isConfigValueConfigured,
@@ -325,16 +324,16 @@ function applyModelOverride(model: Model<Api>, override: ModelOverride): Model<A
 }
 
 /** Clear the config value command cache. Exported for testing. */
-export const clearApiKeyCache = clearConfigValueCache;
+export { clearConfigValueCache as clearApiKeyCache } from "./resolve-config-value.ts";
 
 /**
  * Model registry - loads and manages models, resolves API keys via AuthStorage.
  */
 export class ModelRegistry {
 	private models: Model<Api>[] = [];
-	private providerRequestConfigs: Map<string, ProviderRequestConfig> = new Map();
-	private modelRequestHeaders: Map<string, Record<string, string>> = new Map();
-	private registeredProviders: Map<string, ProviderConfigInput> = new Map();
+	private readonly providerRequestConfigs: Map<string, ProviderRequestConfig> = new Map();
+	private readonly modelRequestHeaders: Map<string, Record<string, string>> = new Map();
+	private readonly registeredProviders: Map<string, ProviderConfigInput> = new Map();
 	private loadError: string | undefined = undefined;
 	readonly authStorage: AuthStorage;
 	private modelsJsonPath: string | undefined;

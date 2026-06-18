@@ -193,7 +193,8 @@ for (const file of readdirSync(sessionsDir)) {
 
 		if (entry.type !== "message" || entry.message?.role !== "assistant" || !entry.message.usage) continue;
 
-		const timestamp = entry.message.timestamp !== undefined ? new Date(entry.message.timestamp) : new Date(entry.timestamp ?? 0);
+		const timestamp =
+			entry.message.timestamp !== undefined ? new Date(entry.message.timestamp) : new Date(entry.timestamp ?? 0);
 		if (timestamp < start || timestamp >= end) continue;
 
 		const dayKey = localDayKey(timestamp);
@@ -221,10 +222,10 @@ console.log(`Sessions: ${sessionsDir}`);
 console.log(`Period: ${localDayKey(start)} through ${localDayKey(new Date(end.getTime() - 1))} (${days} local days)`);
 console.log("".padEnd(160, "="));
 
-for (const day of [...stats.keys()].sort()) {
+for (const day of [...stats.keys()].sort((a, b) => a.localeCompare(b))) {
 	const dayStats = stats.get(day)!;
 	printTotals(day, dayStats);
-	for (const provider of [...dayStats.providers.keys()].sort()) {
+	for (const provider of [...dayStats.providers.keys()].sort((a, b) => a.localeCompare(b))) {
 		printTotals(`  ${provider}`, dayStats.providers.get(provider)!);
 	}
 }

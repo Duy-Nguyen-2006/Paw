@@ -559,7 +559,9 @@ class TreeList implements Component {
 		return parts.join(" ");
 	}
 
-	invalidate(): void {}
+	invalidate(): void {
+		// No-op: component state is managed directly
+	}
 
 	getSearchQuery(): string {
 		return this.searchQuery;
@@ -905,21 +907,9 @@ class TreeList implements Component {
 		} else if (kb.matches(keyData, "tui.select.down")) {
 			this.selectedIndex = this.selectedIndex === this.filteredNodes.length - 1 ? 0 : this.selectedIndex + 1;
 		} else if (kb.matches(keyData, "app.tree.foldOrUp")) {
-			const currentId = this.filteredNodes[this.selectedIndex]?.node.entry.id;
-			if (currentId && this.isFoldable(currentId) && !this.foldedNodes.has(currentId)) {
-				this.foldedNodes.add(currentId);
-				this.applyFilter();
-			} else {
-				this.selectedIndex = this.findBranchSegmentStart("up");
-			}
+			this.handleFoldOrUp();
 		} else if (kb.matches(keyData, "app.tree.unfoldOrDown")) {
-			const currentId = this.filteredNodes[this.selectedIndex]?.node.entry.id;
-			if (currentId && this.foldedNodes.has(currentId)) {
-				this.foldedNodes.delete(currentId);
-				this.applyFilter();
-			} else {
-				this.selectedIndex = this.findBranchSegmentStart("down");
-			}
+			this.handleUnfoldOrDown();
 		} else if (kb.matches(keyData, "tui.editor.cursorLeft") || kb.matches(keyData, "tui.select.pageUp")) {
 			// Page up
 			this.selectedIndex = Math.max(0, this.selectedIndex - this.maxVisibleLines);
@@ -927,57 +917,23 @@ class TreeList implements Component {
 			// Page down
 			this.selectedIndex = Math.min(this.filteredNodes.length - 1, this.selectedIndex + this.maxVisibleLines);
 		} else if (kb.matches(keyData, "tui.select.confirm")) {
-			const selected = this.filteredNodes[this.selectedIndex];
-			if (selected && this.onSelect) {
-				this.onSelect(selected.node.entry.id);
-			}
+			this.handleConfirm();
 		} else if (kb.matches(keyData, "tui.select.cancel")) {
-			if (this.searchQuery) {
-				this.searchQuery = "";
-				this.foldedNodes.clear();
-				this.applyFilter();
-			} else {
-				this.onCancel?.();
-			}
+			this.handleCancel();
 		} else if (kb.matches(keyData, "app.tree.filter.default")) {
-			// Direct filter: default
-			this.filterMode = "default";
-			this.foldedNodes.clear();
-			this.applyFilter();
+			this.setFilterModeAndRefresh("default");
 		} else if (kb.matches(keyData, "app.tree.filter.noTools")) {
-			// Toggle filter: no-tools ↔ default
-			this.filterMode = this.filterMode === "no-tools" ? "default" : "no-tools";
-			this.foldedNodes.clear();
-			this.applyFilter();
+			this.toggleFilterMode("no-tools");
 		} else if (kb.matches(keyData, "app.tree.filter.userOnly")) {
-			// Toggle filter: user-only ↔ default
-			this.filterMode = this.filterMode === "user-only" ? "default" : "user-only";
-			this.foldedNodes.clear();
-			this.applyFilter();
+			this.toggleFilterMode("user-only");
 		} else if (kb.matches(keyData, "app.tree.filter.labeledOnly")) {
-			// Toggle filter: labeled-only ↔ default
-			this.filterMode = this.filterMode === "labeled-only" ? "default" : "labeled-only";
-			this.foldedNodes.clear();
-			this.applyFilter();
+			this.toggleFilterMode("labeled-only");
 		} else if (kb.matches(keyData, "app.tree.filter.all")) {
-			// Toggle filter: all ↔ default
-			this.filterMode = this.filterMode === "all" ? "default" : "all";
-			this.foldedNodes.clear();
-			this.applyFilter();
+			this.toggleFilterMode("all");
 		} else if (kb.matches(keyData, "app.tree.filter.cycleBackward")) {
-			// Cycle filter backwards
-			const modes: FilterMode[] = ["default", "no-tools", "user-only", "labeled-only", "all"];
-			const currentIndex = modes.indexOf(this.filterMode);
-			this.filterMode = modes[(currentIndex - 1 + modes.length) % modes.length];
-			this.foldedNodes.clear();
-			this.applyFilter();
+			this.cycleFilterMode(-1);
 		} else if (kb.matches(keyData, "app.tree.filter.cycleForward")) {
-			// Cycle filter forwards: default → no-tools → user-only → labeled-only → all → default
-			const modes: FilterMode[] = ["default", "no-tools", "user-only", "labeled-only", "all"];
-			const currentIndex = modes.indexOf(this.filterMode);
-			this.filterMode = modes[(currentIndex + 1) % modes.length];
-			this.foldedNodes.clear();
-			this.applyFilter();
+			this.cycleFilterMode(1);
 		} else if (kb.matches(keyData, "tui.editor.deleteCharBackward")) {
 			if (this.searchQuery.length > 0) {
 				this.searchQuery = this.searchQuery.slice(0, -1);
@@ -985,22 +941,96 @@ class TreeList implements Component {
 				this.applyFilter();
 			}
 		} else if (kb.matches(keyData, "app.tree.editLabel")) {
-			const selected = this.filteredNodes[this.selectedIndex];
-			if (selected && this.onLabelEdit) {
-				this.onLabelEdit(selected.node.entry.id, selected.node.label);
-			}
+			this.handleEditLabel();
 		} else if (kb.matches(keyData, "app.tree.toggleLabelTimestamp")) {
 			this.showLabelTimestamps = !this.showLabelTimestamps;
 		} else {
-			const hasControlChars = [...keyData].some((ch) => {
-				const code = ch.charCodeAt(0);
-				return code < 32 || code === 0x7f || (code >= 0x80 && code <= 0x9f);
-			});
-			if (!hasControlChars && keyData.length > 0) {
-				this.searchQuery += keyData;
-				this.foldedNodes.clear();
-				this.applyFilter();
-			}
+			this.handleSearchKeyInput(keyData);
+		}
+	}
+
+	/** Fold the current node when foldable, otherwise move the selection up. */
+	private handleFoldOrUp(): void {
+		const currentId = this.filteredNodes[this.selectedIndex]?.node.entry.id;
+		if (currentId && this.isFoldable(currentId) && !this.foldedNodes.has(currentId)) {
+			this.foldedNodes.add(currentId);
+			this.applyFilter();
+		} else {
+			this.selectedIndex = this.findBranchSegmentStart("up");
+		}
+	}
+
+	/** Unfold the current node when folded, otherwise move the selection down. */
+	private handleUnfoldOrDown(): void {
+		const currentId = this.filteredNodes[this.selectedIndex]?.node.entry.id;
+		if (currentId && this.foldedNodes.has(currentId)) {
+			this.foldedNodes.delete(currentId);
+			this.applyFilter();
+		} else {
+			this.selectedIndex = this.findBranchSegmentStart("down");
+		}
+	}
+
+	/** Confirm the current selection and forward it to the registered handler. */
+	private handleConfirm(): void {
+		const selected = this.filteredNodes[this.selectedIndex];
+		if (selected && this.onSelect) {
+			this.onSelect(selected.node.entry.id);
+		}
+	}
+
+	/** Cancel: clear any in-progress search query, otherwise trigger onCancel. */
+	private handleCancel(): void {
+		if (this.searchQuery) {
+			this.searchQuery = "";
+			this.foldedNodes.clear();
+			this.applyFilter();
+		} else {
+			this.onCancel?.();
+		}
+	}
+
+	/** Switch to a fixed filter mode and refresh the visible list. */
+	private setFilterModeAndRefresh(mode: FilterMode): void {
+		this.filterMode = mode;
+		this.foldedNodes.clear();
+		this.applyFilter();
+	}
+
+	/** Toggle between a target filter mode and the default filter. */
+	private toggleFilterMode(target: FilterMode): void {
+		this.setFilterModeAndRefresh(this.filterMode === target ? "default" : target);
+	}
+
+	/** Cycle through the filter modes by the given step (-1 or +1). */
+	private cycleFilterMode(step: -1 | 1): void {
+		const modes: FilterMode[] = ["default", "no-tools", "user-only", "labeled-only", "all"];
+		const currentIndex = modes.indexOf(this.filterMode);
+		const next = (currentIndex + step + modes.length) % modes.length;
+		this.setFilterModeAndRefresh(modes[next] ?? "default");
+	}
+
+	/** Forward the edit-label request to the registered handler when possible. */
+	private handleEditLabel(): void {
+		const selected = this.filteredNodes[this.selectedIndex];
+		if (selected && this.onLabelEdit) {
+			this.onLabelEdit(selected.node.entry.id, selected.node.label);
+		}
+	}
+
+	/**
+	 * Append a non-control character to the search query when it should be
+	 * treated as user-typed input.
+	 */
+	private handleSearchKeyInput(keyData: string): void {
+		const hasControlChars = [...keyData].some((ch) => {
+			const code = ch.codePointAt(0)!;
+			return code < 32 || code === 0x7f || (code >= 0x80 && code <= 0x9f);
+		});
+		if (!hasControlChars && keyData.length > 0) {
+			this.searchQuery += keyData;
+			this.foldedNodes.clear();
+			this.applyFilter();
 		}
 	}
 
@@ -1064,7 +1094,9 @@ class SearchLine implements Component {
 		this.treeList = treeList;
 	}
 
-	invalidate(): void {}
+	invalidate(): void {
+		// No-op: search state is derived from tree
+	}
 
 	render(width: number): string[] {
 		const query = this.treeList.getSearchQuery();
@@ -1074,12 +1106,16 @@ class SearchLine implements Component {
 		return [truncateToWidth(`  ${theme.fg("muted", "Type to search:")}`, width)];
 	}
 
-	handleInput(_keyData: string): void {}
+	handleInput(_keyData: string): void {
+		// No-op: input handled by parent tree component
+	}
 }
 
 /** Component that renders tree help as semantic rows with chunk-aware wrapping */
 class TreeHelp implements Component {
-	invalidate(): void {}
+	invalidate(): void {
+		// No-op: help content is static
+	}
 
 	render(width: number): string[] {
 		const items = TREE_HELP_ITEMS.map(({ keys, label, labelFirst }) => {
@@ -1194,7 +1230,9 @@ class LabelInput implements Component, Focusable {
 		}
 	}
 
-	invalidate(): void {}
+	invalidate(): void {
+		// No-op: label editor state is managed directly
+	}
 
 	render(width: number): string[] {
 		const lines: string[] = [];

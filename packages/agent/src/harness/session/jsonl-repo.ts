@@ -36,8 +36,8 @@ function encodeCwd(cwd: string): string {
 }
 
 export class JsonlSessionRepo implements JsonlSessionRepoApi {
-	private readonly fs: JsonlSessionRepoFileSystem;
-	private readonly sessionsRootInput: string;
+	private fs: JsonlSessionRepoFileSystem;
+	private sessionsRootInput: string;
 	private sessionsRoot: string | undefined;
 
 	constructor(options: { fs: JsonlSessionRepoFileSystem; sessionsRoot: string }) {

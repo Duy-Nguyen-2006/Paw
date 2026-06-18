@@ -13,11 +13,13 @@ export function formatSkillsForSystemPrompt(skills: Skill[]): string {
 	];
 
 	for (const skill of visibleSkills) {
-		lines.push("  <skill>");
-		lines.push(`    <name>${escapeXml(skill.name)}</name>`);
-		lines.push(`    <description>${escapeXml(skill.description)}</description>`);
-		lines.push(`    <location>${escapeXml(skill.filePath)}</location>`);
-		lines.push("  </skill>");
+		lines.push(
+			"  <skill>",
+			`    <name>${escapeXml(skill.name)}</name>`,
+			`    <description>${escapeXml(skill.description)}</description>`,
+			`    <location>${escapeXml(skill.filePath)}</location>`,
+			"  </skill>",
+		);
 	}
 
 	lines.push("</available_skills>");

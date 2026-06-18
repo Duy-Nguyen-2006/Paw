@@ -154,62 +154,24 @@ export type PawBlockWorkerParsedArgs =
 	| { kind: "error"; message: string }
 	| { kind: "ok"; sessionId: string; input: PawBlockWorkerParsedInput };
 
-const BLOCK_WORKER_SCALAR_OPTIONS = new Set(["--output-file"]);
+const BLOCK_WORKER_COMMAND_LABEL = "paw block-worker";
 
 export function parsePawBlockWorkerArgs(args: string[]): PawBlockWorkerParsedArgs {
 	if (args.some((arg) => arg === "--help" || arg === "-h")) {
 		return { kind: "help" };
 	}
 
-	if (args.length === 0) {
-		return { kind: "error", message: 'Missing required session id for "paw block-worker".' };
+	const sessionIdResult = readPawBlockWorkerSessionId(args);
+	if ("kind" in sessionIdResult) {
+		return sessionIdResult;
 	}
 
-	const sessionId = args[0];
-	if (sessionId.startsWith("-")) {
-		return { kind: "error", message: 'Missing required session id for "paw block-worker".' };
+	const outputFileResult = parsePawBlockWorkerOutputFile(args);
+	if ("kind" in outputFileResult) {
+		return outputFileResult;
 	}
 
-	let outputFile: string | undefined;
-	const seenScalarOptions = new Set<string>();
-
-	for (let index = 1; index < args.length; ) {
-		const arg = args[index];
-
-		if (BLOCK_WORKER_SCALAR_OPTIONS.has(arg)) {
-			if (seenScalarOptions.has(arg)) {
-				return { kind: "error", message: `Duplicate option for "paw block-worker": ${arg}` };
-			}
-			seenScalarOptions.add(arg);
-			if (index + 1 >= args.length) {
-				return { kind: "error", message: `Missing value for "paw block-worker" option: ${arg}` };
-			}
-			const value = args[index + 1];
-			if (value.trim().length === 0) {
-				return {
-					kind: "error",
-					message: `Option ${arg} for "paw block-worker" must be a non-empty string.`,
-				};
-			}
-			if (arg === "--output-file") {
-				outputFile = value;
-			}
-			index += 2;
-			continue;
-		}
-
-		if (arg.startsWith("-")) {
-			return { kind: "error", message: `Unknown option for "paw block-worker": ${arg}` };
-		}
-
-		return { kind: "error", message: `Unknown option for "paw block-worker": ${arg}` };
-	}
-
-	if (outputFile === undefined) {
-		return { kind: "error", message: 'Missing required option for "paw block-worker": --output-file' };
-	}
-
-	return { kind: "ok", sessionId, input: { outputFile } };
+	return { kind: "ok", sessionId: sessionIdResult.sessionId, input: { outputFile: outputFileResult.outputFile } };
 }
 
 export async function createPawBlockWorkerCommandResult(
@@ -501,6 +463,74 @@ Commands:
 function printPawBlockWorkerCommandError(message: string): void {
 	console.error(`Error: ${message}`);
 	process.exitCode = 1;
+}
+
+function readPawBlockWorkerSessionId(args: string[]): PawBlockWorkerParsedArgs | { sessionId: string } {
+	if (args.length === 0) {
+		return { kind: "error", message: `Missing required session id for "${BLOCK_WORKER_COMMAND_LABEL}".` };
+	}
+
+	const sessionId = args[0];
+	if (sessionId.startsWith("-")) {
+		return { kind: "error", message: `Missing required session id for "${BLOCK_WORKER_COMMAND_LABEL}".` };
+	}
+
+	return { sessionId };
+}
+
+function parsePawBlockWorkerOutputFile(args: string[]): PawBlockWorkerParsedArgs | { outputFile: string } {
+	let outputFile: string | undefined;
+	const seenScalarOptions = new Set<string>();
+
+	for (let index = 1; index < args.length; ) {
+		const arg = args[index];
+		if (arg === "--output-file") {
+			const scalarResult = readPawBlockWorkerScalarOption(arg, args, index, seenScalarOptions);
+			if ("kind" in scalarResult) {
+				return scalarResult;
+			}
+			outputFile = scalarResult.value;
+			index = scalarResult.nextIndex;
+			continue;
+		}
+
+		if (arg.startsWith("-")) {
+			return { kind: "error", message: `Unknown option for "${BLOCK_WORKER_COMMAND_LABEL}": ${arg}` };
+		}
+
+		return { kind: "error", message: `Unknown option for "${BLOCK_WORKER_COMMAND_LABEL}": ${arg}` };
+	}
+
+	if (outputFile === undefined) {
+		return { kind: "error", message: `Missing required option for "${BLOCK_WORKER_COMMAND_LABEL}": --output-file` };
+	}
+
+	return { outputFile };
+}
+
+function readPawBlockWorkerScalarOption(
+	optionName: string,
+	args: string[],
+	index: number,
+	seenScalarOptions: Set<string>,
+): PawBlockWorkerParsedArgs | { value: string; nextIndex: number } {
+	if (seenScalarOptions.has(optionName)) {
+		return { kind: "error", message: `Duplicate option for "${BLOCK_WORKER_COMMAND_LABEL}": ${optionName}` };
+	}
+	seenScalarOptions.add(optionName);
+	if (index + 1 >= args.length) {
+		return { kind: "error", message: `Missing value for "${BLOCK_WORKER_COMMAND_LABEL}" option: ${optionName}` };
+	}
+
+	const value = args[index + 1];
+	if (value.trim().length === 0) {
+		return {
+			kind: "error",
+			message: `Option ${optionName} for "${BLOCK_WORKER_COMMAND_LABEL}" must be a non-empty string.`,
+		};
+	}
+
+	return { value, nextIndex: index + 2 };
 }
 
 function isFileSystemError(error: unknown): error is FileSystemError {

@@ -110,7 +110,7 @@ export class ArminComponent implements Component {
 	}
 
 	private createEmptyGrid(): string[][] {
-		return Array.from({ length: DISPLAY_HEIGHT }, () => Array(WIDTH).fill(" "));
+		return Array.from({ length: DISPLAY_HEIGHT }, () => new Array(WIDTH).fill(" "));
 	}
 
 	private initEffect(): void {

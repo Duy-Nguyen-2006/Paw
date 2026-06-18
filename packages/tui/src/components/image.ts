@@ -67,60 +67,81 @@ export class Image implements Component {
 		const defaultMaxHeight = Math.max(1, Math.ceil((maxWidth * cellDimensions.widthPx) / cellDimensions.heightPx));
 		const maxHeight = this.options.maxHeightCells ?? defaultMaxHeight;
 
-		const caps = getCapabilities();
-		let lines: string[];
-
-		if (caps.images) {
-			if (caps.images === "kitty" && this.imageId === undefined) {
-				this.imageId = allocateImageId();
-			}
-			const result = renderImage(this.base64Data, this.dimensions, {
-				maxWidthCells: maxWidth,
-				maxHeightCells: maxHeight,
-				imageId: this.imageId,
-				moveCursor: false,
-			});
-
-			if (result) {
-				// Store the image ID for later cleanup
-				if (result.imageId) {
-					this.imageId = result.imageId;
-				}
-
-				if (caps.images === "kitty") {
-					// For Kitty: C=1 prevents cursor movement.
-					// Don't need the cursor movement.
-					lines = [result.sequence];
-
-					// Return `rows` lines so TUI accounts for image height.
-					for (let i = 0; i < result.rows - 1; i++) {
-						lines.push("");
-					}
-				} else {
-					// Return `rows` lines so TUI accounts for image height.
-					// First (rows-1) lines are empty and cleared before the image is drawn.
-					// Last line: move cursor back up, draw the image, then move back down
-					// so TUI cursor accounting stays inside the scroll area.
-					lines = [];
-					for (let i = 0; i < result.rows - 1; i++) {
-						lines.push("");
-					}
-					const rowOffset = result.rows - 1;
-					const moveUp = rowOffset > 0 ? `\x1b[${rowOffset}A` : "";
-					lines.push(moveUp + result.sequence);
-				}
-			} else {
-				const fallback = imageFallback(this.mimeType, this.dimensions, this.options.filename);
-				lines = [this.theme.fallbackColor(fallback)];
-			}
-		} else {
-			const fallback = imageFallback(this.mimeType, this.dimensions, this.options.filename);
-			lines = [this.theme.fallbackColor(fallback)];
-		}
+		const lines = this.renderImageLines(maxWidth, maxHeight);
 
 		this.cachedLines = lines;
 		this.cachedWidth = width;
 
+		return lines;
+	}
+
+	private renderImageLines(maxWidth: number, maxHeight: number): string[] {
+		const caps = getCapabilities();
+		if (!caps.images) {
+			return this.renderFallback();
+		}
+
+		this.ensureKittyImageId(caps);
+
+		const result = this.renderImageData(maxWidth, maxHeight);
+		if (!result) {
+			return this.renderFallback();
+		}
+
+		if (result.imageId) {
+			this.imageId = result.imageId;
+		}
+
+		return caps.images === "kitty" ? this.buildKittyLines(result) : this.buildSixelLines(result);
+	}
+
+	/**
+	 * Allocate a Kitty image ID when the terminal supports it and the image
+	 * does not already have one.
+	 */
+	private ensureKittyImageId(caps: ReturnType<typeof getCapabilities>): void {
+		if (caps.images === "kitty" && this.imageId === undefined) {
+			this.imageId = allocateImageId();
+		}
+	}
+
+	/**
+	 * Render the image into a sequence string for the given dimensions. Returns
+	 * null if the terminal cannot render the image.
+	 */
+	private renderImageData(
+		maxWidth: number,
+		maxHeight: number,
+	): { sequence: string; rows: number; imageId?: number } | null {
+		return renderImage(this.base64Data, this.dimensions, {
+			maxWidthCells: maxWidth,
+			maxHeightCells: maxHeight,
+			imageId: this.imageId,
+			moveCursor: false,
+		});
+	}
+
+	private renderFallback(): string[] {
+		const fallback = imageFallback(this.mimeType, this.dimensions, this.options.filename);
+		return [this.theme.fallbackColor(fallback)];
+	}
+
+	private buildKittyLines(result: { sequence: string; rows: number }): string[] {
+		const lines = [result.sequence];
+		for (let i = 0; i < result.rows - 1; i++) {
+			lines.push("");
+		}
+		return lines;
+	}
+
+	private buildSixelLines(result: { sequence: string; rows: number }): string[] {
+		const lines: string[] = [];
+		for (let i = 0; i < result.rows - 1; i++) {
+			lines.push("");
+		}
+		const rowOffset = result.rows - 1;
+		const moveUp = rowOffset > 0 ? `\x1b[${rowOffset}A` : "";
+		lines.push(moveUp + result.sequence);
 		return lines;
 	}
 }

@@ -145,7 +145,7 @@ export type PawCompleteReviewerParsedArgs =
 const COMPLETE_REVIEWER_SCALAR_OPTIONS = new Set(["--output-file"]);
 
 export function parsePawCompleteReviewerArgs(args: string[]): PawCompleteReviewerParsedArgs {
-	if (args.some((arg) => arg === "--help" || arg === "-h")) {
+	if (args.includes("--help") || args.includes("-h")) {
 		return { kind: "help" };
 	}
 

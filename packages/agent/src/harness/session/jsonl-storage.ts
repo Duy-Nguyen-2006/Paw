@@ -159,9 +159,9 @@ async function loadJsonlStorage(
 }
 
 export class JsonlSessionStorage implements SessionStorage<JsonlSessionMetadata> {
-	private readonly fs: JsonlSessionStorageFileSystem;
-	private readonly filePath: string;
-	private readonly metadata: JsonlSessionMetadata;
+	private fs: JsonlSessionStorageFileSystem;
+	private filePath: string;
+	private metadata: JsonlSessionMetadata;
 	private entries: SessionTreeEntry[];
 	private byId: Map<string, SessionTreeEntry>;
 	private labelsById: Map<string, string>;

@@ -21,17 +21,8 @@ function assertMatchesBufferTail(input: string, maxByteValues?: readonly number[
 	for (const maxBytes of values) {
 		const result = truncateTail(input, { maxBytes, maxLines: 10 });
 		const expected = bufferTail(input, maxBytes);
-		if (result.content !== expected) {
-			throw new Error(
-				`tail mismatch input=${JSON.stringify(input)} maxBytes=${maxBytes} expected=${JSON.stringify(expected)} actual=${JSON.stringify(result.content)}`,
-			);
-		}
-		const outputBytes = Buffer.byteLength(result.content, "utf8");
-		if (outputBytes > maxBytes) {
-			throw new Error(
-				`tail output exceeded byte limit input=${JSON.stringify(input)} maxBytes=${maxBytes} outputBytes=${outputBytes}`,
-			);
-		}
+		expect(result.content).toBe(expected);
+		expect(Buffer.byteLength(result.content, "utf8")).toBeLessThanOrEqual(maxBytes);
 	}
 }
 
@@ -125,6 +116,7 @@ describe("truncate utilities", () => {
 
 	it("matches Buffer tail truncation semantics for surrogate edge cases", () => {
 		const inputs = ["a\ud83d", "\ude42b", "a\ude42b", "\ud83d\ud83d\ude42", "\ud83d\ude42\ude42", "👩‍💻"];
+		expect(inputs).toHaveLength(6);
 		for (const input of inputs) assertMatchesBufferTail(input);
 	});
 
@@ -146,6 +138,7 @@ describe("truncate utilities", () => {
 			"\ue000",
 			"\uffff",
 		];
+		expect(alphabet).toHaveLength(15);
 
 		function checkExhaustive(prefix: string, depth: number): void {
 			assertMatchesBufferTail(prefix, sampledByteLimits(prefix));

@@ -70,6 +70,49 @@ export interface RenderDiffOptions {
 	filePath?: string;
 }
 
+interface DiffLine {
+	lineNum: string;
+	content: string;
+}
+
+/** Collect consecutive diff lines with the given prefix, advancing the index. */
+function collectConsecutiveLines(
+	lines: string[],
+	startIndex: number,
+	prefix: string,
+): { collected: DiffLine[]; nextIndex: number } {
+	const collected: DiffLine[] = [];
+	let i = startIndex;
+	while (i < lines.length) {
+		const p = parseDiffLine(lines[i]);
+		if (!p || p.prefix !== prefix) break;
+		collected.push({ lineNum: p.lineNum, content: p.content });
+		i++;
+	}
+	return { collected, nextIndex: i };
+}
+
+/** Render a single-line change pair with intra-line diff highlighting. */
+function renderSingleLineChange(removed: DiffLine, added: DiffLine): string[] {
+	const { removedLine, addedLine } = renderIntraLineDiff(replaceTabs(removed.content), replaceTabs(added.content));
+	return [
+		theme.fg("toolDiffRemoved", `-${removed.lineNum} ${removedLine}`),
+		theme.fg("toolDiffAdded", `+${added.lineNum} ${addedLine}`),
+	];
+}
+
+/** Render multi-line changes (removed then added). */
+function renderMultiLineChange(removedLines: DiffLine[], addedLines: DiffLine[]): string[] {
+	const result: string[] = [];
+	for (const removed of removedLines) {
+		result.push(theme.fg("toolDiffRemoved", `-${removed.lineNum} ${replaceTabs(removed.content)}`));
+	}
+	for (const added of addedLines) {
+		result.push(theme.fg("toolDiffAdded", `+${added.lineNum} ${replaceTabs(added.content)}`));
+	}
+	return result;
+}
+
 /**
  * Render a diff string with colored lines and intra-line change highlighting.
  * - Context lines: dim/gray
@@ -92,52 +135,20 @@ export function renderDiff(diffText: string, _options: RenderDiffOptions = {}): 
 		}
 
 		if (parsed.prefix === "-") {
-			// Collect consecutive removed lines
-			const removedLines: { lineNum: string; content: string }[] = [];
-			while (i < lines.length) {
-				const p = parseDiffLine(lines[i]);
-				if (!p || p.prefix !== "-") break;
-				removedLines.push({ lineNum: p.lineNum, content: p.content });
-				i++;
-			}
+			const removed = collectConsecutiveLines(lines, i, "-");
+			i = removed.nextIndex;
+			const added = collectConsecutiveLines(lines, i, "+");
+			i = added.nextIndex;
 
-			// Collect consecutive added lines
-			const addedLines: { lineNum: string; content: string }[] = [];
-			while (i < lines.length) {
-				const p = parseDiffLine(lines[i]);
-				if (!p || p.prefix !== "+") break;
-				addedLines.push({ lineNum: p.lineNum, content: p.content });
-				i++;
-			}
-
-			// Only do intra-line diffing when there's exactly one removed and one added line
-			// (indicating a single line modification). Otherwise, show lines as-is.
-			if (removedLines.length === 1 && addedLines.length === 1) {
-				const removed = removedLines[0];
-				const added = addedLines[0];
-
-				const { removedLine, addedLine } = renderIntraLineDiff(
-					replaceTabs(removed.content),
-					replaceTabs(added.content),
-				);
-
-				result.push(theme.fg("toolDiffRemoved", `-${removed.lineNum} ${removedLine}`));
-				result.push(theme.fg("toolDiffAdded", `+${added.lineNum} ${addedLine}`));
+			if (removed.collected.length === 1 && added.collected.length === 1) {
+				result.push(...renderSingleLineChange(removed.collected[0], added.collected[0]));
 			} else {
-				// Show all removed lines first, then all added lines
-				for (const removed of removedLines) {
-					result.push(theme.fg("toolDiffRemoved", `-${removed.lineNum} ${replaceTabs(removed.content)}`));
-				}
-				for (const added of addedLines) {
-					result.push(theme.fg("toolDiffAdded", `+${added.lineNum} ${replaceTabs(added.content)}`));
-				}
+				result.push(...renderMultiLineChange(removed.collected, added.collected));
 			}
 		} else if (parsed.prefix === "+") {
-			// Standalone added line
 			result.push(theme.fg("toolDiffAdded", `+${parsed.lineNum} ${replaceTabs(parsed.content)}`));
 			i++;
 		} else {
-			// Context line
 			result.push(theme.fg("toolDiffContext", ` ${parsed.lineNum} ${replaceTabs(parsed.content)}`));
 			i++;
 		}

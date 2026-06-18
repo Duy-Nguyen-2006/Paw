@@ -62,7 +62,7 @@ interface ExtensionUIRequest {
 
 class OutputLog implements Component {
 	private lines: string[] = [];
-	private maxLines = 1000;
+	private readonly maxLines = 1000;
 	private visibleLines = 0;
 
 	setVisibleLines(n: number): void {
@@ -159,8 +159,8 @@ class PromptInput implements Component {
 // ============================================================================
 
 class SelectDialog implements Component {
-	private list: SelectList;
-	private title: string;
+	private readonly list: SelectList;
+	private readonly title: string;
 	onSelect?: (value: string) => void;
 	onCancel?: () => void;
 
@@ -196,8 +196,8 @@ class SelectDialog implements Component {
 }
 
 class InputDialog implements Component {
-	private dialogInput: Input;
-	private title: string;
+	private readonly dialogInput: Input;
+	private readonly title: string;
 	onCtrlD?: () => void;
 
 	constructor(title: string, prefill?: string) {

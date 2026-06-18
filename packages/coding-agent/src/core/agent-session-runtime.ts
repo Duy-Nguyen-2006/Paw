@@ -76,7 +76,7 @@ export class AgentSessionRuntime {
 	private beforeSessionInvalidate?: () => void;
 	private _session: AgentSession;
 	private _services: AgentSessionServices;
-	private readonly createRuntime: CreateAgentSessionRuntimeFactory;
+	private createRuntime: CreateAgentSessionRuntimeFactory;
 	private _diagnostics: AgentSessionRuntimeDiagnostic[];
 	private _modelFallbackMessage?: string;
 
@@ -265,7 +265,7 @@ export class AgentSessionRuntime {
 		if (beforeResult.cancelled) {
 			return { cancelled: true };
 		}
-		let targetLeafId: string | null;
+		let targetLeafId: string | null = null;
 		let selectedText: string | undefined;
 
 		const selectedEntry = this.session.sessionManager.getEntry(entryId);

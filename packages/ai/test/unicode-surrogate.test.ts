@@ -255,7 +255,7 @@ async function testUnpairedHighSurrogate<TApi extends Api>(llm: Model<TApi>, opt
 
 	// Construct a string with an intentionally unpaired high surrogate
 	// This simulates what might happen if text processing corrupts emoji
-	const unpairedSurrogate = String.fromCharCode(0xd83d); // High surrogate without low surrogate
+	const unpairedSurrogate = String.fromCodePoint(0xd83d); // High surrogate without low surrogate
 
 	const toolResult: ToolResultMessage = {
 		role: "toolResult",

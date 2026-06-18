@@ -4,7 +4,7 @@ import { completeSimple } from "../src/stream.ts";
 
 function createLongSystemPrompt(): string {
 	const nonce = `${Date.now()}-${Math.random()}`;
-	return `You are a concise assistant.\nCache nonce: ${nonce}\n\n${Array(80)
+	return `You are a concise assistant.\nCache nonce: ${nonce}\n\n${new Array(80)
 		.fill(
 			"Prompt-caching probe content. Keep this exact text stable across requests so the provider can reuse prefix tokens and report cache read and cache write usage.",
 		)

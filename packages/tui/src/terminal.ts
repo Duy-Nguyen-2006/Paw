@@ -23,7 +23,7 @@ export type KeyboardProtocolNegotiationSequence =
 export function parseKeyboardProtocolNegotiationSequence(
 	sequence: string,
 ): KeyboardProtocolNegotiationSequence | undefined {
-	const kittyFlags = sequence.match(/^\x1b\[\?(\d+)u$/);
+	const kittyFlags = /^\x1b\[\?(\d+)u$/.exec(sequence);
 	if (kittyFlags) {
 		return { type: "kitty-flags", flags: Number.parseInt(kittyFlags[1]!, 10) };
 	}
@@ -108,7 +108,7 @@ export class ProcessTerminal implements Terminal {
 	private stdinBuffer?: StdinBuffer;
 	private stdinDataHandler?: (data: string) => void;
 	private progressInterval?: ReturnType<typeof setInterval>;
-	private writeLogPath = (() => {
+	private readonly writeLogPath = (() => {
 		const env = process.env.PI_TUI_WRITE_LOG || "";
 		if (!env) return "";
 		try {

@@ -60,6 +60,65 @@ export function isValidThinkingLevel(level: string): level is ThinkingLevel {
 	return VALID_THINKING_LEVELS.includes(level as ThinkingLevel);
 }
 
+/**
+ * Split a comma-separated list into trimmed, non-empty entries.
+ */
+function splitCsvList(value: string): string[] {
+	return value
+		.split(",")
+		.map((s) => s.trim())
+		.filter((name) => name.length > 0);
+}
+
+/**
+ * Consume the next arg as a value for a flag. Returns the new index, or -1 if
+ * no value is available (caller should record a diagnostic).
+ */
+function consumeValueArg(args: string[], i: number): { value: string; nextIndex: number } | undefined {
+	if (i + 1 >= args.length) return undefined;
+	return { value: args[i + 1], nextIndex: i + 1 };
+}
+
+/**
+ * Try to consume the next arg as a strict flag value: a value is taken when
+ * the following arg exists and does not start with "-" or "@". Used for
+ * unknown long flags and --list-models.
+ */
+function consumeOptionalValueArg(args: string[], i: number): { value: string; nextIndex: number } | undefined {
+	const next = args[i + 1];
+	if (next === undefined || next.startsWith("-") || next.startsWith("@")) return undefined;
+	return { value: next, nextIndex: i + 1 };
+}
+
+/**
+ * Try to consume the next arg as a permissive value: a value is taken unless
+ * it is missing, starts with "@", or starts with "-" without also being a
+ * "---" triple-dash form. Used by --print, which intentionally accepts
+ * user-supplied values that look like extra "dash" words.
+ */
+function consumePermissiveValueArg(args: string[], i: number): { value: string; nextIndex: number } | undefined {
+	const next = args[i + 1];
+	if (next === undefined || next.startsWith("@")) return undefined;
+	if (next.startsWith("-") && !next.startsWith("---")) return undefined;
+	return { value: next, nextIndex: i + 1 };
+}
+
+/** Set a boolean field on the result. */
+function setBoolean<K extends keyof Args>(result: Args, key: K, value: Args[K]): void {
+	result[key] = value;
+}
+
+/** Append a value to a (possibly uninitialised) array field on the result. */
+function appendArrayField(
+	result: Args,
+	key: "appendSystemPrompt" | "extensions" | "skills" | "promptTemplates" | "themes",
+	value: string,
+): void {
+	const list = (result[key] as string[] | undefined) ?? [];
+	list.push(value);
+	(result as unknown as Record<string, string[]>)[key] = list;
+}
+
 export function parseArgs(args: string[]): Args {
 	const result: Args = {
 		messages: [],
@@ -71,134 +130,16 @@ export function parseArgs(args: string[]): Args {
 	for (let i = 0; i < args.length; i++) {
 		const arg = args[i];
 
-		if (arg === "--help" || arg === "-h") {
-			result.help = true;
-		} else if (arg === "--version" || arg === "-v") {
-			result.version = true;
-		} else if (arg === "--mode" && i + 1 < args.length) {
-			const mode = args[++i];
-			if (mode === "text" || mode === "json" || mode === "rpc") {
-				result.mode = mode;
-			}
-		} else if (arg === "--continue" || arg === "-c") {
-			result.continue = true;
-		} else if (arg === "--resume" || arg === "-r") {
-			result.resume = true;
-		} else if (arg === "--provider" && i + 1 < args.length) {
-			result.provider = args[++i];
-		} else if (arg === "--model" && i + 1 < args.length) {
-			result.model = args[++i];
-		} else if (arg === "--api-key" && i + 1 < args.length) {
-			result.apiKey = args[++i];
-		} else if (arg === "--system-prompt" && i + 1 < args.length) {
-			result.systemPrompt = args[++i];
-		} else if (arg === "--append-system-prompt" && i + 1 < args.length) {
-			result.appendSystemPrompt = result.appendSystemPrompt ?? [];
-			result.appendSystemPrompt.push(args[++i]);
-		} else if (arg === "--name" || arg === "-n") {
-			if (i + 1 < args.length) {
-				result.name = args[++i];
-			} else {
-				result.diagnostics.push({ type: "error", message: "--name requires a value" });
-			}
-		} else if (arg === "--no-session") {
-			result.noSession = true;
-		} else if (arg === "--session" && i + 1 < args.length) {
-			result.session = args[++i];
-		} else if (arg === "--session-id" && i + 1 < args.length) {
-			result.sessionId = args[++i];
-		} else if (arg === "--fork" && i + 1 < args.length) {
-			result.fork = args[++i];
-		} else if (arg === "--session-dir" && i + 1 < args.length) {
-			result.sessionDir = args[++i];
-		} else if (arg === "--models" && i + 1 < args.length) {
-			result.models = args[++i].split(",").map((s) => s.trim());
-		} else if (arg === "--no-tools" || arg === "-nt") {
-			result.noTools = true;
-		} else if (arg === "--no-builtin-tools" || arg === "-nbt") {
-			result.noBuiltinTools = true;
-		} else if ((arg === "--tools" || arg === "-t") && i + 1 < args.length) {
-			result.tools = args[++i]
-				.split(",")
-				.map((s) => s.trim())
-				.filter((name) => name.length > 0);
-		} else if ((arg === "--exclude-tools" || arg === "-xt") && i + 1 < args.length) {
-			result.excludeTools = args[++i]
-				.split(",")
-				.map((s) => s.trim())
-				.filter((name) => name.length > 0);
-		} else if (arg === "--thinking" && i + 1 < args.length) {
-			const level = args[++i];
-			if (isValidThinkingLevel(level)) {
-				result.thinking = level;
-			} else {
-				result.diagnostics.push({
-					type: "warning",
-					message: `Invalid thinking level "${level}". Valid values: ${VALID_THINKING_LEVELS.join(", ")}`,
-				});
-			}
-		} else if (arg === "--print" || arg === "-p") {
-			result.print = true;
-			const next = args[i + 1];
-			if (next !== undefined && !next.startsWith("@") && (!next.startsWith("-") || next.startsWith("---"))) {
-				result.messages.push(next);
-				i++;
-			}
-		} else if (arg === "--export" && i + 1 < args.length) {
-			result.export = args[++i];
-		} else if ((arg === "--extension" || arg === "-e") && i + 1 < args.length) {
-			result.extensions = result.extensions ?? [];
-			result.extensions.push(args[++i]);
-		} else if (arg === "--no-extensions" || arg === "-ne") {
-			result.noExtensions = true;
-		} else if (arg === "--skill" && i + 1 < args.length) {
-			result.skills = result.skills ?? [];
-			result.skills.push(args[++i]);
-		} else if (arg === "--prompt-template" && i + 1 < args.length) {
-			result.promptTemplates = result.promptTemplates ?? [];
-			result.promptTemplates.push(args[++i]);
-		} else if (arg === "--theme" && i + 1 < args.length) {
-			result.themes = result.themes ?? [];
-			result.themes.push(args[++i]);
-		} else if (arg === "--no-skills" || arg === "-ns") {
-			result.noSkills = true;
-		} else if (arg === "--no-prompt-templates" || arg === "-np") {
-			result.noPromptTemplates = true;
-		} else if (arg === "--no-themes") {
-			result.noThemes = true;
-		} else if (arg === "--no-context-files" || arg === "-nc") {
-			result.noContextFiles = true;
-		} else if (arg === "--list-models") {
-			// Check if next arg is a search pattern (not a flag or file arg)
-			if (i + 1 < args.length && !args[i + 1].startsWith("-") && !args[i + 1].startsWith("@")) {
-				result.listModels = args[++i];
-			} else {
-				result.listModels = true;
-			}
-		} else if (arg === "--verbose") {
-			result.verbose = true;
-		} else if (arg === "--approve" || arg === "-a") {
-			result.projectTrustOverride = true;
-		} else if (arg === "--no-approve" || arg === "-na") {
-			result.projectTrustOverride = false;
-		} else if (arg === "--offline") {
-			result.offline = true;
-		} else if (arg.startsWith("@")) {
+		const next = dispatchArg(arg, args, i, result);
+		if (next !== undefined) {
+			i = next;
+			continue;
+		}
+
+		if (arg.startsWith("@")) {
 			result.fileArgs.push(arg.slice(1)); // Remove @ prefix
 		} else if (arg.startsWith("--")) {
-			const eqIndex = arg.indexOf("=");
-			if (eqIndex !== -1) {
-				result.unknownFlags.set(arg.slice(2, eqIndex), arg.slice(eqIndex + 1));
-			} else {
-				const flagName = arg.slice(2);
-				const next = args[i + 1];
-				if (next !== undefined && !next.startsWith("-") && !next.startsWith("@")) {
-					result.unknownFlags.set(flagName, next);
-					i++;
-				} else {
-					result.unknownFlags.set(flagName, true);
-				}
-			}
+			i = handleUnknownLongFlag(arg, args, i, result);
 		} else if (arg.startsWith("-") && !arg.startsWith("--")) {
 			result.diagnostics.push({ type: "error", message: `Unknown option: ${arg}` });
 		} else if (!arg.startsWith("-")) {
@@ -207,6 +148,209 @@ export function parseArgs(args: string[]): Args {
 	}
 
 	return result;
+}
+
+/**
+ * Dispatch a recognised argument to the matching handler.
+ * @returns the new index when the handler consumes extra args, or undefined
+ *          when the argument is not a known flag and should fall through to
+ *          the unknown-flag/positional handling below.
+ */
+type ArgHandler = (args: string[], i: number, result: Args) => number | undefined;
+
+const BOOLEAN_FLAGS: Record<string, [keyof Args, boolean]> = {
+	"--help": ["help", true],
+	"-h": ["help", true],
+	"--version": ["version", true],
+	"-v": ["version", true],
+	"--continue": ["continue", true],
+	"-c": ["continue", true],
+	"--resume": ["resume", true],
+	"-r": ["resume", true],
+	"--no-session": ["noSession", true],
+	"--no-tools": ["noTools", true],
+	"-nt": ["noTools", true],
+	"--no-builtin-tools": ["noBuiltinTools", true],
+	"-nbt": ["noBuiltinTools", true],
+	"--no-extensions": ["noExtensions", true],
+	"-ne": ["noExtensions", true],
+	"--no-skills": ["noSkills", true],
+	"-ns": ["noSkills", true],
+	"--no-prompt-templates": ["noPromptTemplates", true],
+	"-np": ["noPromptTemplates", true],
+	"--no-themes": ["noThemes", true],
+	"--no-context-files": ["noContextFiles", true],
+	"-nc": ["noContextFiles", true],
+	"--verbose": ["verbose", true],
+	"--offline": ["offline", true],
+	"--approve": ["projectTrustOverride", true],
+	"-a": ["projectTrustOverride", true],
+	"--no-approve": ["projectTrustOverride", false],
+	"-na": ["projectTrustOverride", false],
+};
+
+const VALUE_HANDLERS: Record<string, ArgHandler> = {
+	"--mode": handleMode,
+	"--provider": (args, i, result) => handleStringValue(args, i, result, "provider"),
+	"--model": (args, i, result) => handleStringValue(args, i, result, "model"),
+	"--api-key": (args, i, result) => handleStringValue(args, i, result, "apiKey"),
+	"--system-prompt": (args, i, result) => handleStringValue(args, i, result, "systemPrompt"),
+	"--append-system-prompt": (args, i, result) => handleAppendList(args, i, result, "appendSystemPrompt"),
+	"--name": handleName,
+	"-n": handleName,
+	"--session": (args, i, result) => handleStringValue(args, i, result, "session"),
+	"--session-id": (args, i, result) => handleStringValue(args, i, result, "sessionId"),
+	"--fork": (args, i, result) => handleStringValue(args, i, result, "fork"),
+	"--session-dir": (args, i, result) => handleStringValue(args, i, result, "sessionDir"),
+	"--models": (args, i, result) =>
+		handleStringValue(args, i, result, "models", (v) => v.split(",").map((s) => s.trim())),
+	"--tools": (args, i, result) => handleStringValue(args, i, result, "tools", splitCsvList),
+	"-t": (args, i, result) => handleStringValue(args, i, result, "tools", splitCsvList),
+	"--exclude-tools": (args, i, result) => handleStringValue(args, i, result, "excludeTools", splitCsvList),
+	"-xt": (args, i, result) => handleStringValue(args, i, result, "excludeTools", splitCsvList),
+	"--thinking": handleThinking,
+	"--print": handlePrint,
+	"-p": handlePrint,
+	"--export": (args, i, result) => handleStringValue(args, i, result, "export"),
+	"--extension": (args, i, result) => handleAppendList(args, i, result, "extensions"),
+	"-e": (args, i, result) => handleAppendList(args, i, result, "extensions"),
+	"--skill": (args, i, result) => handleAppendList(args, i, result, "skills"),
+	"--prompt-template": (args, i, result) => handleAppendList(args, i, result, "promptTemplates"),
+	"--theme": (args, i, result) => handleAppendList(args, i, result, "themes"),
+	"--list-models": handleListModels,
+};
+
+function dispatchArg(arg: string, args: string[], i: number, result: Args): number | undefined {
+	const booleanEntry = BOOLEAN_FLAGS[arg];
+	if (booleanEntry) {
+		const [key, value] = booleanEntry;
+		return finishBoolean(result, key, value, i);
+	}
+	const valueHandler = VALUE_HANDLERS[arg];
+	if (valueHandler) {
+		return valueHandler(args, i, result);
+	}
+	return undefined;
+}
+
+/** Set a boolean field and return the unchanged index. */
+function finishBoolean<K extends keyof Args>(result: Args, key: K, value: Args[K], i: number): number {
+	setBoolean(result, key, value);
+	return i;
+}
+
+/** Consume a string value for a flag, recording a diagnostic if missing. */
+function handleStringValue<K extends keyof Args>(
+	args: string[],
+	i: number,
+	result: Args,
+	key: K,
+	transform?: (value: string) => Args[K],
+): number {
+	const consumed = consumeValueArg(args, i);
+	if (!consumed) return i;
+	const value = transform ? transform(consumed.value) : (consumed.value as unknown as Args[K]);
+	(result as unknown as Record<string, unknown>)[key as string] = value;
+	return consumed.nextIndex;
+}
+
+/** Consume a value and append it to a list-style field. */
+function handleAppendList(
+	args: string[],
+	i: number,
+	result: Args,
+	key: "appendSystemPrompt" | "extensions" | "skills" | "promptTemplates" | "themes",
+): number {
+	const consumed = consumeValueArg(args, i);
+	if (!consumed) return i;
+	appendArrayField(result, key, consumed.value);
+	return consumed.nextIndex;
+}
+
+/** --name requires a value; emit a diagnostic if missing. */
+function handleName(args: string[], i: number, result: Args): number {
+	const consumed = consumeValueArg(args, i);
+	if (!consumed) {
+		result.diagnostics.push({ type: "error", message: "--name requires a value" });
+		return i;
+	}
+	result.name = consumed.value;
+	return consumed.nextIndex;
+}
+
+/** --mode accepts only a known value; silently ignored when invalid. */
+function handleMode(args: string[], i: number, result: Args): number {
+	const consumed = consumeValueArg(args, i);
+	if (!consumed) return i;
+	const mode = consumed.value;
+	if (mode === "text" || mode === "json" || mode === "rpc") {
+		result.mode = mode;
+	}
+	return consumed.nextIndex;
+}
+
+/** --thinking validates the value and emits a warning on invalid input. */
+function handleThinking(args: string[], i: number, result: Args): number {
+	const consumed = consumeValueArg(args, i);
+	if (!consumed) return i;
+	const level = consumed.value;
+	if (isValidThinkingLevel(level)) {
+		result.thinking = level;
+	} else {
+		result.diagnostics.push({
+			type: "warning",
+			message: `Invalid thinking level "${level}". Valid values: ${VALID_THINKING_LEVELS.join(", ")}`,
+		});
+	}
+	return consumed.nextIndex;
+}
+
+/**
+ * --print enables print mode and may consume the next arg as the prompt
+ * when it doesn't look like a flag or @file.
+ */
+function handlePrint(args: string[], i: number, result: Args): number {
+	result.print = true;
+	const consumed = consumePermissiveValueArg(args, i);
+	if (consumed) {
+		result.messages.push(consumed.value);
+		return consumed.nextIndex;
+	}
+	return i;
+}
+
+/**
+ * --list-models accepts an optional search pattern; without one it acts as a
+ * boolean flag.
+ */
+function handleListModels(args: string[], i: number, result: Args): number {
+	const consumed = consumeOptionalValueArg(args, i);
+	if (consumed) {
+		result.listModels = consumed.value;
+		return consumed.nextIndex;
+	}
+	result.listModels = true;
+	return i;
+}
+
+/**
+ * Handle an unknown long flag: parse the flag name, optional =value, and
+ * optional following positional value. Returns the new index.
+ */
+function handleUnknownLongFlag(arg: string, args: string[], i: number, result: Args): number {
+	const eqIndex = arg.indexOf("=");
+	if (eqIndex !== -1) {
+		result.unknownFlags.set(arg.slice(2, eqIndex), arg.slice(eqIndex + 1));
+		return i;
+	}
+	const flagName = arg.slice(2);
+	const consumed = consumeOptionalValueArg(args, i);
+	if (consumed) {
+		result.unknownFlags.set(flagName, consumed.value);
+		return consumed.nextIndex;
+	}
+	result.unknownFlags.set(flagName, true);
+	return i;
 }
 
 export function printHelp(extensionFlags?: ExtensionFlag[]): void {

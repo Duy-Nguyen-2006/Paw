@@ -13,13 +13,13 @@
  * 2. Copy photon_rs_bg.wasm next to the executable in build:binary
  */
 
-import type { PathOrFileDescriptor } from "fs";
-import { createRequire } from "module";
-import * as path from "path";
-import { fileURLToPath } from "url";
+import type { PathOrFileDescriptor } from "node:fs";
+import { createRequire } from "node:module";
+import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const require = createRequire(import.meta.url);
-const fs = require("fs") as typeof import("fs");
+const fs = require("node:fs") as typeof import("fs");
 
 // Re-export types from the main package
 export type { PhotonImage as PhotonImageType } from "@silvia-odwyer/photon-node";

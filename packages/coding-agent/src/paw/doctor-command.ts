@@ -64,9 +64,11 @@ export function formatPawDoctorReport(report: PawDoctorReport): string {
 		lines.push(...report.remediation.map((remediation) => `remediation: ${remediation}`));
 	}
 
-	lines.push(`egress allowlist: ${formatList(report.egressAllowlist)}`);
-	lines.push(`evidence: ${report.evidence}`);
-	lines.push(`note: ${report.probeNote}`);
+	lines.push(
+		`egress allowlist: ${formatList(report.egressAllowlist)}`,
+		`evidence: ${report.evidence}`,
+		`note: ${report.probeNote}`,
+	);
 	return lines.join("\n");
 }
 

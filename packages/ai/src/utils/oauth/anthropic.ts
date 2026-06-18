@@ -23,7 +23,6 @@ type NodeApis = {
 
 let nodeApis: NodeApis | null = null;
 let nodeApisPromise: Promise<NodeApis> | null = null;
-
 const decode = (s: string) => atob(s);
 const CLIENT_ID = decode("OWQxYzI1MGEtZTYxYi00NGQ5LTg4ZWQtNTk0NGQxOTYyZjVl");
 const AUTHORIZE_URL = "https://claude.ai/oauth/authorize";
@@ -37,7 +36,7 @@ const SCOPES =
 async function getNodeApis(): Promise<NodeApis> {
 	if (nodeApis) return nodeApis;
 	if (!nodeApisPromise) {
-		if (typeof process === "undefined" || (!process.versions?.node && !process.versions?.bun)) {
+		if (process === undefined || (!process.versions?.node && !process.versions?.bun)) {
 			throw new Error("Anthropic OAuth is only available in Node.js environments");
 		}
 		nodeApisPromise = import("node:http").then((httpModule) => ({

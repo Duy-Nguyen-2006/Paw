@@ -5,7 +5,7 @@ import { type Component, TUI } from "../src/tui.ts";
 import { VirtualTerminal } from "./virtual-terminal.ts";
 
 class StaticLines implements Component {
-	private readonly lines: string[];
+	private lines: string[];
 
 	constructor(lines: string[]) {
 		this.lines = lines;
@@ -19,7 +19,7 @@ class StaticLines implements Component {
 }
 
 class StaticOverlay implements Component {
-	private readonly line: string;
+	private line: string;
 
 	constructor(line: string) {
 		this.line = line;

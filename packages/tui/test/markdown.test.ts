@@ -712,7 +712,7 @@ describe("Markdown component", () => {
 		it("should not leak styles into following lines when rendered in TUI", async () => {
 			class MarkdownWithInput implements Component {
 				public markdownLineCount = 0;
-				private readonly markdown: Markdown;
+				private markdown: Markdown;
 
 				constructor(markdown: Markdown) {
 					this.markdown = markdown;

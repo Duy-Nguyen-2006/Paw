@@ -492,7 +492,7 @@ export class SettingsSelectorComponent extends Container {
 						callbacks.onShowImagesChange(newValue === "true");
 						break;
 					case "image-width-cells":
-						callbacks.onImageWidthCellsChange(parseInt(newValue, 10));
+						callbacks.onImageWidthCellsChange(Number.parseInt(newValue, 10));
 						break;
 					case "auto-resize-images":
 						callbacks.onAutoResizeImagesChange(newValue === "true");
@@ -550,10 +550,10 @@ export class SettingsSelectorComponent extends Container {
 						callbacks.onShowHardwareCursorChange(newValue === "true");
 						break;
 					case "editor-padding":
-						callbacks.onEditorPaddingXChange(parseInt(newValue, 10));
+						callbacks.onEditorPaddingXChange(Number.parseInt(newValue, 10));
 						break;
 					case "autocomplete-max-visible":
-						callbacks.onAutocompleteMaxVisibleChange(parseInt(newValue, 10));
+						callbacks.onAutocompleteMaxVisibleChange(Number.parseInt(newValue, 10));
 						break;
 					case "clear-on-shrink":
 						callbacks.onClearOnShrinkChange(newValue === "true");

@@ -473,78 +473,63 @@ export class AgentSession {
 	private _lastAssistantMessage: AssistantMessage | undefined = undefined;
 
 	/** Internal handler for agent events - shared by subscribe and reconnect */
-	private _handleAgentEvent = async (event: AgentEvent): Promise<void> => {
-		// When a user message starts, check if it's from either queue and remove it BEFORE emitting
-		// This ensures the UI sees the updated queue state
+	private readonly _handleAgentEvent = async (event: AgentEvent): Promise<void> => {
 		if (event.type === "message_start" && event.message.role === "user") {
-			this._overflowRecoveryAttempted = false;
-			const messageText = this._getUserMessageText(event.message);
-			if (messageText) {
-				// Check steering queue first
-				const steeringIndex = this._steeringMessages.indexOf(messageText);
-				if (steeringIndex !== -1) {
-					this._steeringMessages.splice(steeringIndex, 1);
-					this._emitQueueUpdate();
-				} else {
-					// Check follow-up queue
-					const followUpIndex = this._followUpMessages.indexOf(messageText);
-					if (followUpIndex !== -1) {
-						this._followUpMessages.splice(followUpIndex, 1);
-						this._emitQueueUpdate();
-					}
-				}
-			}
+			this._handleUserMessageStart(event.message);
 		}
 
-		// Emit to extensions first
 		await this._emitExtensionEvent(event);
-
-		// Notify all listeners
 		this._emit(event.type === "agent_end" ? { ...event, willRetry: this._willRetryAfterAgentEnd(event) } : event);
 
-		// Handle session persistence
 		if (event.type === "message_end") {
-			// Check if this is a custom message from extensions
-			if (event.message.role === "custom") {
-				// Persist as CustomMessageEntry
-				this.sessionManager.appendCustomMessageEntry(
-					event.message.customType,
-					event.message.content,
-					event.message.display,
-					event.message.details,
-				);
-			} else if (
-				event.message.role === "user" ||
-				event.message.role === "assistant" ||
-				event.message.role === "toolResult"
-			) {
-				// Regular LLM message - persist as SessionMessageEntry
-				this.sessionManager.appendMessage(event.message);
-			}
-			// Other message types (bashExecution, compactionSummary, branchSummary) are persisted elsewhere
-
-			// Track assistant message for auto-compaction (checked on agent_end)
+			this._persistMessage(event.message);
 			if (event.message.role === "assistant") {
-				this._lastAssistantMessage = event.message;
-
-				const assistantMsg = event.message as AssistantMessage;
-				if (assistantMsg.stopReason !== "error") {
-					this._overflowRecoveryAttempted = false;
-				}
-
-				// Reset retry counter immediately on successful assistant response
-				// This prevents accumulation across multiple LLM calls within a turn
-				if (assistantMsg.stopReason !== "error" && this._retryAttempt > 0) {
-					this._emit({
-						type: "auto_retry_end",
-						success: true,
-						attempt: this._retryAttempt,
-					});
-					this._retryAttempt = 0;
-				}
+				this._trackAssistantMessage(event.message);
 			}
 		}
 	};
+
+	private _handleUserMessageStart(message: Message): void {
+		this._overflowRecoveryAttempted = false;
+		const messageText = this._getUserMessageText(message);
+		if (!messageText) return;
+
+		const steeringIndex = this._steeringMessages.indexOf(messageText);
+		if (steeringIndex !== -1) {
+			this._steeringMessages.splice(steeringIndex, 1);
+			this._emitQueueUpdate();
+		} else {
+			const followUpIndex = this._followUpMessages.indexOf(messageText);
+			if (followUpIndex !== -1) {
+				this._followUpMessages.splice(followUpIndex, 1);
+				this._emitQueueUpdate();
+			}
+		}
+	}
+
+	private _persistMessage(message: AgentMessage): void {
+		if (message.role === "custom") {
+			this.sessionManager.appendCustomMessageEntry(
+				message.customType,
+				message.content,
+				message.display,
+				message.details,
+			);
+		} else if (message.role === "user" || message.role === "assistant" || message.role === "toolResult") {
+			this.sessionManager.appendMessage(message);
+		}
+	}
+
+	private _trackAssistantMessage(message: AssistantMessage): void {
+		this._lastAssistantMessage = message;
+		if (message.stopReason !== "error") {
+			this._overflowRecoveryAttempted = false;
+		}
+		if (message.stopReason !== "error" && this._retryAttempt > 0) {
+			this._emit({ type: "auto_retry_end", success: true, attempt: this._retryAttempt });
+			this._retryAttempt = 0;
+		}
+	}
 
 	private _willRetryAfterAgentEnd(event: Extract<AgentEvent, { type: "agent_end" }>): boolean {
 		const settings = this.settingsManager.getRetrySettings();
@@ -990,139 +975,40 @@ export class AgentSession {
 
 		try {
 			// Handle extension commands first (execute immediately, even during streaming)
-			// Extension commands manage their own LLM interaction via pi.sendMessage()
 			if (expandPromptTemplates && text.startsWith("/")) {
 				const handled = await this._tryExecuteExtensionCommand(text);
 				if (handled) {
-					// Extension command executed, no prompt to send
 					preflightResult?.(true);
 					return;
 				}
 			}
 
-			// Emit input event for extension interception (before skill/template expansion)
-			let currentText = text;
-			let currentImages = options?.images;
-			if (this._extensionRunner.hasHandlers("input")) {
-				const inputResult = await this._extensionRunner.emitInput(
-					currentText,
-					currentImages,
-					options?.source ?? "interactive",
-					this.isStreaming ? options?.streamingBehavior : undefined,
-				);
-				if (inputResult.action === "handled") {
-					preflightResult?.(true);
-					return;
-				}
-				if (inputResult.action === "transform") {
-					currentText = inputResult.text;
-					currentImages = inputResult.images ?? currentImages;
-				}
+			// Process input through extensions and templates
+			const processed = await this._processPromptInput(text, options, expandPromptTemplates);
+			if (processed === null) {
+				preflightResult?.(true);
+				return;
 			}
-
-			// Expand skill commands (/skill:name args) and prompt templates (/template args)
-			let expandedText = currentText;
-			if (expandPromptTemplates) {
-				expandedText = this._expandSkillCommand(expandedText);
-				expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
-			}
+			const { expandedText, currentImages } = processed;
 
 			// If streaming, queue via steer() or followUp() based on option
 			if (this.isStreaming) {
-				if (!options?.streamingBehavior) {
-					throw new Error(
-						"Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message.",
-					);
-				}
-				if (options.streamingBehavior === "followUp") {
-					await this._queueFollowUp(expandedText, currentImages);
-				} else {
-					await this._queueSteer(expandedText, currentImages);
-				}
+				await this._handleStreamingQueue(expandedText, currentImages, options);
 				preflightResult?.(true);
 				return;
 			}
 
-			// Flush any pending bash messages before the new prompt
-			this._flushPendingBashMessages();
+			// Validate model and auth
+			await this._validateModelAndAuth();
 
-			// Validate model
-			if (!this.model) {
-				throw new Error(formatNoModelSelectedMessage());
-			}
+			// Check if we need to compact before sending
+			await this._maybeCompactBeforePrompt();
 
-			if (!this._modelRegistry.hasConfiguredAuth(this.model)) {
-				const isOAuth = this._modelRegistry.isUsingOAuth(this.model);
-				if (isOAuth) {
-					throw new Error(
-						`Authentication failed for "${this.model.provider}". ` +
-							`Credentials may have expired or network is unavailable. ` +
-							`Run '/login ${this.model.provider}' to re-authenticate.`,
-					);
-				}
-				throw new Error(formatNoApiKeyFoundMessage(this.model.provider));
-			}
+			// Build messages array
+			messages = this._buildPromptMessages(expandedText, currentImages);
 
-			// Check if we need to compact before sending (catches aborted responses)
-			const lastAssistant = this._findLastAssistantMessage();
-			if (lastAssistant && (await this._checkCompaction(lastAssistant, false))) {
-				try {
-					await this.agent.continue();
-					while (await this._handlePostAgentRun()) {
-						await this.agent.continue();
-					}
-				} finally {
-					this._flushPendingBashMessages();
-				}
-			}
-
-			// Build messages array (custom message if any, then user message)
-			messages = [];
-
-			// Add user message
-			const userContent: (TextContent | ImageContent)[] = [{ type: "text", text: expandedText }];
-			if (currentImages) {
-				userContent.push(...currentImages);
-			}
-			messages.push({
-				role: "user",
-				content: userContent,
-				timestamp: Date.now(),
-			});
-
-			// Inject any pending "nextTurn" messages as context alongside the user message
-			for (const msg of this._pendingNextTurnMessages) {
-				messages.push(msg);
-			}
-			this._pendingNextTurnMessages = [];
-
-			// Emit before_agent_start extension event
-			const result = await this._extensionRunner.emitBeforeAgentStart(
-				expandedText,
-				currentImages,
-				this._baseSystemPrompt,
-				this._baseSystemPromptOptions,
-			);
-			// Add all custom messages from extensions
-			if (result?.messages) {
-				for (const msg of result.messages) {
-					messages.push({
-						role: "custom",
-						customType: msg.customType,
-						content: msg.content,
-						display: msg.display,
-						details: msg.details,
-						timestamp: Date.now(),
-					});
-				}
-			}
-			// Apply extension-modified system prompt, or reset to base
-			if (result?.systemPrompt) {
-				this.agent.state.systemPrompt = result.systemPrompt;
-			} else {
-				// Ensure we're using the base prompt (in case previous turn had modifications)
-				this.agent.state.systemPrompt = this._baseSystemPrompt;
-			}
+			// Emit before_agent_start extension event and apply modifications
+			await this._applyExtensionBeforeAgentStart(expandedText, currentImages, messages);
 		} catch (error) {
 			preflightResult?.(false);
 			throw error;
@@ -1134,6 +1020,142 @@ export class AgentSession {
 
 		preflightResult?.(true);
 		await this._runAgentPrompt(messages);
+	}
+
+	/** Process input through extension interception and template expansion. Returns null if handled. */
+	private async _processPromptInput(
+		text: string,
+		options: PromptOptions | undefined,
+		expandPromptTemplates: boolean,
+	): Promise<{ expandedText: string; currentImages: ImageContent[] | undefined } | null> {
+		let currentText = text;
+		let currentImages = options?.images;
+
+		// Emit input event for extension interception (before skill/template expansion)
+		if (this._extensionRunner.hasHandlers("input")) {
+			const inputResult = await this._extensionRunner.emitInput(
+				currentText,
+				currentImages,
+				options?.source ?? "interactive",
+				this.isStreaming ? options?.streamingBehavior : undefined,
+			);
+			if (inputResult.action === "handled") return null;
+			if (inputResult.action === "transform") {
+				currentText = inputResult.text;
+				currentImages = inputResult.images ?? currentImages;
+			}
+		}
+
+		// Expand skill commands and prompt templates
+		let expandedText = currentText;
+		if (expandPromptTemplates) {
+			expandedText = this._expandSkillCommand(expandedText);
+			expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
+		}
+
+		return { expandedText, currentImages };
+	}
+
+	private async _handleStreamingQueue(
+		expandedText: string,
+		currentImages: ImageContent[] | undefined,
+		options: PromptOptions | undefined,
+	): Promise<void> {
+		if (!options?.streamingBehavior) {
+			throw new Error(
+				"Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message.",
+			);
+		}
+		if (options.streamingBehavior === "followUp") {
+			await this._queueFollowUp(expandedText, currentImages);
+		} else {
+			await this._queueSteer(expandedText, currentImages);
+		}
+	}
+
+	private async _validateModelAndAuth(): Promise<void> {
+		this._flushPendingBashMessages();
+
+		if (!this.model) {
+			throw new Error(formatNoModelSelectedMessage());
+		}
+
+		if (!this._modelRegistry.hasConfiguredAuth(this.model)) {
+			const isOAuth = this._modelRegistry.isUsingOAuth(this.model);
+			if (isOAuth) {
+				throw new Error(
+					`Authentication failed for "${this.model.provider}". ` +
+						`Credentials may have expired or network is unavailable. ` +
+						`Run '/login ${this.model.provider}' to re-authenticate.`,
+				);
+			}
+			throw new Error(formatNoApiKeyFoundMessage(this.model.provider));
+		}
+	}
+
+	private async _maybeCompactBeforePrompt(): Promise<void> {
+		const lastAssistant = this._findLastAssistantMessage();
+		if (lastAssistant && (await this._checkCompaction(lastAssistant, false))) {
+			try {
+				await this.agent.continue();
+				while (await this._handlePostAgentRun()) {
+					await this.agent.continue();
+				}
+			} finally {
+				this._flushPendingBashMessages();
+			}
+		}
+	}
+
+	private _buildPromptMessages(expandedText: string, currentImages: ImageContent[] | undefined): AgentMessage[] {
+		const messages: AgentMessage[] = [];
+
+		// Add user message
+		const userContent: (TextContent | ImageContent)[] = [{ type: "text", text: expandedText }];
+		if (currentImages) {
+			userContent.push(...currentImages);
+		}
+		messages.push({ role: "user", content: userContent, timestamp: Date.now() });
+
+		// Inject any pending "nextTurn" messages as context alongside the user message
+		for (const msg of this._pendingNextTurnMessages) {
+			messages.push(msg);
+		}
+		this._pendingNextTurnMessages = [];
+
+		return messages;
+	}
+
+	private async _applyExtensionBeforeAgentStart(
+		expandedText: string,
+		currentImages: ImageContent[] | undefined,
+		messages: AgentMessage[],
+	): Promise<void> {
+		const result = await this._extensionRunner.emitBeforeAgentStart(
+			expandedText,
+			currentImages,
+			this._baseSystemPrompt,
+			this._baseSystemPromptOptions,
+		);
+
+		if (result?.messages) {
+			for (const msg of result.messages) {
+				messages.push({
+					role: "custom",
+					customType: msg.customType,
+					content: msg.content,
+					display: msg.display,
+					details: msg.details,
+					timestamp: Date.now(),
+				});
+			}
+		}
+
+		if (result?.systemPrompt) {
+			this.agent.state.systemPrompt = result.systemPrompt;
+		} else {
+			this.agent.state.systemPrompt = this._baseSystemPrompt;
+		}
 	}
 
 	/**
@@ -1499,7 +1521,7 @@ export class AgentSession {
 	}
 
 	private async _cycleAvailableModel(direction: "forward" | "backward"): Promise<ModelCycleResult | undefined> {
-		const availableModels = await this._modelRegistry.getAvailable();
+		const availableModels = this._modelRegistry.getAvailable();
 		if (availableModels.length <= 1) return undefined;
 
 		const currentModel = this.model;
@@ -1657,7 +1679,7 @@ export class AgentSession {
 			const preparation = prepareCompaction(pathEntries, settings);
 			if (!preparation) {
 				// Check why we can't compact
-				const lastEntry = pathEntries[pathEntries.length - 1];
+				const lastEntry = pathEntries.at(-1);
 				if (lastEntry?.type === "compaction") {
 					throw new Error("Already compacted");
 				}
@@ -1804,75 +1826,101 @@ export class AgentSession {
 
 		const contextWindow = this.model?.contextWindow ?? 0;
 
-		// Skip overflow check if the message came from a different model.
-		// This handles the case where user switched from a smaller-context model (e.g. opus)
-		// to a larger-context model (e.g. codex) - the overflow error from the old model
-		// shouldn't trigger compaction for the new model.
-		const sameModel =
-			this.model && assistantMessage.provider === this.model.provider && assistantMessage.model === this.model.id;
-
-		// Skip compaction checks if this assistant message is older than the latest
-		// compaction boundary. This prevents a stale pre-compaction usage/error
-		// from retriggering compaction on the first prompt after compaction.
-		const compactionEntry = getLatestCompactionEntry(this.sessionManager.getBranch());
-		const assistantIsFromBeforeCompaction =
-			compactionEntry !== null && assistantMessage.timestamp <= new Date(compactionEntry.timestamp).getTime();
-		if (assistantIsFromBeforeCompaction) {
+		if (this._isMessageFromBeforeLatestCompaction(assistantMessage)) {
 			return false;
 		}
 
+		const sameModel = this._isMessageFromCurrentModel(assistantMessage);
+
 		// Case 1: Overflow - LLM returned context overflow error
 		if (sameModel && isContextOverflow(assistantMessage, contextWindow)) {
-			if (this._overflowRecoveryAttempted) {
-				this._emit({
-					type: "compaction_end",
-					reason: "overflow",
-					result: undefined,
-					aborted: false,
-					willRetry: false,
-					errorMessage:
-						"Context overflow recovery failed after one compact-and-retry attempt. Try reducing context or switching to a larger-context model.",
-				});
-				return false;
-			}
-
-			this._overflowRecoveryAttempted = true;
-			// Remove the error message from agent state (it IS saved to session for history,
-			// but we don't want it in context for the retry)
-			const messages = this.agent.state.messages;
-			if (messages.length > 0 && messages[messages.length - 1].role === "assistant") {
-				this.agent.state.messages = messages.slice(0, -1);
-			}
-			return await this._runAutoCompaction("overflow", true);
+			return this._handleCompactionOverflow(assistantMessage);
 		}
 
 		// Case 2: Threshold - context is getting large
-		// For error messages (no usage data), estimate from last successful response.
-		// This ensures sessions that hit persistent API errors (e.g. 529) can still compact.
-		let contextTokens: number;
-		if (assistantMessage.stopReason === "error") {
-			const messages = this.agent.state.messages;
-			const estimate = estimateContextTokens(messages);
-			if (estimate.lastUsageIndex === null) return false; // No usage data at all
-			// Verify the usage source is post-compaction. Kept pre-compaction messages
-			// have stale usage reflecting the old (larger) context and would falsely
-			// trigger compaction right after one just finished.
-			const usageMsg = messages[estimate.lastUsageIndex];
-			if (
-				compactionEntry &&
-				usageMsg.role === "assistant" &&
-				(usageMsg as AssistantMessage).timestamp <= new Date(compactionEntry.timestamp).getTime()
-			) {
-				return false;
-			}
-			contextTokens = estimate.tokens;
-		} else {
-			contextTokens = calculateContextTokens(assistantMessage.usage);
-		}
+		const contextTokens = this._resolveContextTokensForThreshold(assistantMessage);
+		if (contextTokens === null) return false;
 		if (shouldCompact(contextTokens, contextWindow, settings)) {
 			return await this._runAutoCompaction("threshold", false);
 		}
 		return false;
+	}
+
+	/** True when the assistant message is older than the latest compaction boundary. */
+	private _isMessageFromBeforeLatestCompaction(assistantMessage: AssistantMessage): boolean {
+		const compactionEntry = getLatestCompactionEntry(this.sessionManager.getBranch());
+		if (!compactionEntry) return false;
+		return assistantMessage.timestamp <= new Date(compactionEntry.timestamp).getTime();
+	}
+
+	/** True when the assistant message was produced by the currently selected model. */
+	private _isMessageFromCurrentModel(assistantMessage: AssistantMessage): boolean {
+		if (!this.model) return false;
+		return assistantMessage.provider === this.model.provider && assistantMessage.model === this.model.id;
+	}
+
+	/**
+	 * Handle the overflow path: emit a failure event on second attempt, otherwise
+	 * strip the error message and trigger compact-and-retry.
+	 */
+	private async _handleCompactionOverflow(_assistantMessage: AssistantMessage): Promise<boolean> {
+		if (this._overflowRecoveryAttempted) {
+			this._emit({
+				type: "compaction_end",
+				reason: "overflow",
+				result: undefined,
+				aborted: false,
+				willRetry: false,
+				errorMessage:
+					"Context overflow recovery failed after one compact-and-retry attempt. Try reducing context or switching to a larger-context model.",
+			});
+			return false;
+		}
+
+		this._overflowRecoveryAttempted = true;
+		// Remove the error message from agent state (it IS saved to session for history,
+		// but we don't want it in context for the retry)
+		const messages = this.agent.state.messages;
+		if (messages.length > 0 && messages.at(-1)!.role === "assistant") {
+			this.agent.state.messages = messages.slice(0, -1);
+		}
+		return await this._runAutoCompaction("overflow", true);
+	}
+
+	/**
+	 * Resolve the context token count to use for the threshold check. Returns
+	 * null when there is no usable signal (e.g. an error message with no prior
+	 * usage to estimate from).
+	 */
+	private _resolveContextTokensForThreshold(assistantMessage: AssistantMessage): number | null {
+		if (assistantMessage.stopReason === "error") {
+			return this._estimateContextTokensFromHistory();
+		}
+		return calculateContextTokens(assistantMessage.usage);
+	}
+
+	/**
+	 * Estimate context tokens from the last successful response in the agent
+	 * history, returning null when the estimate is unusable (no usage data, or
+	 * the latest usage predates the latest compaction boundary).
+	 */
+	private _estimateContextTokensFromHistory(): number | null {
+		const messages = this.agent.state.messages;
+		const estimate = estimateContextTokens(messages);
+		if (estimate.lastUsageIndex === null) return null;
+
+		const compactionEntry = getLatestCompactionEntry(this.sessionManager.getBranch());
+		const usageMsg = messages[estimate.lastUsageIndex];
+		// Kept pre-compaction messages have stale usage reflecting the old (larger)
+		// context and would falsely trigger compaction right after one just finished.
+		if (
+			compactionEntry &&
+			usageMsg.role === "assistant" &&
+			(usageMsg as AssistantMessage).timestamp <= new Date(compactionEntry.timestamp).getTime()
+		) {
+			return null;
+		}
+		return estimate.tokens;
 	}
 
 	/**
@@ -2027,7 +2075,7 @@ export class AgentSession {
 
 			if (willRetry) {
 				const messages = this.agent.state.messages;
-				const lastMsg = messages[messages.length - 1];
+				const lastMsg = messages.at(-1);
 				if (lastMsg?.role === "assistant" && (lastMsg as AssistantMessage).stopReason === "error") {
 					this.agent.state.messages = messages.slice(0, -1);
 				}
@@ -2515,7 +2563,7 @@ export class AgentSession {
 
 		// Remove error message from agent state (keep in session for history)
 		const messages = this.agent.state.messages;
-		if (messages.length > 0 && messages[messages.length - 1].role === "assistant") {
+		if (messages.length > 0 && messages.at(-1)!.role === "assistant") {
 			this.agent.state.messages = messages.slice(0, -1);
 		}
 

@@ -1,4 +1,4 @@
-import { readFileSync } from "fs";
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 describe("export HTML skill block rendering", () => {

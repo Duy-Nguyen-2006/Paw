@@ -3,7 +3,7 @@
 Stories are work packets. They turn product intent into bounded implementation
 and validation work.
 
-No story packets are active yet.
+Story packets are active under `docs/stories/epics/`.
 
 ## Normal Story
 
@@ -41,3 +41,5 @@ planned -> in_progress -> implemented
                   v
                retired
 ```
+
+Implemented stories stay in the matrix until they are changed or retired.

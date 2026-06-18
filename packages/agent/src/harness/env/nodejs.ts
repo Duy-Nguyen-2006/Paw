@@ -148,29 +148,42 @@ async function getShellConfig(
 	customShellPath?: string,
 ): Promise<Result<{ shell: string; args: string[] }, ExecutionError>> {
 	if (customShellPath) {
-		if (await pathExists(customShellPath)) {
-			return ok({ shell: customShellPath, args: ["-c"] });
-		}
-		return err(new ExecutionError("shell_unavailable", `Custom shell path not found: ${customShellPath}`));
+		return resolveCustomShell(customShellPath);
 	}
 	if (process.platform === "win32") {
-		const candidates: string[] = [];
-		const programFiles = process.env.ProgramFiles;
-		if (programFiles) candidates.push(`${programFiles}\\Git\\bin\\bash.exe`);
-		const programFilesX86 = process.env["ProgramFiles(x86)"];
-		if (programFilesX86) candidates.push(`${programFilesX86}\\Git\\bin\\bash.exe`);
-		for (const candidate of candidates) {
-			if (await pathExists(candidate)) {
-				return ok({ shell: candidate, args: ["-c"] });
-			}
-		}
-		const bashOnPath = await findBashOnPath();
-		if (bashOnPath) {
-			return ok({ shell: bashOnPath, args: ["-c"] });
-		}
-		return err(new ExecutionError("shell_unavailable", "No bash shell found"));
+		return resolveWindowsShell();
 	}
+	return resolvePosixShell();
+}
 
+async function resolveCustomShell(
+	customShellPath: string,
+): Promise<Result<{ shell: string; args: string[] }, ExecutionError>> {
+	if (await pathExists(customShellPath)) {
+		return ok({ shell: customShellPath, args: ["-c"] });
+	}
+	return err(new ExecutionError("shell_unavailable", `Custom shell path not found: ${customShellPath}`));
+}
+
+async function resolveWindowsShell(): Promise<Result<{ shell: string; args: string[] }, ExecutionError>> {
+	const candidates: string[] = [];
+	const programFiles = process.env.ProgramFiles;
+	if (programFiles) candidates.push(`${programFiles}\\Git\\bin\\bash.exe`);
+	const programFilesX86 = process.env["ProgramFiles(x86)"];
+	if (programFilesX86) candidates.push(`${programFilesX86}\\Git\\bin\\bash.exe`);
+	for (const candidate of candidates) {
+		if (await pathExists(candidate)) {
+			return ok({ shell: candidate, args: ["-c"] });
+		}
+	}
+	const bashOnPath = await findBashOnPath();
+	if (bashOnPath) {
+		return ok({ shell: bashOnPath, args: ["-c"] });
+	}
+	return err(new ExecutionError("shell_unavailable", "No bash shell found"));
+}
+
+async function resolvePosixShell(): Promise<Result<{ shell: string; args: string[] }, ExecutionError>> {
 	if (await pathExists("/bin/bash")) {
 		return ok({ shell: "/bin/bash", args: ["-c"] });
 	}
@@ -214,6 +227,154 @@ function killProcessTree(pid: number): void {
 	}
 }
 
+/** Mutable state shared across the `exec` helper functions. */
+interface ExecProcessState {
+	stdout: string;
+	stderr: string;
+	settled: boolean;
+	timedOut: boolean;
+	callbackError: ExecutionError | undefined;
+	child: ReturnType<typeof spawn> | undefined;
+	timeoutId: ReturnType<typeof setTimeout> | undefined;
+}
+
+/** Allocate a fresh mutable state container for one `exec` invocation. */
+function createExecProcessState(): ExecProcessState {
+	return {
+		stdout: "",
+		stderr: "",
+		settled: false,
+		timedOut: false,
+		callbackError: undefined,
+		child: undefined,
+		timeoutId: undefined,
+	};
+}
+
+/** Spawn the configured shell command, returning the child or a spawn error. */
+function spawnShellChild(
+	command: string,
+	shellConfig: { shell: string; args: string[] },
+	cwd: string,
+	shellEnv: NodeJS.ProcessEnv | undefined,
+	options?: {
+		env?: Record<string, string>;
+	},
+):
+	| { kind: "ok"; child: ReturnType<typeof spawn> }
+	| { kind: "error"; error: Result<{ stdout: string; stderr: string; exitCode: number }, ExecutionError> } {
+	try {
+		const child = spawn(shellConfig.shell, [...shellConfig.args, command], {
+			cwd,
+			detached: process.platform !== "win32",
+			env: getShellEnv(shellEnv, options?.env),
+			stdio: ["ignore", "pipe", "pipe"],
+			windowsHide: true,
+		});
+		return { kind: "ok", child };
+	} catch (error) {
+		const cause = toError(error);
+		return {
+			kind: "error",
+			error: err(new ExecutionError("spawn_error", cause.message, cause)),
+		};
+	}
+}
+
+/** Schedule the timeout that kills the child if the process runs too long. */
+function scheduleExecTimeout(
+	state: ExecProcessState,
+	options?: { timeout?: number },
+): ReturnType<typeof setTimeout> | undefined {
+	if (typeof options?.timeout !== "number") return undefined;
+	return setTimeout(() => {
+		state.timedOut = true;
+		killChildIfRunning(state.child);
+	}, options.timeout * 1000);
+}
+
+/** Kill the spawned child if a PID is available. */
+function killChildIfRunning(child: ReturnType<typeof spawn> | undefined): void {
+	if (child?.pid) killProcessTree(child.pid);
+}
+
+/** Tear down timeout, abort listener, and mark the process settled. */
+function finalizeExecProcess(
+	state: ExecProcessState,
+	abortSignal: AbortSignal | undefined,
+	abortListener: () => void,
+	_result: Result<{ stdout: string; stderr: string; exitCode: number }, ExecutionError>,
+): void {
+	if (state.timeoutId) clearTimeout(state.timeoutId);
+	if (abortSignal) abortSignal.removeEventListener("abort", abortListener);
+}
+
+/** Attach stdout/stderr listeners that forward chunks and capture errors. */
+function attachExecStreamHandlers(
+	state: ExecProcessState,
+	options:
+		| {
+				onStdout?: (chunk: string) => void;
+				onStderr?: (chunk: string) => void;
+		  }
+		| undefined,
+): void {
+	const child = state.child;
+	if (!child) return;
+	const captureCallbackError = (error: ExecutionError) => {
+		state.callbackError = error;
+		killChildIfRunning(state.child);
+	};
+
+	child.stdout?.setEncoding("utf8");
+	child.stderr?.setEncoding("utf8");
+	child.stdout?.on("data", (chunk: string) => {
+		state.stdout += chunk;
+		try {
+			options?.onStdout?.(chunk);
+		} catch (error) {
+			captureCallbackError(new ExecutionError("callback_error", toError(error).message, toError(error)));
+		}
+	});
+	child.stderr?.on("data", (chunk: string) => {
+		state.stderr += chunk;
+		try {
+			options?.onStderr?.(chunk);
+		} catch (error) {
+			captureCallbackError(new ExecutionError("callback_error", toError(error).message, toError(error)));
+		}
+	});
+}
+
+/** Determine the result to settle with once the spawned process closes. */
+function resolveExecCloseResult(
+	state: ExecProcessState,
+	code: number | null,
+	options: { abortSignal?: AbortSignal; timeout?: number } | undefined,
+): Result<{ stdout: string; stderr: string; exitCode: number }, ExecutionError> {
+	if (state.callbackError) return err(state.callbackError);
+	if (state.timedOut) return err(new ExecutionError("timeout", `timeout:${options?.timeout}`));
+	if (options?.abortSignal?.aborted) return err(new ExecutionError("aborted", "aborted"));
+	return ok({ stdout: state.stdout, stderr: state.stderr, exitCode: code ?? 0 });
+}
+
+/** Attach the child-level `error` and `close` listeners. */
+function attachExecChildHandlers(
+	state: ExecProcessState,
+	options:
+		| {
+				abortSignal?: AbortSignal;
+				timeout?: number;
+		  }
+		| undefined,
+	settle: (result: Result<{ stdout: string; stderr: string; exitCode: number }, ExecutionError>) => void,
+): void {
+	const child = state.child;
+	if (!child) return;
+	child.on("error", (error) => settle(err(new ExecutionError("spawn_error", error.message, error))));
+	child.on("close", (code) => settle(resolveExecCloseResult(state, code, options)));
+}
+
 export class NodeExecutionEnv implements ExecutionEnv {
 	cwd: string;
 	private shellPath?: string;
@@ -250,103 +411,50 @@ export class NodeExecutionEnv implements ExecutionEnv {
 		const shellConfig = await getShellConfig(this.shellPath);
 		if (!shellConfig.ok) return shellConfig;
 
-		return await new Promise((resolvePromise) => {
-			let stdout = "";
-			let stderr = "";
-			let settled = false;
-			let timedOut = false;
-			let callbackError: ExecutionError | undefined;
-			let child: ReturnType<typeof spawn> | undefined;
-			let timeoutId: ReturnType<typeof setTimeout> | undefined;
+		return await this.runExecProcess(command, shellConfig.value, cwd, options);
+	}
 
-			const onAbort = () => {
-				if (child?.pid) {
-					killProcessTree(child.pid);
-				}
-			};
+	/** Spawn the configured shell and wire stdout/stderr/close handlers. */
+	private runExecProcess(
+		command: string,
+		shellConfig: { shell: string; args: string[] },
+		cwd: string,
+		options?: {
+			cwd?: string;
+			env?: Record<string, string>;
+			timeout?: number;
+			abortSignal?: AbortSignal;
+			onStdout?: (chunk: string) => void;
+			onStderr?: (chunk: string) => void;
+		},
+	): Promise<Result<{ stdout: string; stderr: string; exitCode: number }, ExecutionError>> {
+		return new Promise((resolvePromise) => {
+			const state: ExecProcessState = createExecProcessState();
+			const abortListener = () => killChildIfRunning(state.child);
 
 			const settle = (result: Result<{ stdout: string; stderr: string; exitCode: number }, ExecutionError>) => {
-				if (timeoutId) clearTimeout(timeoutId);
-				if (options?.abortSignal) options.abortSignal.removeEventListener("abort", onAbort);
-				if (settled) return;
-				settled = true;
+				finalizeExecProcess(state, options?.abortSignal, abortListener, result);
+				if (state.settled) return;
+				state.settled = true;
 				resolvePromise(result);
 			};
 
-			try {
-				child = spawn(shellConfig.value.shell, [...shellConfig.value.args, command], {
-					cwd,
-					detached: process.platform !== "win32",
-					env: getShellEnv(this.shellEnv, options?.env),
-					stdio: ["ignore", "pipe", "pipe"],
-					windowsHide: true,
-				});
-			} catch (error) {
-				const cause = toError(error);
-				settle(err(new ExecutionError("spawn_error", cause.message, cause)));
+			const spawnResult = spawnShellChild(command, shellConfig, cwd, this.shellEnv, options);
+			if (spawnResult.kind === "error") {
+				settle(spawnResult.error);
 				return;
 			}
 
-			timeoutId =
-				typeof options?.timeout === "number"
-					? setTimeout(() => {
-							timedOut = true;
-							if (child?.pid) {
-								killProcessTree(child.pid);
-							}
-						}, options.timeout * 1000)
-					: undefined;
+			state.child = spawnResult.child;
+			state.timeoutId = scheduleExecTimeout(state, options);
 
 			if (options?.abortSignal) {
-				if (options.abortSignal.aborted) {
-					onAbort();
-				} else {
-					options.abortSignal.addEventListener("abort", onAbort, { once: true });
-				}
+				if (options.abortSignal.aborted) abortListener();
+				else options.abortSignal.addEventListener("abort", abortListener, { once: true });
 			}
 
-			child.stdout?.setEncoding("utf8");
-			child.stderr?.setEncoding("utf8");
-			child.stdout?.on("data", (chunk: string) => {
-				stdout += chunk;
-				try {
-					options?.onStdout?.(chunk);
-				} catch (error) {
-					const cause = toError(error);
-					callbackError = new ExecutionError("callback_error", cause.message, cause);
-					onAbort();
-				}
-			});
-			child.stderr?.on("data", (chunk: string) => {
-				stderr += chunk;
-				try {
-					options?.onStderr?.(chunk);
-				} catch (error) {
-					const cause = toError(error);
-					callbackError = new ExecutionError("callback_error", cause.message, cause);
-					onAbort();
-				}
-			});
-
-			child.on("error", (error) => {
-				settle(err(new ExecutionError("spawn_error", error.message, error)));
-			});
-
-			child.on("close", (code) => {
-				if (callbackError) {
-					settle(err(callbackError));
-					return;
-				}
-				if (timedOut) {
-					settle(err(new ExecutionError("timeout", `timeout:${options?.timeout}`)));
-					return;
-				}
-				if (options?.abortSignal?.aborted) {
-					settle(err(new ExecutionError("aborted", "aborted")));
-					return;
-				}
-				settle(ok({ stdout, stderr, exitCode: code ?? 0 }));
-			});
+			attachExecStreamHandlers(state, options);
+			attachExecChildHandlers(state, options, settle);
 		});
 	}
 

@@ -22,7 +22,7 @@
  * Fixtures are generated fresh on each run.
  */
 
-import { writeFileSync } from "fs";
+import { writeFileSync } from "node:fs";
 import { Type } from "typebox";
 import { beforeAll, describe, expect, it } from "vitest";
 import { getModel } from "../src/models.ts";

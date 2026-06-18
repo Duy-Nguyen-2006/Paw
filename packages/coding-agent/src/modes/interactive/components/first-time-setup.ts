@@ -33,7 +33,7 @@ export class FirstTimeSetupComponent extends Container {
 	private step: "theme" | "analytics" = "theme";
 	private themeIndex: number;
 	private analyticsIndex = 0;
-	private readonly options: FirstTimeSetupOptions;
+	private options: FirstTimeSetupOptions;
 
 	constructor(options: FirstTimeSetupOptions) {
 		super();

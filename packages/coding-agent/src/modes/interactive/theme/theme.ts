@@ -170,9 +170,9 @@ function hexToRgb(hex: string): { r: number; g: number; b: number } {
 	if (cleaned.length !== 6) {
 		throw new Error(`Invalid hex color: ${hex}`);
 	}
-	const r = parseInt(cleaned.substring(0, 2), 16);
-	const g = parseInt(cleaned.substring(2, 4), 16);
-	const b = parseInt(cleaned.substring(4, 6), 16);
+	const r = Number.parseInt(cleaned.substring(0, 2), 16);
+	const g = Number.parseInt(cleaned.substring(2, 4), 16);
+	const b = Number.parseInt(cleaned.substring(4, 6), 16);
 	if (Number.isNaN(r) || Number.isNaN(g) || Number.isNaN(b)) {
 		throw new Error(`Invalid hex color: ${hex}`);
 	}
@@ -526,7 +526,7 @@ function parseThemeJson(label: string, json: unknown): ThemeJson {
 		if (missingColors.size > 0) {
 			errorMessage += "\nMissing required color tokens:\n";
 			errorMessage += Array.from(missingColors)
-				.sort()
+				.sort((a, b) => a.localeCompare(b))
 				.map((color) => `  - ${color}`)
 				.join("\n");
 			errorMessage += '\n\nPlease add these colors to your theme\'s "colors" object.';
@@ -539,7 +539,7 @@ function parseThemeJson(label: string, json: unknown): ThemeJson {
 		throw new Error(errorMessage);
 	}
 
-	return json as ThemeJson;
+	return json;
 }
 
 function parseThemeJsonContent(label: string, content: string): ThemeJson {
@@ -648,7 +648,7 @@ export interface TerminalBackgroundThemeDetectionOptions extends TerminalThemeDe
 function getColorFgBgBackgroundIndex(colorfgbg: string): number | undefined {
 	const parts = colorfgbg.split(";");
 	for (let i = parts.length - 1; i >= 0; i--) {
-		const bg = parseInt(parts[i].trim(), 10);
+		const bg = Number.parseInt(parts[i].trim(), 10);
 		if (Number.isInteger(bg) && bg >= 0 && bg <= 255) {
 			return bg;
 		}

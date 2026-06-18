@@ -16,7 +16,7 @@ class UserMessageList implements Component {
 	private selectedIndex: number = 0;
 	public onSelect?: (entryId: string) => void;
 	public onCancel?: () => void;
-	private maxVisible: number = 10; // Max messages visible
+	private readonly maxVisible: number = 10; // Max messages visible
 
 	constructor(messages: UserMessageItem[], initialSelectedId?: string) {
 		// Store messages in chronological order (oldest to newest)
@@ -65,8 +65,7 @@ class UserMessageList implements Component {
 			const position = i + 1;
 			const metadata = `  Message ${position} of ${this.messages.length}`;
 			const metadataLine = theme.fg("muted", metadata);
-			lines.push(metadataLine);
-			lines.push(""); // Blank line between messages
+			lines.push(metadataLine, "");
 		}
 
 		// Add scroll indicator if needed

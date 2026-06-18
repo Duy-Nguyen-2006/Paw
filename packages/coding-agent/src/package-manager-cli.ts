@@ -162,158 +162,188 @@ Options:
 
 function parsePackageCommand(args: string[]): PackageCommandOptions | undefined {
 	const [rawCommand, ...rest] = args;
-	let command: PackageCommand | undefined;
-	if (rawCommand === "uninstall") {
-		command = "remove";
-	} else if (rawCommand === "install" || rawCommand === "remove" || rawCommand === "update" || rawCommand === "list") {
-		command = rawCommand;
-	}
+	const command = resolvePackageSubcommand(rawCommand);
 	if (!command) {
 		return undefined;
 	}
 
-	let local = false;
-	let force = false;
-	let projectTrustOverride: boolean | undefined;
-	let help = false;
-	let invalidOption: string | undefined;
-	let invalidArgument: string | undefined;
-	let missingOptionValue: string | undefined;
-	let conflictingOptions: string | undefined;
-	let source: string | undefined;
-	let selfFlag = false;
-	let extensionsFlag = false;
-	let extensionFlagSource: string | undefined;
+	const flagState = parsePackageFlags(rest, command);
+
+	return {
+		command,
+		source: flagState.source,
+		updateTarget: resolveUpdateTarget(command, flagState),
+		local: flagState.local,
+		force: flagState.force,
+		projectTrustOverride: flagState.projectTrustOverride,
+		help: flagState.help,
+		invalidOption: flagState.invalidOption,
+		invalidArgument: flagState.invalidArgument,
+		missingOptionValue: flagState.missingOptionValue,
+		conflictingOptions: flagState.conflictingOptions,
+	};
+}
+
+/** Resolve the top-level command token, treating "uninstall" as an alias for "remove". */
+function resolvePackageSubcommand(rawCommand: string | undefined): PackageCommand | undefined {
+	if (rawCommand === "uninstall") return "remove";
+	if (rawCommand === "install" || rawCommand === "remove" || rawCommand === "update" || rawCommand === "list") {
+		return rawCommand;
+	}
+	return undefined;
+}
+
+interface PackageFlagState {
+	source: string | undefined;
+	local: boolean;
+	force: boolean;
+	projectTrustOverride: boolean | undefined;
+	help: boolean;
+	invalidOption: string | undefined;
+	invalidArgument: string | undefined;
+	missingOptionValue: string | undefined;
+	conflictingOptions: string | undefined;
+	extensionFlagSource: string | undefined;
+	selfFlag: boolean;
+	extensionsFlag: boolean;
+}
+
+/** Walk the argv list, populating a mutable flag state object. */
+function applySimpleFlag(
+	arg: string,
+	command: PackageCommand,
+	allowedCommands: PackageCommand[],
+	flag: "local" | "force" | "selfFlag" | "extensionsFlag",
+	state: PackageFlagState,
+): boolean {
+	if (command === allowedCommands[0]) {
+		(state[flag] as boolean) = true;
+	} else {
+		state.invalidOption = state.invalidOption ?? arg;
+	}
+	return true;
+}
+
+function applyExtensionFlag(
+	arg: string,
+	rest: string[],
+	index: number,
+	command: PackageCommand,
+	state: PackageFlagState,
+): number {
+	if (command !== "update") {
+		state.invalidOption = state.invalidOption ?? arg;
+		return index;
+	}
+	const value = rest[index + 1];
+	if (!value || value.startsWith("-")) {
+		state.missingOptionValue = state.missingOptionValue ?? arg;
+		return index;
+	}
+	if (state.extensionFlagSource) {
+		state.conflictingOptions = state.conflictingOptions ?? "--extension can only be provided once";
+	} else {
+		state.extensionFlagSource = value;
+	}
+	return index + 1;
+}
+
+function parsePackageFlags(rest: string[], command: PackageCommand): PackageFlagState {
+	const state: PackageFlagState = {
+		source: undefined,
+		local: false,
+		force: false,
+		projectTrustOverride: undefined,
+		help: false,
+		invalidOption: undefined,
+		invalidArgument: undefined,
+		missingOptionValue: undefined,
+		conflictingOptions: undefined,
+		extensionFlagSource: undefined,
+		selfFlag: false,
+		extensionsFlag: false,
+	};
 
 	for (let index = 0; index < rest.length; index++) {
 		const arg = rest[index];
 		if (arg === "-h" || arg === "--help") {
-			help = true;
+			state.help = true;
 			continue;
 		}
-
 		if (arg === "-l" || arg === "--local") {
-			if (command === "install" || command === "remove") {
-				local = true;
-			} else {
-				invalidOption = invalidOption ?? arg;
-			}
+			applySimpleFlag(arg, command, ["install", "remove"], "local", state);
 			continue;
 		}
-
 		if (arg === "--self") {
-			if (command === "update") {
-				selfFlag = true;
-			} else {
-				invalidOption = invalidOption ?? arg;
-			}
+			applySimpleFlag(arg, command, ["update"], "selfFlag", state);
 			continue;
 		}
-
 		if (arg === "--extensions") {
-			if (command === "update") {
-				extensionsFlag = true;
-			} else {
-				invalidOption = invalidOption ?? arg;
-			}
+			applySimpleFlag(arg, command, ["update"], "extensionsFlag", state);
 			continue;
 		}
-
 		if (arg === "--approve" || arg === "-a") {
-			projectTrustOverride = true;
+			state.projectTrustOverride = true;
 			continue;
 		}
-
 		if (arg === "--no-approve" || arg === "-na") {
-			projectTrustOverride = false;
+			state.projectTrustOverride = false;
 			continue;
 		}
-
 		if (arg === "--force") {
-			if (command === "update") {
-				force = true;
-			} else {
-				invalidOption = invalidOption ?? arg;
-			}
+			applySimpleFlag(arg, command, ["update"], "force", state);
 			continue;
 		}
-
 		if (arg === "--extension") {
-			if (command !== "update") {
-				invalidOption = invalidOption ?? arg;
-				continue;
-			}
-
-			const value = rest[index + 1];
-			if (!value || value.startsWith("-")) {
-				missingOptionValue = missingOptionValue ?? arg;
-			} else if (extensionFlagSource) {
-				conflictingOptions = conflictingOptions ?? "--extension can only be provided once";
-				index++;
-			} else {
-				extensionFlagSource = value;
-				index++;
-			}
+			index = applyExtensionFlag(arg, rest, index, command, state);
 			continue;
 		}
-
 		if (arg.startsWith("-")) {
-			invalidOption = invalidOption ?? arg;
+			state.invalidOption = state.invalidOption ?? arg;
 			continue;
 		}
-
-		if (!source) {
-			source = arg;
-		} else {
-			invalidArgument = invalidArgument ?? arg;
-		}
+		if (!state.source) state.source = arg;
+		else state.invalidArgument = state.invalidArgument ?? arg;
 	}
 
-	let updateTarget: UpdateTarget | undefined;
-	if (command === "update") {
-		if (extensionFlagSource) {
-			if (selfFlag || extensionsFlag) {
-				conflictingOptions = conflictingOptions ?? "--extension cannot be combined with --self or --extensions";
-			}
-			if (source) {
-				conflictingOptions = conflictingOptions ?? "--extension cannot be combined with a positional source";
-			}
-			updateTarget = { type: "extensions", source: extensionFlagSource };
-		} else if (source) {
-			const sourceIsSelf = source === "self" || source === "pi";
-			if (sourceIsSelf) {
-				updateTarget = extensionsFlag ? { type: "all" } : { type: "self" };
-			} else {
-				if (extensionsFlag || selfFlag) {
-					conflictingOptions =
-						conflictingOptions ?? "positional update targets cannot be combined with --self or --extensions";
-				}
-				updateTarget = { type: "extensions", source };
-			}
-		} else if (selfFlag && extensionsFlag) {
-			updateTarget = { type: "all" };
-		} else if (selfFlag) {
-			updateTarget = { type: "self" };
-		} else if (extensionsFlag) {
-			updateTarget = { type: "extensions" };
-		} else {
-			updateTarget = { type: "all" };
+	return state;
+}
+
+/**
+ * Decide the update target for "update" commands, recording conflict diagnostics
+ * when incompatible flags are combined. Falls back to updating everything.
+ */
+function resolveUpdateTarget(command: PackageCommand, state: PackageFlagState): UpdateTarget | undefined {
+	if (command !== "update") return undefined;
+
+	if (state.extensionFlagSource) {
+		if (state.selfFlag || state.extensionsFlag) {
+			state.conflictingOptions =
+				state.conflictingOptions ?? "--extension cannot be combined with --self or --extensions";
 		}
+		if (state.source) {
+			state.conflictingOptions =
+				state.conflictingOptions ?? "--extension cannot be combined with a positional source";
+		}
+		return { type: "extensions", source: state.extensionFlagSource };
 	}
 
-	return {
-		command,
-		source,
-		updateTarget,
-		local,
-		force,
-		projectTrustOverride,
-		help,
-		invalidOption,
-		invalidArgument,
-		missingOptionValue,
-		conflictingOptions,
-	};
+	if (state.source) {
+		const sourceIsSelf = state.source === "self" || state.source === "pi";
+		if (sourceIsSelf) {
+			return state.extensionsFlag ? { type: "all" } : { type: "self" };
+		}
+		if (state.extensionsFlag || state.selfFlag) {
+			state.conflictingOptions =
+				state.conflictingOptions ?? "positional update targets cannot be combined with --self or --extensions";
+		}
+		return { type: "extensions", source: state.source };
+	}
+
+	if (state.selfFlag && state.extensionsFlag) return { type: "all" };
+	if (state.selfFlag) return { type: "self" };
+	if (state.extensionsFlag) return { type: "extensions" };
+	return { type: "all" };
 }
 
 function updateTargetIncludesSelf(target: UpdateTarget): boolean {

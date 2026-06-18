@@ -59,13 +59,13 @@ function utf8ByteLength(content: string): number {
 
 	let bytes = firstNonAscii;
 	for (let i = firstNonAscii; i < content.length; i++) {
-		const code = content.charCodeAt(i);
+		const code = content.codePointAt(i)!;
 		if (code <= 0x7f) {
 			bytes += 1;
 		} else if (code <= 0x7ff) {
 			bytes += 2;
 		} else if (code >= 0xd800 && code <= 0xdbff && i + 1 < content.length) {
-			const next = content.charCodeAt(i + 1);
+			const next = content.codePointAt(i + 1)!;
 			if (next >= 0xdc00 && next <= 0xdfff) {
 				bytes += 4;
 				i++;
@@ -295,38 +295,57 @@ export function truncateTail(content: string, options: TruncationOptions = {}): 
 function truncateStringToBytesFromEnd(str: string, maxBytes: number): string {
 	if (maxBytes <= 0) return "";
 
+	const { start, needsReplacement } = findStartIndexFromEnd(str, maxBytes);
+	const output = str.slice(start);
+	return needsReplacement ? replaceUnpairedSurrogates(output) : output;
+}
+
+interface TrailingScanResult {
+	start: number;
+	needsReplacement: boolean;
+}
+
+/** Measure the UTF-8 byte length of a single code point at a given index. */
+function codePointByteLength(
+	code: number,
+	str: string,
+	index: number,
+): { bytes: number; surrogateOffset: number; unpaired: boolean } {
+	if (code >= 0xdc00 && code <= 0xdfff && index > 0) {
+		const previous = str.charCodeAt(index - 1);
+		if (previous >= 0xd800 && previous <= 0xdbff) {
+			return { bytes: 4, surrogateOffset: 1, unpaired: false };
+		}
+		return { bytes: 3, surrogateOffset: 0, unpaired: true };
+	}
+	if (code >= 0xd800 && code <= 0xdfff) {
+		return { bytes: 3, surrogateOffset: 0, unpaired: true };
+	}
+	if (code <= 0x7f) return { bytes: 1, surrogateOffset: 0, unpaired: false };
+	if (code <= 0x7ff) return { bytes: 2, surrogateOffset: 0, unpaired: false };
+	return { bytes: 3, surrogateOffset: 0, unpaired: false };
+}
+
+/**
+ * Walk `str` backwards counting UTF-8 bytes and return the smallest slice
+ * start index whose tail still fits within `maxBytes`.
+ */
+function findStartIndexFromEnd(str: string, maxBytes: number): TrailingScanResult {
 	let outputBytes = 0;
 	let start = str.length;
 	let needsReplacement = false;
 	for (let i = str.length; i > 0; ) {
-		let characterStart = i - 1;
-		const code = str.charCodeAt(characterStart);
-		let characterBytes: number;
-		let unpairedSurrogate = false;
-		if (code >= 0xdc00 && code <= 0xdfff && characterStart > 0) {
-			const previous = str.charCodeAt(characterStart - 1);
-			if (previous >= 0xd800 && previous <= 0xdbff) {
-				characterStart--;
-				characterBytes = 4;
-			} else {
-				characterBytes = 3;
-				unpairedSurrogate = true;
-			}
-		} else if (code >= 0xd800 && code <= 0xdfff) {
-			characterBytes = 3;
-			unpairedSurrogate = true;
-		} else {
-			characterBytes = code <= 0x7f ? 1 : code <= 0x7ff ? 2 : 3;
-		}
-		if (outputBytes + characterBytes > maxBytes) break;
-		outputBytes += characterBytes;
-		start = characterStart;
-		needsReplacement ||= unpairedSurrogate;
-		i = characterStart;
+		const characterStart = i - 1;
+		const code = str.codePointAt(characterStart)!;
+		if (code === undefined) break;
+		const { bytes, surrogateOffset, unpaired } = codePointByteLength(code, str, characterStart);
+		if (outputBytes + bytes > maxBytes) break;
+		outputBytes += bytes;
+		start = characterStart - surrogateOffset;
+		needsReplacement ||= unpaired;
+		i = characterStart - surrogateOffset;
 	}
-
-	const output = str.slice(start);
-	return needsReplacement ? replaceUnpairedSurrogates(output) : output;
+	return { start, needsReplacement };
 }
 
 /**

@@ -37,7 +37,7 @@ function getLockfilePackageChanges() {
 
 	const changes = [];
 	const paths = new Set([...Object.keys(before.packages), ...Object.keys(after.packages)]);
-	for (const lockPath of [...paths].sort()) {
+	for (const lockPath of [...paths].sort((a, b) => a.localeCompare(b))) {
 		const oldEntry = before.packages[lockPath];
 		const newEntry = after.packages[lockPath];
 		if (JSON.stringify(oldEntry) !== JSON.stringify(newEntry)) {

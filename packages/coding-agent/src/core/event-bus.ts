@@ -16,11 +16,12 @@ export function createEventBus(): EventBusController {
 			emitter.emit(channel, data);
 		},
 		on: (channel, handler) => {
-			const safeHandler = async (data: unknown) => {
-				try {
-					await handler(data);
-				} catch (err) {
-					console.error(`Event handler error (${channel}):`, err);
+			const safeHandler = (data: unknown) => {
+				const result = handler(data) as unknown;
+				if (result && typeof (result as Promise<unknown>).then === "function") {
+					return (result as Promise<unknown>).catch((err: unknown) => {
+						console.error(`Event handler error (${channel}):`, err);
+					});
 				}
 			};
 			emitter.on(channel, safeHandler);

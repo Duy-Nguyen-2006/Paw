@@ -69,7 +69,7 @@ function getUrls(domain: string): {
  * Returns API URL like https://api.individual.githubcopilot.com
  */
 function getBaseUrlFromToken(token: string): string | null {
-	const match = token.match(/proxy-ep=([^;]+)/);
+	const match = /proxy-ep=([^;]+)/.exec(token);
 	if (!match) return null;
 	const proxyHost = match[1];
 	// Convert proxy.xxx to api.xxx

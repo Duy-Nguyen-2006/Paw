@@ -38,33 +38,34 @@ export interface CompactionDetails {
 /**
  * Extract file operations from messages and previous compaction entries.
  */
+function collectPreviousCompactionFiles(
+	entries: SessionEntry[],
+	prevCompactionIndex: number,
+	fileOps: FileOperations,
+): void {
+	if (prevCompactionIndex < 0) return;
+	const prevCompaction = entries[prevCompactionIndex] as CompactionEntry;
+	if (prevCompaction.fromHook || !prevCompaction.details) return;
+	// fromHook field kept for session file compatibility
+	const details = prevCompaction.details as CompactionDetails;
+	if (Array.isArray(details.readFiles)) {
+		for (const f of details.readFiles) fileOps.read.add(f);
+	}
+	if (Array.isArray(details.modifiedFiles)) {
+		for (const f of details.modifiedFiles) fileOps.edited.add(f);
+	}
+}
+
 function extractFileOperations(
 	messages: AgentMessage[],
 	entries: SessionEntry[],
 	prevCompactionIndex: number,
 ): FileOperations {
 	const fileOps = createFileOps();
-
-	// Collect from previous compaction's details (if pi-generated)
-	if (prevCompactionIndex >= 0) {
-		const prevCompaction = entries[prevCompactionIndex] as CompactionEntry;
-		if (!prevCompaction.fromHook && prevCompaction.details) {
-			// fromHook field kept for session file compatibility
-			const details = prevCompaction.details as CompactionDetails;
-			if (Array.isArray(details.readFiles)) {
-				for (const f of details.readFiles) fileOps.read.add(f);
-			}
-			if (Array.isArray(details.modifiedFiles)) {
-				for (const f of details.modifiedFiles) fileOps.edited.add(f);
-			}
-		}
-	}
-
-	// Extract from tool calls in messages
+	collectPreviousCompactionFiles(entries, prevCompactionIndex, fileOps);
 	for (const msg of messages) {
 		extractFileOpsFromMessage(msg, fileOps);
 	}
-
 	return fileOps;
 }
 
@@ -142,7 +143,7 @@ export function calculateContextTokens(usage: Usage): number {
  */
 function getAssistantUsage(msg: AgentMessage): Usage | undefined {
 	if (msg.role === "assistant" && "usage" in msg) {
-		const assistantMsg = msg as AssistantMessage;
+		const assistantMsg = msg;
 		if (assistantMsg.stopReason !== "aborted" && assistantMsg.stopReason !== "error" && assistantMsg.usage) {
 			return assistantMsg.usage;
 		}
@@ -258,7 +259,7 @@ export function estimateTokens(message: AgentMessage): number {
 			return Math.ceil(chars / 4);
 		}
 		case "assistant": {
-			const assistant = message as AssistantMessage;
+			const assistant = message;
 			for (const block of assistant.content) {
 				if (block.type === "text") {
 					chars += block.text.length;
@@ -383,6 +384,46 @@ export interface CutPointResult {
  *
  * Only considers entries between `startIndex` and `endIndex` (exclusive).
  */
+function accumulateTokensFromEnd(
+	entries: SessionEntry[],
+	startIndex: number,
+	endIndex: number,
+	keepRecentTokens: number,
+	cutPoints: number[],
+): number {
+	let accumulatedTokens = 0;
+	let cutIndex = cutPoints[0]; // Default: keep from first message (not header)
+	for (let i = endIndex - 1; i >= startIndex; i--) {
+		const entry = entries[i];
+		if (entry.type !== "message") continue;
+		const messageTokens = estimateTokens(entry.message);
+		accumulatedTokens += messageTokens;
+		if (accumulatedTokens >= keepRecentTokens) {
+			for (const cp of cutPoints) {
+				if (cp >= i) {
+					cutIndex = cp;
+					break;
+				}
+			}
+			break;
+		}
+	}
+	return cutIndex;
+}
+
+function backtrackOverNonMessageEntries(entries: SessionEntry[], startIndex: number, cutIndex: number): number {
+	let index = cutIndex;
+	while (index > startIndex) {
+		const prevEntry = entries[index - 1];
+		// Stop at session header or compaction boundaries
+		if (prevEntry.type === "compaction") break;
+		if (prevEntry.type === "message") break;
+		// Include this non-message entry (bash, settings change, etc.)
+		index--;
+	}
+	return index;
+}
+
 export function findCutPoint(
 	entries: SessionEntry[],
 	startIndex: number,
@@ -395,45 +436,11 @@ export function findCutPoint(
 		return { firstKeptEntryIndex: startIndex, turnStartIndex: -1, isSplitTurn: false };
 	}
 
-	// Walk backwards from newest, accumulating estimated message sizes
-	let accumulatedTokens = 0;
-	let cutIndex = cutPoints[0]; // Default: keep from first message (not header)
-
-	for (let i = endIndex - 1; i >= startIndex; i--) {
-		const entry = entries[i];
-		if (entry.type !== "message") continue;
-
-		// Estimate this message's size
-		const messageTokens = estimateTokens(entry.message);
-		accumulatedTokens += messageTokens;
-
-		// Check if we've exceeded the budget
-		if (accumulatedTokens >= keepRecentTokens) {
-			// Find the closest valid cut point at or after this entry
-			for (let c = 0; c < cutPoints.length; c++) {
-				if (cutPoints[c] >= i) {
-					cutIndex = cutPoints[c];
-					break;
-				}
-			}
-			break;
-		}
-	}
-
-	// Scan backwards from cutIndex to include any non-message entries (bash, settings, etc.)
-	while (cutIndex > startIndex) {
-		const prevEntry = entries[cutIndex - 1];
-		// Stop at session header or compaction boundaries
-		if (prevEntry.type === "compaction") {
-			break;
-		}
-		if (prevEntry.type === "message") {
-			// Stop if we hit any message
-			break;
-		}
-		// Include this non-message entry (bash, settings change, etc.)
-		cutIndex--;
-	}
+	const cutIndex = backtrackOverNonMessageEntries(
+		entries,
+		startIndex,
+		accumulateTokensFromEnd(entries, startIndex, endIndex, keepRecentTokens, cutPoints),
+	);
 
 	// Determine if this is a split turn
 	const cutEntry = entries[cutIndex];
@@ -641,30 +648,49 @@ export interface CompactionPreparation {
 	settings: CompactionSettings;
 }
 
+function findLastCompactionIndex(pathEntries: SessionEntry[]): number {
+	for (let i = pathEntries.length - 1; i >= 0; i--) {
+		if (pathEntries[i].type === "compaction") {
+			return i;
+		}
+	}
+	return -1;
+}
+
+function resolveBoundaryFromPrevCompaction(
+	pathEntries: SessionEntry[],
+	prevCompactionIndex: number,
+): { previousSummary: string | undefined; boundaryStart: number } {
+	if (prevCompactionIndex < 0) {
+		return { previousSummary: undefined, boundaryStart: 0 };
+	}
+	const prevCompaction = pathEntries[prevCompactionIndex] as CompactionEntry;
+	const firstKeptEntryIndex = pathEntries.findIndex((entry) => entry.id === prevCompaction.firstKeptEntryId);
+	return {
+		previousSummary: prevCompaction.summary,
+		boundaryStart: firstKeptEntryIndex >= 0 ? firstKeptEntryIndex : prevCompactionIndex + 1,
+	};
+}
+
+function collectMessagesForCompaction(entries: SessionEntry[], startIndex: number, endIndex: number): AgentMessage[] {
+	const messages: AgentMessage[] = [];
+	for (let i = startIndex; i < endIndex; i++) {
+		const msg = getMessageFromEntryForCompaction(entries[i]);
+		if (msg) messages.push(msg);
+	}
+	return messages;
+}
+
 export function prepareCompaction(
 	pathEntries: SessionEntry[],
 	settings: CompactionSettings,
 ): CompactionPreparation | undefined {
-	if (pathEntries.length > 0 && pathEntries[pathEntries.length - 1].type === "compaction") {
+	if (pathEntries.length > 0 && pathEntries.at(-1)?.type === "compaction") {
 		return undefined;
 	}
 
-	let prevCompactionIndex = -1;
-	for (let i = pathEntries.length - 1; i >= 0; i--) {
-		if (pathEntries[i].type === "compaction") {
-			prevCompactionIndex = i;
-			break;
-		}
-	}
-
-	let previousSummary: string | undefined;
-	let boundaryStart = 0;
-	if (prevCompactionIndex >= 0) {
-		const prevCompaction = pathEntries[prevCompactionIndex] as CompactionEntry;
-		previousSummary = prevCompaction.summary;
-		const firstKeptEntryIndex = pathEntries.findIndex((entry) => entry.id === prevCompaction.firstKeptEntryId);
-		boundaryStart = firstKeptEntryIndex >= 0 ? firstKeptEntryIndex : prevCompactionIndex + 1;
-	}
+	const prevCompactionIndex = findLastCompactionIndex(pathEntries);
+	const { previousSummary, boundaryStart } = resolveBoundaryFromPrevCompaction(pathEntries, prevCompactionIndex);
 	const boundaryEnd = pathEntries.length;
 
 	const tokensBefore = estimateContextTokens(buildSessionContext(pathEntries).messages).tokens;
@@ -678,22 +704,19 @@ export function prepareCompaction(
 	}
 	const firstKeptEntryId = firstKeptEntry.id;
 
-	const historyEnd = cutPoint.isSplitTurn ? cutPoint.turnStartIndex : cutPoint.firstKeptEntryIndex;
-
 	// Messages to summarize (will be discarded after summary)
-	const messagesToSummarize: AgentMessage[] = [];
-	for (let i = boundaryStart; i < historyEnd; i++) {
-		const msg = getMessageFromEntryForCompaction(pathEntries[i]);
-		if (msg) messagesToSummarize.push(msg);
-	}
+	const messagesToSummarize = collectMessagesForCompaction(
+		pathEntries,
+		boundaryStart,
+		cutPoint.isSplitTurn ? cutPoint.turnStartIndex : cutPoint.firstKeptEntryIndex,
+	);
 
 	// Messages for turn prefix summary (if splitting a turn)
 	const turnPrefixMessages: AgentMessage[] = [];
 	if (cutPoint.isSplitTurn) {
-		for (let i = cutPoint.turnStartIndex; i < cutPoint.firstKeptEntryIndex; i++) {
-			const msg = getMessageFromEntryForCompaction(pathEntries[i]);
-			if (msg) turnPrefixMessages.push(msg);
-		}
+		turnPrefixMessages.push(
+			...collectMessagesForCompaction(pathEntries, cutPoint.turnStartIndex, cutPoint.firstKeptEntryIndex),
+		);
 	}
 
 	// Extract file operations from messages and previous compaction

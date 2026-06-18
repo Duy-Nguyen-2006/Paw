@@ -1,11 +1,13 @@
-import fs from "fs";
+import fs from "node:fs";
 import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
 
 // --- Color utilities ---
 
 function hexToRgb(hex: string): [number, number, number] {
 	const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
-	return result ? [parseInt(result[1], 16), parseInt(result[2], 16), parseInt(result[3], 16)] : [0, 0, 0];
+	return result
+		? [Number.parseInt(result[1], 16), Number.parseInt(result[2], 16), Number.parseInt(result[3], 16)]
+		: [0, 0, 0];
 }
 
 function rgbToHex(r: number, g: number, b: number): string {
@@ -178,7 +180,9 @@ function cmdTheme(themeName: string): void {
 
 	const parseAnsiRgb = (ansi: string): [number, number, number] | null => {
 		const match = ansi.match(/38;2;(\d+);(\d+);(\d+)/);
-		return match ? [parseInt(match[1], 10), parseInt(match[2], 10), parseInt(match[3], 10)] : null;
+		return match
+			? [Number.parseInt(match[1], 10), Number.parseInt(match[2], 10), Number.parseInt(match[3], 10)]
+			: null;
 	};
 
 	const getContrastVsWhite = (colorName: string): string => {
@@ -233,7 +237,7 @@ function cmdTheme(themeName: string): void {
 const [cmd, arg] = process.argv.slice(2);
 
 if (cmd === "contrast") {
-	cmdContrast(parseFloat(arg) || 4.5);
+	cmdContrast(Number.parseFloat(arg) || 4.5);
 } else if (cmd === "test") {
 	cmdTest(arg);
 } else if (cmd === "light" || cmd === "dark") {

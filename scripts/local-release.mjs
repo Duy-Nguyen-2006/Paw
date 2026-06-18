@@ -32,33 +32,24 @@ function parseArgs() {
 	const options = { force: false, outDir: undefined, skipBunInstall: false, skipCheck: false, skipInstall: false };
 	const args = process.argv.slice(2);
 
+	const BOOLEAN_FLAGS = new Map([
+		["--force", "force"], ["--skip-check", "skipCheck"],
+		["--skip-install", "skipInstall"], ["--skip-bun-install", "skipBunInstall"],
+	]);
+
 	for (let i = 0; i < args.length; i++) {
 		const arg = args[i];
 		if (arg === "--help") {
 			printUsage();
 			process.exit(0);
 		}
-		if (arg === "--force") {
-			options.force = true;
-			continue;
-		}
-		if (arg === "--skip-check") {
-			options.skipCheck = true;
-			continue;
-		}
-		if (arg === "--skip-install") {
-			options.skipInstall = true;
-			continue;
-		}
-		if (arg === "--skip-bun-install") {
-			options.skipBunInstall = true;
+		if (BOOLEAN_FLAGS.has(arg)) {
+			options[BOOLEAN_FLAGS.get(arg)] = true;
 			continue;
 		}
 		if (arg === "--out") {
 			const value = args[++i];
-			if (!value) {
-				throw new Error("--out requires a directory");
-			}
+			if (!value) throw new Error("--out requires a directory");
 			options.outDir = value;
 			continue;
 		}

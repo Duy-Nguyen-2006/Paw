@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { createInterface } from "node:readline";
-import { existsSync, readFileSync, writeFileSync } from "fs";
 import { getOAuthProvider, getOAuthProviders } from "./utils/oauth/index.ts";
 import type { OAuthCredentials, OAuthProviderId } from "./utils/oauth/types.ts";
 
@@ -56,7 +56,7 @@ async function login(providerId: OAuthProviderId): Promise<void> {
 					console.log(`  ${i + 1}. ${p.options[i].label}`);
 				}
 				const choice = await promptFn(`Enter number (1-${p.options.length}):`);
-				const index = parseInt(choice, 10) - 1;
+				const index = Number.parseInt(choice, 10) - 1;
 				return p.options[index]?.id;
 			},
 			onProgress: (msg) => console.log(msg),
@@ -117,7 +117,7 @@ Examples:
 			const choice = await prompt(rl, `Enter number (1-${PROVIDERS.length}): `);
 			rl.close();
 
-			const index = parseInt(choice, 10) - 1;
+			const index = Number.parseInt(choice, 10) - 1;
 			if (index < 0 || index >= PROVIDERS.length) {
 				console.error("Invalid selection");
 				process.exit(1);

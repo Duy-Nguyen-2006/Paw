@@ -33,10 +33,10 @@ function byteLength(text: string): number {
  * to be preserved.
  */
 export class OutputAccumulator {
-	private readonly maxLines: number;
-	private readonly maxBytes: number;
-	private readonly maxRollingBytes: number;
-	private readonly tempFilePrefix: string;
+	private maxLines: number;
+	private maxBytes: number;
+	private maxRollingBytes: number;
+	private tempFilePrefix: string;
 	private readonly decoder = new TextDecoder();
 
 	private rawChunks: Buffer[] = [];

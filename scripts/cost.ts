@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
-import * as fs from "fs";
-import * as path from "path";
+import * as fs from "node:fs";
+import * as path from "node:path";
 
 // Parse args
 const args = process.argv.slice(2);
@@ -12,7 +12,7 @@ for (let i = 0; i < args.length; i++) {
 	if (args[i] === "--dir" || args[i] === "-d") {
 		directory = args[++i];
 	} else if (args[i] === "--days" || args[i] === "-n") {
-		days = parseInt(args[++i], 10);
+		days = Number.parseInt(args[++i], 10);
 	} else if (args[i] === "--help" || args[i] === "-h") {
 		console.log(`Usage: cost.ts -d <path> -n <days>
   -d, --dir <path>   Directory path (required)
@@ -32,7 +32,7 @@ if (!directory || !days) {
 function encodeSessionDir(dir: string): string {
 	// Remove leading slash, replace remaining slashes with dashes
 	const normalized = dir.startsWith("/") ? dir.slice(1) : dir;
-	return "--" + normalized.replace(/\//g, "-") + "--";
+	return `--${normalized.replace(/\//g, "-")}--`;
 }
 
 const sessionsBase = path.join(process.env.HOME!, ".pi/agent/sessions");
@@ -40,7 +40,7 @@ const encodedDir = encodeSessionDir(directory);
 const sessionsDir = path.join(sessionsBase, encodedDir);
 
 if (!fs.existsSync(sessionsDir)) {
-	console.error(`Sessions directory not found: ${sessionsDir}`);
+	console.error(`Sessions directory not found: $sessionsDir`);
 	process.exit(1);
 }
 
@@ -74,7 +74,7 @@ for (const file of files) {
 	// Format: 2025-12-17T08-25-07-381Z (dashes instead of colons)
 	const timestamp = file.split("_")[0];
 	// Convert back to valid ISO: replace T08-25-07-381Z with T08:25:07.381Z
-	const isoTimestamp = timestamp.replace(/T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z/, "T$1:$2:$3.$4Z");
+	const isoTimestamp = timestamp.replace(/T(d{2})-(d{2})-(d{2})-(d{3})Z/, "T$1:$2:$3.$4Z");
 	const fileDate = new Date(isoTimestamp);
 
 	if (fileDate < cutoff) continue;
@@ -123,26 +123,26 @@ for (const file of files) {
 }
 
 // Sort days and output
-const sortedDays = Object.keys(stats).sort();
+const sortedDays = Object.keys(stats).sort((a, b) => a.localeCompare(b));
 
 if (sortedDays.length === 0) {
-	console.log(`No sessions found in the last ${days} days for: ${directory}`);
+	console.log(`No sessions found in the last $daysdays for: $directory`);
 	process.exit(0);
 }
 
-console.log(`\nCost breakdown for: ${directory}`);
-console.log(`Period: last ${days} days (since ${cutoff.toISOString().split("T")[0]})`);
+console.log(`\nCost breakdown for: $directory`);
+console.log(`Period: last $daysdays (since ${cutoff.toISOString().split("T")[0]})`);
 console.log("=".repeat(80));
 
 let grandTotal = 0;
 const providerTotals: { [p: string]: DayCost } = {};
 
 for (const day of sortedDays) {
-	console.log(`\n${day}`);
+	console.log(`\n$day`);
 	console.log("-".repeat(40));
 
 	let dayTotal = 0;
-	const providers = Object.keys(stats[day]).sort();
+	const providers = Object.keys(stats[day]).sort((a, b) => a.localeCompare(b));
 
 	for (const provider of providers) {
 		const s = stats[day][provider];
@@ -159,7 +159,7 @@ for (const day of sortedDays) {
 		providerTotals[provider].requests += s.requests;
 
 		console.log(
-			`  ${provider.padEnd(15)} $${s.total.toFixed(4).padStart(8)}  (${s.requests} reqs, in: $${s.input.toFixed(4)}, out: $${s.output.toFixed(4)}, cache: $${(s.cacheRead + s.cacheWrite).toFixed(4)})`
+			`  $provider.padEnd(15)$$s.total.toFixed(4).padStart(8)($s.requestsreqs, in: $$s.input.toFixed(4), out: $$s.output.toFixed(4), cache: $$(s.cacheRead + s.cacheWrite).toFixed(4))`,
 		);
 	}
 
@@ -167,14 +167,14 @@ for (const day of sortedDays) {
 	grandTotal += dayTotal;
 }
 
-console.log("\n" + "=".repeat(80));
+console.log(`\n${"=".repeat(80)}`);
 console.log("TOTALS BY PROVIDER");
 console.log("-".repeat(40));
 
-for (const provider of Object.keys(providerTotals).sort()) {
+for (const provider of Object.keys(providerTotals).sort((a, b) => a.localeCompare(b))) {
 	const t = providerTotals[provider];
 	console.log(
-		`  ${provider.padEnd(15)} $${t.total.toFixed(4).padStart(8)}  (${t.requests} reqs, in: $${t.input.toFixed(4)}, out: $${t.output.toFixed(4)}, cache: $${(t.cacheRead + t.cacheWrite).toFixed(4)})`
+		`  ${provider.padEnd(15)} $${t.total.toFixed(4).padStart(8)}  (${t.requests} reqs, in: $${t.input.toFixed(4)}, out: $${t.output.toFixed(4)}, cache: $${(t.cacheRead + t.cacheWrite).toFixed(4)})`,
 	);
 }
 

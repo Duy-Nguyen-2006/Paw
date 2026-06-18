@@ -205,46 +205,64 @@ function coerceWithUnionSchema(value: unknown, schemas: JsonSchemaObject[]): unk
 function coerceWithJsonSchema(value: unknown, schema: JsonSchemaObject): unknown {
 	let nextValue = value;
 
+	nextValue = applySchemaComposition(nextValue, schema);
+	nextValue = coerceSchemaPrimitiveTypes(nextValue, schema);
+	applySchemaContainerCoercions(nextValue, schema);
+	return nextValue;
+}
+
+/** Apply `allOf`, `anyOf`, and `oneOf` composition rules in order. */
+function applySchemaComposition(value: unknown, schema: JsonSchemaObject): unknown {
+	let nextValue = value;
 	if (Array.isArray(schema.allOf)) {
 		for (const nested of schema.allOf) {
 			nextValue = coerceWithJsonSchema(nextValue, nested);
 		}
 	}
-
 	if (Array.isArray(schema.anyOf)) {
 		nextValue = coerceWithUnionSchema(nextValue, schema.anyOf);
 	}
-
 	if (Array.isArray(schema.oneOf)) {
 		nextValue = coerceWithUnionSchema(nextValue, schema.oneOf);
 	}
-
-	const schemaTypes = getSchemaTypes(schema);
-	const matchesUnionMember =
-		schemaTypes.length > 1 && schemaTypes.some((schemaType) => matchesJsonType(nextValue, schemaType));
-	if (schemaTypes.length > 0 && !matchesUnionMember) {
-		for (const schemaType of schemaTypes) {
-			const candidate = coercePrimitiveByType(nextValue, schemaType);
-			if (candidate !== nextValue) {
-				nextValue = candidate;
-				break;
-			}
-		}
-	}
-
-	if (schemaTypes.includes("object") && isRecord(nextValue) && !Array.isArray(nextValue)) {
-		applySchemaObjectCoercion(nextValue, schema);
-	}
-
-	if (schemaTypes.includes("array") && Array.isArray(nextValue)) {
-		applySchemaArrayCoercion(nextValue, schema);
-	}
-
 	return nextValue;
 }
 
+/**
+ * Pick the first primitive type that successfully coerces `value` when the
+ * current value does not already match one of the schema's declared types.
+ */
+function coerceSchemaPrimitiveTypes(value: unknown, schema: JsonSchemaObject): unknown {
+	const schemaTypes = getSchemaTypes(schema);
+	if (schemaTypes.length === 0) return value;
+	const matchesUnionMember =
+		schemaTypes.length > 1 && schemaTypes.some((schemaType) => matchesJsonType(value, schemaType));
+	if (matchesUnionMember) return value;
+
+	let nextValue = value;
+	for (const schemaType of schemaTypes) {
+		const candidate = coercePrimitiveByType(nextValue, schemaType);
+		if (candidate !== nextValue) {
+			nextValue = candidate;
+			break;
+		}
+	}
+	return nextValue;
+}
+
+/** Recursively coerce object/array containers when the schema permits them. */
+function applySchemaContainerCoercions(value: unknown, schema: JsonSchemaObject): void {
+	const schemaTypes = getSchemaTypes(schema);
+	if (schemaTypes.includes("object") && isRecord(value) && !Array.isArray(value)) {
+		applySchemaObjectCoercion(value, schema);
+	}
+	if (schemaTypes.includes("array") && Array.isArray(value)) {
+		applySchemaArrayCoercion(value, schema);
+	}
+}
+
 function getValidator(schema: Tool["parameters"]): ReturnType<typeof Compile> {
-	const key = schema as object;
+	const key = schema;
 	const cached = validatorCache.get(key);
 	if (cached) {
 		return cached;
@@ -289,11 +307,7 @@ export function validateToolCall(tools: Tool[], toolCall: ToolCall): any {
  * @returns The validated (and potentially coerced) arguments
  * @throws Error with formatted message if validation fails
  */
-export function validateToolArguments(tool: Tool, toolCall: ToolCall): any {
-	const args = structuredClone(toolCall.arguments);
-	Value.Convert(tool.parameters, args);
-
-	const validator = getValidator(tool.parameters);
+function applyCoercionIfNeeded(args: any, validator: { Check: (a: any) => boolean }, tool: Tool): any {
 	if (!hasTypeBoxMetadata(tool.parameters) && isJsonSchemaObject(tool.parameters)) {
 		const coerced = coerceWithJsonSchema(args, tool.parameters);
 		if (coerced !== args) {
@@ -307,18 +321,30 @@ export function validateToolArguments(tool: Tool, toolCall: ToolCall): any {
 			}
 		}
 	}
+	return args;
+}
 
-	if (validator.Check(args)) {
-		return args;
-	}
-
+function formatValidationErrors(
+	toolCall: ToolCall,
+	validator: { Errors: (a: any) => TLocalizedValidationError[] },
+): string {
 	const errors =
 		validator
-			.Errors(args)
+			.Errors(toolCall.arguments)
 			.map((error) => `  - ${formatValidationPath(error)}: ${error.message}`)
 			.join("\n") || "Unknown validation error";
+	return `Validation failed for tool "${toolCall.name}":\n${errors}\n\nReceived arguments:\n${JSON.stringify(toolCall.arguments, null, 2)}`;
+}
 
-	const errorMessage = `Validation failed for tool "${toolCall.name}":\n${errors}\n\nReceived arguments:\n${JSON.stringify(toolCall.arguments, null, 2)}`;
+export function validateToolArguments(tool: Tool, toolCall: ToolCall): any {
+	const args = structuredClone(toolCall.arguments);
+	Value.Convert(tool.parameters, args);
 
-	throw new Error(errorMessage);
+	const validator = getValidator(tool.parameters);
+	const finalArgs = applyCoercionIfNeeded(args, validator, tool);
+	if (validator.Check(finalArgs)) {
+		return finalArgs;
+	}
+
+	throw new Error(formatValidationErrors(toolCall, validator));
 }

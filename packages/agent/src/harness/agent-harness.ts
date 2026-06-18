@@ -96,6 +96,54 @@ function findDuplicateNames(names: string[]): string[] {
 	return [...duplicates];
 }
 
+function mergeOptionalRecord<T extends string | unknown>(
+	base: Record<string, T> | undefined,
+	patch: Record<string, T | undefined> | undefined,
+): Record<string, T> | undefined {
+	if (patch === undefined) return base;
+	const merged = { ...(base ?? {}) } as Record<string, T>;
+	for (const [key, value] of Object.entries(patch)) {
+		if (value === undefined) delete merged[key];
+		else merged[key] = value as T;
+	}
+	return Object.keys(merged).length > 0 ? merged : undefined;
+}
+
+function extractUserMessageText(
+	content: string | ReadonlyArray<{ readonly type: string; readonly text?: string }>,
+): string {
+	return typeof content === "string"
+		? content
+		: content
+				.filter((c): c is { readonly type: "text"; readonly text: string } => c.type === "text")
+				.map((c) => c.text)
+				.join("");
+}
+
+function resolveTargetEditor(
+	targetEntry: {
+		type: string;
+		id: string;
+		parentId: string | null;
+		message?: { role: string; content?: unknown };
+		content?: unknown;
+	},
+	targetId: string,
+): { newLeafId: string | null; editorText: string | undefined } {
+	if (targetEntry.type === "message" && targetEntry.message?.role === "user") {
+		return {
+			newLeafId: targetEntry.parentId,
+			editorText: extractUserMessageText((targetEntry.message.content ?? "") as never),
+		};
+	}
+	if (targetEntry.type === "custom_message") {
+		return {
+			newLeafId: targetEntry.parentId,
+			editorText: extractUserMessageText((targetEntry.content ?? "") as never),
+		};
+	}
+	return { newLeafId: targetId, editorText: undefined };
+}
 function applyStreamOptionsPatch(
 	base: AgentHarnessStreamOptions,
 	patch?: AgentHarnessStreamOptionsPatch,
@@ -110,29 +158,11 @@ function applyStreamOptionsPatch(
 	if (Object.hasOwn(patch, "cacheRetention")) result.cacheRetention = patch.cacheRetention;
 
 	if (Object.hasOwn(patch, "headers")) {
-		if (patch.headers === undefined) {
-			result.headers = undefined;
-		} else {
-			const headers = { ...(result.headers ?? {}) };
-			for (const [key, value] of Object.entries(patch.headers)) {
-				if (value === undefined) delete headers[key];
-				else headers[key] = value;
-			}
-			result.headers = Object.keys(headers).length > 0 ? headers : undefined;
-		}
+		result.headers = patch.headers === undefined ? undefined : mergeOptionalRecord(result.headers, patch.headers);
 	}
 
 	if (Object.hasOwn(patch, "metadata")) {
-		if (patch.metadata === undefined) {
-			result.metadata = undefined;
-		} else {
-			const metadata = { ...(result.metadata ?? {}) };
-			for (const [key, value] of Object.entries(patch.metadata)) {
-				if (value === undefined) delete metadata[key];
-				else metadata[key] = value;
-			}
-			result.metadata = Object.keys(metadata).length > 0 ? metadata : undefined;
-		}
+		result.metadata = patch.metadata === undefined ? undefined : mergeOptionalRecord(result.metadata, patch.metadata);
 	}
 
 	return result;
@@ -812,30 +842,7 @@ export class AgentHarness<
 					modifiedFiles: branchSummary.value.modifiedFiles,
 				};
 			}
-			let editorText: string | undefined;
-			let newLeafId: string | null;
-			if (targetEntry.type === "message" && targetEntry.message.role === "user") {
-				newLeafId = targetEntry.parentId;
-				const content = targetEntry.message.content;
-				editorText =
-					typeof content === "string"
-						? content
-						: content
-								.filter((c): c is { readonly type: "text"; readonly text: string } => c.type === "text")
-								.map((c) => c.text)
-								.join("");
-			} else if (targetEntry.type === "custom_message") {
-				newLeafId = targetEntry.parentId;
-				editorText =
-					typeof targetEntry.content === "string"
-						? targetEntry.content
-						: targetEntry.content
-								.filter((c): c is { readonly type: "text"; readonly text: string } => c.type === "text")
-								.map((c) => c.text)
-								.join("");
-			} else {
-				newLeafId = targetId;
-			}
+			const { editorText, newLeafId } = resolveTargetEditor(targetEntry, targetId);
 			const summaryId = await this.session.moveTo(
 				newLeafId,
 				summaryText

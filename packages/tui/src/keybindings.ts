@@ -155,7 +155,7 @@ function normalizeKeys(keys: KeyId | KeyId[] | undefined): KeyId[] {
 export class KeybindingsManager {
 	private definitions: KeybindingDefinitions;
 	private userBindings: KeybindingsConfig;
-	private keysById = new Map<Keybinding, KeyId[]>();
+	private readonly keysById = new Map<Keybinding, KeyId[]>();
 	private conflicts: KeybindingConflict[] = [];
 
 	constructor(definitions: KeybindingDefinitions, userBindings: KeybindingsConfig = {}) {
@@ -231,14 +231,11 @@ export class KeybindingsManager {
 }
 
 let globalKeybindings: KeybindingsManager | null = null;
-
 export function setKeybindings(keybindings: KeybindingsManager): void {
 	globalKeybindings = keybindings;
 }
 
 export function getKeybindings(): KeybindingsManager {
-	if (!globalKeybindings) {
-		globalKeybindings = new KeybindingsManager(TUI_KEYBINDINGS);
-	}
+	globalKeybindings ??= new KeybindingsManager(TUI_KEYBINDINGS);
 	return globalKeybindings;
 }

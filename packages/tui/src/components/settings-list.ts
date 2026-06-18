@@ -91,25 +91,36 @@ export class SettingsList implements Component {
 		const lines: string[] = [];
 
 		if (this.searchEnabled && this.searchInput) {
-			lines.push(...this.searchInput.render(width));
-			lines.push("");
+			lines.push(...this.searchInput.render(width), "");
 		}
 
 		if (this.items.length === 0) {
-			lines.push(this.theme.hint("  No settings available"));
-			if (this.searchEnabled) {
-				this.addHintLine(lines, width);
-			}
-			return lines;
+			return this.renderEmptySettingsList(lines, width);
 		}
 
 		const displayItems = this.searchEnabled ? this.filteredItems : this.items;
 		if (displayItems.length === 0) {
-			lines.push(truncateToWidth(this.theme.hint("  No matching settings"), width));
-			this.addHintLine(lines, width);
-			return lines;
+			return this.renderNoMatchingSettingsList(lines, width);
 		}
 
+		return this.renderSettingsItems(lines, width, displayItems);
+	}
+
+	private renderEmptySettingsList(lines: string[], width: number): string[] {
+		lines.push(this.theme.hint("  No settings available"));
+		if (this.searchEnabled) {
+			this.addHintLine(lines, width);
+		}
+		return lines;
+	}
+
+	private renderNoMatchingSettingsList(lines: string[], width: number): string[] {
+		lines.push(truncateToWidth(this.theme.hint("  No matching settings"), width));
+		this.addHintLine(lines, width);
+		return lines;
+	}
+
+	private renderSettingsItems(lines: string[], width: number, displayItems: readonly SettingItem[]): string[] {
 		// Calculate visible range with scrolling
 		const startIndex = Math.max(
 			0,
@@ -187,7 +198,7 @@ export class SettingsList implements Component {
 		} else if (kb.matches(data, "tui.select.cancel")) {
 			this.onCancel();
 		} else if (this.searchEnabled && this.searchInput) {
-			const sanitized = data.replace(/ /g, "");
+			const sanitized = data.replace(" ", "");
 			if (!sanitized) {
 				return;
 			}

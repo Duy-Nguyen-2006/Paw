@@ -107,156 +107,134 @@ function printPawCommandError(message: string): void {
 	process.exitCode = 1;
 }
 
+async function handlePawInit(rest: string[]): Promise<void> {
+	if (rest.length === 1 && (rest[0] === "--help" || rest[0] === "-h")) {
+		printPawHelp();
+		return;
+	}
+	if (rest.length > 0) {
+		printPawCommandError(`Unknown option for "paw init": ${rest[0]}`);
+		return;
+	}
+
+	try {
+		const cwd = process.cwd();
+		const config = loadDefaultPawRuntimeConfig(cwd);
+		const result = await initializePawProject(cwd, config);
+		const pawDir = relative(cwd, result.paths.pawDir) || ".paw";
+		printPawInitSummary(pawDir, result.created.length, result.existing.length);
+	} catch (error: unknown) {
+		const message = error instanceof Error ? error.message : String(error);
+		printPawCommandError(message);
+	}
+}
+
+async function handlePawDoctor(rest: string[]): Promise<void> {
+	try {
+		await runPawDoctorCommand(rest, () => loadDefaultPawRuntimeConfig(process.cwd()));
+	} catch (error: unknown) {
+		const message = error instanceof Error ? error.message : String(error);
+		printPawCommandError(message);
+	}
+}
+
+async function handlePawStatus(rest: string[]): Promise<void> {
+	try {
+		await runPawStatusCommand(rest);
+	} catch (error: unknown) {
+		const message = error instanceof Error ? error.message : String(error);
+		printPawCommandError(message);
+	}
+}
+
+async function handlePawClean(rest: string[]): Promise<void> {
+	try {
+		await runPawCleanCommand(rest);
+	} catch (error: unknown) {
+		const message = error instanceof Error ? error.message : String(error);
+		printPawCommandError(message);
+	}
+}
+
+type PawSubcommandHandler = (rest: string[]) => Promise<void>;
+
+const PAW_SUBCOMMAND_HANDLERS: Record<string, PawSubcommandHandler> = {
+	init: handlePawInit,
+	doctor: handlePawDoctor,
+	status: handlePawStatus,
+	report: async (rest) => {
+		await runPawReportCommand(rest);
+	},
+	start: async (rest) => {
+		await runPawStartCommand(rest);
+	},
+	resume: async (rest) => {
+		await runPawResumeCommand(rest);
+	},
+	verify: async (rest) => {
+		await runPawVerifyCommand(rest);
+	},
+	build: async (rest) => {
+		await runPawBuildCommand(rest);
+	},
+	"approve-plan": async (rest) => {
+		await runPawApprovePlanCommand(rest);
+	},
+	"select-slice": async (rest) => {
+		await runPawSelectSliceCommand(rest);
+	},
+	"begin-implementation": async (rest) => {
+		await runPawBeginImplementationCommand(rest);
+	},
+	"complete-worker": async (rest) => {
+		await runPawCompleteWorkerCommand(rest);
+	},
+	"block-worker": async (rest) => {
+		await runPawBlockWorkerCommand(rest);
+	},
+	"block-reviewer": async (rest) => {
+		await runPawBlockReviewerCommand(rest);
+	},
+	"complete-reviewer": async (rest) => {
+		await runPawCompleteReviewerCommand(rest);
+	},
+	"block-verifier": async (rest) => {
+		await runPawBlockVerifierCommand(rest);
+	},
+	"complete-verification": async (rest) => {
+		await runPawCompleteVerificationCommand(rest);
+	},
+	"prepare-checkpoint": async (rest) => {
+		await runPawPrepareCheckpointCommand(rest);
+	},
+	rollback: async (rest) => {
+		await runPawRollbackCommand(rest);
+	},
+	finalize: async (rest) => {
+		await runPawFinalizeCommand(rest);
+	},
+	clean: handlePawClean,
+};
+
 export async function handlePawCommand(args: string[]): Promise<boolean> {
 	if (args[0] !== "paw") {
 		return false;
 	}
 
 	const [, subcommand, ...rest] = args;
-	if (subcommand === "init") {
-		if (rest.length === 1 && (rest[0] === "--help" || rest[0] === "-h")) {
-			printPawHelp();
-			return true;
-		}
-		if (rest.length > 0) {
-			printPawCommandError(`Unknown option for "paw init": ${rest[0]}`);
-			return true;
-		}
-
-		try {
-			const cwd = process.cwd();
-			const config = loadDefaultPawRuntimeConfig(cwd);
-			const result = await initializePawProject(cwd, config);
-			const pawDir = relative(cwd, result.paths.pawDir) || ".paw";
-			printPawInitSummary(pawDir, result.created.length, result.existing.length);
-		} catch (error: unknown) {
-			const message = error instanceof Error ? error.message : String(error);
-			printPawCommandError(message);
-		}
-		return true;
-	}
-
-	if (subcommand === "doctor") {
-		try {
-			await runPawDoctorCommand(rest, () => loadDefaultPawRuntimeConfig(process.cwd()));
-		} catch (error: unknown) {
-			const message = error instanceof Error ? error.message : String(error);
-			printPawCommandError(message);
-		}
-		return true;
-	}
-
-	if (subcommand === "status") {
-		try {
-			await runPawStatusCommand(rest);
-		} catch (error: unknown) {
-			const message = error instanceof Error ? error.message : String(error);
-			printPawCommandError(message);
-		}
-		return true;
-	}
-
-	if (subcommand === "report") {
-		await runPawReportCommand(rest);
-		return true;
-	}
-
-	if (subcommand === "start") {
-		await runPawStartCommand(rest);
-		return true;
-	}
-
-	if (subcommand === "resume") {
-		await runPawResumeCommand(rest);
-		return true;
-	}
-
-	if (subcommand === "verify") {
-		await runPawVerifyCommand(rest);
-		return true;
-	}
-
-	if (subcommand === "build") {
-		await runPawBuildCommand(rest);
-		return true;
-	}
-
-	if (subcommand === "approve-plan") {
-		await runPawApprovePlanCommand(rest);
-		return true;
-	}
-
-	if (subcommand === "select-slice") {
-		await runPawSelectSliceCommand(rest);
-		return true;
-	}
-
-	if (subcommand === "begin-implementation") {
-		await runPawBeginImplementationCommand(rest);
-		return true;
-	}
-
-	if (subcommand === "complete-worker") {
-		await runPawCompleteWorkerCommand(rest);
-		return true;
-	}
-
-	if (subcommand === "block-worker") {
-		await runPawBlockWorkerCommand(rest);
-		return true;
-	}
-
-	if (subcommand === "block-reviewer") {
-		await runPawBlockReviewerCommand(rest);
-		return true;
-	}
-
-	if (subcommand === "complete-reviewer") {
-		await runPawCompleteReviewerCommand(rest);
-		return true;
-	}
-
-	if (subcommand === "block-verifier") {
-		await runPawBlockVerifierCommand(rest);
-		return true;
-	}
-
-	if (subcommand === "complete-verification") {
-		await runPawCompleteVerificationCommand(rest);
-		return true;
-	}
-
-	if (subcommand === "prepare-checkpoint") {
-		await runPawPrepareCheckpointCommand(rest);
-		return true;
-	}
-
-	if (subcommand === "rollback") {
-		await runPawRollbackCommand(rest);
-		return true;
-	}
-
-	if (subcommand === "finalize") {
-		await runPawFinalizeCommand(rest);
-		return true;
-	}
-
-	if (subcommand === "clean") {
-		try {
-			await runPawCleanCommand(rest);
-		} catch (error: unknown) {
-			const message = error instanceof Error ? error.message : String(error);
-			printPawCommandError(message);
-		}
-		return true;
-	}
 
 	if (subcommand === "--help" || subcommand === "-h") {
 		printPawHelp();
 		return true;
 	}
 
-	const command = subcommand ?? "(missing)";
-	printPawCommandError(`Unknown Paw command: ${command}`);
+	const handler = PAW_SUBCOMMAND_HANDLERS[subcommand ?? ""];
+	if (!handler) {
+		const command = subcommand ?? "(missing)";
+		printPawCommandError(`Unknown Paw command: ${command}`);
+		return true;
+	}
+
+	await handler(rest);
 	return true;
 }

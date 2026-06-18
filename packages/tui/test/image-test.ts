@@ -1,4 +1,4 @@
-import { readFileSync } from "fs";
+import { readFileSync } from "node:fs";
 import { Image } from "../src/components/image.ts";
 import { Spacer } from "../src/components/spacer.ts";
 import { Text } from "../src/components/text.ts";
@@ -45,7 +45,7 @@ tui.addChild(new Text("Press Ctrl+C to exit", 1, 0));
 
 const editor = {
 	handleInput(data: string) {
-		if (data.charCodeAt(0) === 3) {
+		if (data.codePointAt(0)! === 3) {
 			tui.stop();
 			process.exit(0);
 		}

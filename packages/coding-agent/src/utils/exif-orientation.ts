@@ -65,7 +65,7 @@ function findJpegTiffOffset(bytes: Uint8Array): number {
 function findWebpTiffOffset(bytes: Uint8Array): number {
 	let offset = 12;
 	while (offset + 8 <= bytes.length) {
-		const chunkId = String.fromCharCode(bytes[offset], bytes[offset + 1], bytes[offset + 2], bytes[offset + 3]);
+		const chunkId = String.fromCodePoint(bytes[offset], bytes[offset + 1], bytes[offset + 2], bytes[offset + 3]);
 		const chunkSize =
 			bytes[offset + 4] | (bytes[offset + 5] << 8) | (bytes[offset + 6] << 16) | (bytes[offset + 7] << 24);
 		const dataStart = offset + 8;

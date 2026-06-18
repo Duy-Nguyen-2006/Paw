@@ -1,13 +1,13 @@
-import { spawn } from "child_process";
-import { readdirSync, statSync } from "fs";
-import { homedir } from "os";
-import { basename, dirname, join } from "path";
+import { spawn } from "node:child_process";
+import { readdirSync, statSync } from "node:fs";
+import { homedir } from "node:os";
+import { basename, dirname, join } from "node:path";
 import { fuzzyFilter } from "./fuzzy.ts";
 
 const PATH_DELIMITERS = new Set([" ", "\t", '"', "'", "="]);
 
 function toDisplayPath(value: string): string {
-	return value.replace(/\\/g, "/");
+	return value.replaceAll("\\", "/");
 }
 
 function escapeRegex(value: string): string {
@@ -222,6 +222,82 @@ export interface AutocompleteItem {
 	description?: string;
 }
 
+function resolveAbsolutePath(rawPrefix: string, expandedPrefix: string, basePath: string): string {
+	if (rawPrefix.startsWith("~") || expandedPrefix.startsWith("/")) {
+		return expandedPrefix;
+	}
+	return join(basePath, expandedPrefix);
+}
+
+function checkEntryIsDirectory(entry: import("node:fs").Dirent, searchDir: string): boolean {
+	if (entry.isDirectory()) return true;
+	if (!entry.isSymbolicLink()) return false;
+	try {
+		return statSync(join(searchDir, entry.name)).isDirectory();
+	} catch {
+		return false;
+	}
+}
+
+function buildEntryRelativePath(displayPrefix: string, name: string): string {
+	if (displayPrefix.endsWith("/")) {
+		return displayPrefix + name;
+	}
+
+	if (displayPrefix.includes("/") || displayPrefix.includes("\\")) {
+		return buildNestedEntryPath(displayPrefix, name);
+	}
+
+	if (displayPrefix.startsWith("~")) {
+		return `~/${name}`;
+	}
+	return name;
+}
+
+function buildNestedEntryPath(displayPrefix: string, name: string): string {
+	if (displayPrefix.startsWith("~/")) {
+		const homeRelativeDir = displayPrefix.slice(2);
+		const dir = dirname(homeRelativeDir);
+		return `~/${dir === "." ? name : join(dir, name)}`;
+	}
+
+	if (displayPrefix.startsWith("/")) {
+		const dir = dirname(displayPrefix);
+		return dir === "/" ? `/${name}` : `${dir}/${name}`;
+	}
+
+	let result = join(dirname(displayPrefix), name);
+	if (displayPrefix.startsWith("./") && !result.startsWith("./")) {
+		result = `./${result}`;
+	}
+	return result;
+}
+
+/**
+ * Check whether a raw prefix is one of the well-known "root" forms (empty,
+ * "./", "../", "~", "~/", "/", or empty after an @) that should be completed
+ * from a starting position rather than from a file prefix.
+ */
+function isRootOrTrailingSlashPrefix(rawPrefix: string, isAtPrefix: boolean): boolean {
+	return (
+		rawPrefix === "" ||
+		rawPrefix === "./" ||
+		rawPrefix === "../" ||
+		rawPrefix === "~" ||
+		rawPrefix === "~/" ||
+		rawPrefix === "/" ||
+		(isAtPrefix && rawPrefix === "")
+	);
+}
+
+function compareDirectoryFirst(a: AutocompleteItem, b: AutocompleteItem): number {
+	const aIsDir = a.value.endsWith("/");
+	const bIsDir = b.value.endsWith("/");
+	if (aIsDir && !bIsDir) return -1;
+	if (!aIsDir && bIsDir) return 1;
+	return a.label.localeCompare(b.label);
+}
+
 type Awaitable<T> = T | Promise<T>;
 
 export interface SlashCommand {
@@ -292,73 +368,96 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 
 		const atPrefix = this.extractAtPrefix(textBeforeCursor);
 		if (atPrefix) {
-			const { rawPrefix, isQuotedPrefix } = parsePathPrefix(atPrefix);
-			const suggestions = await this.getFuzzyFileSuggestions(rawPrefix, {
-				isQuotedPrefix,
-				signal: options.signal,
-			});
-			if (suggestions.length === 0) return null;
-
-			return {
-				items: suggestions,
-				prefix: atPrefix,
-			};
+			return this.getAtPrefixSuggestions(atPrefix, options.signal);
 		}
 
 		if (!options.force && textBeforeCursor.startsWith("/")) {
-			const spaceIndex = textBeforeCursor.indexOf(" ");
-
-			if (spaceIndex === -1) {
-				const prefix = textBeforeCursor.slice(1);
-				const commandItems = this.commands.map((cmd) => {
-					const name = "name" in cmd ? cmd.name : cmd.value;
-					const hint = "argumentHint" in cmd && cmd.argumentHint ? cmd.argumentHint : undefined;
-					const desc = cmd.description ?? "";
-					const fullDesc = hint ? (desc ? `${hint} — ${desc}` : hint) : desc;
-					return {
-						name,
-						label: name,
-						description: fullDesc || undefined,
-					};
-				});
-
-				const filtered = fuzzyFilter(commandItems, prefix, (item) => item.name).map((item) => ({
-					value: item.name,
-					label: item.label,
-					...(item.description && { description: item.description }),
-				}));
-
-				if (filtered.length === 0) return null;
-
-				return {
-					items: filtered,
-					prefix: textBeforeCursor,
-				};
-			}
-
-			const commandName = textBeforeCursor.slice(1, spaceIndex);
-			const argumentText = textBeforeCursor.slice(spaceIndex + 1);
-
-			const command = this.commands.find((cmd) => {
-				const name = "name" in cmd ? cmd.name : cmd.value;
-				return name === commandName;
-			});
-			if (!command || !("getArgumentCompletions" in command) || !command.getArgumentCompletions) {
-				return null;
-			}
-
-			const argumentSuggestions = await command.getArgumentCompletions(argumentText);
-			if (!Array.isArray(argumentSuggestions) || argumentSuggestions.length === 0) {
-				return null;
-			}
-
-			return {
-				items: argumentSuggestions,
-				prefix: argumentText,
-			};
+			return this.getSlashCommandSuggestions(textBeforeCursor);
 		}
 
-		const pathMatch = this.extractPathPrefix(textBeforeCursor, options.force ?? false);
+		return this.getPathSuggestions(textBeforeCursor, options.force ?? false);
+	}
+
+	private async getAtPrefixSuggestions(
+		atPrefix: string,
+		signal: AbortSignal,
+	): Promise<AutocompleteSuggestions | null> {
+		const { rawPrefix, isQuotedPrefix } = parsePathPrefix(atPrefix);
+		const suggestions = await this.getFuzzyFileSuggestions(rawPrefix, {
+			isQuotedPrefix,
+			signal,
+		});
+		if (suggestions.length === 0) return null;
+		return {
+			items: suggestions,
+			prefix: atPrefix,
+		};
+	}
+
+	private async getSlashCommandSuggestions(textBeforeCursor: string): Promise<AutocompleteSuggestions | null> {
+		const spaceIndex = textBeforeCursor.indexOf(" ");
+		if (spaceIndex === -1) {
+			return this.getCommandNameSuggestions(textBeforeCursor);
+		}
+		return this.getCommandArgumentSuggestions(textBeforeCursor, spaceIndex);
+	}
+
+	private getCommandNameSuggestions(textBeforeCursor: string): AutocompleteSuggestions | null {
+		const prefix = textBeforeCursor.slice(1);
+		const commandItems = this.commands.map((cmd) => {
+			const name = "name" in cmd ? cmd.name : cmd.value;
+			const hint = "argumentHint" in cmd && cmd.argumentHint ? cmd.argumentHint : undefined;
+			const desc = cmd.description ?? "";
+			const fullDesc = hint ? (desc ? `${hint} — ${desc}` : hint) : desc;
+			return {
+				name,
+				label: name,
+				description: fullDesc || undefined,
+			};
+		});
+
+		const filtered = fuzzyFilter(commandItems, prefix, (item) => item.name).map((item) => ({
+			value: item.name,
+			label: item.label,
+			...(item.description && { description: item.description }),
+		}));
+
+		if (filtered.length === 0) return null;
+
+		return {
+			items: filtered,
+			prefix: textBeforeCursor,
+		};
+	}
+
+	private async getCommandArgumentSuggestions(
+		textBeforeCursor: string,
+		spaceIndex: number,
+	): Promise<AutocompleteSuggestions | null> {
+		const commandName = textBeforeCursor.slice(1, spaceIndex);
+		const argumentText = textBeforeCursor.slice(spaceIndex + 1);
+
+		const command = this.commands.find((cmd) => {
+			const name = "name" in cmd ? cmd.name : cmd.value;
+			return name === commandName;
+		});
+		if (!command || !("getArgumentCompletions" in command) || !command.getArgumentCompletions) {
+			return null;
+		}
+
+		const argumentSuggestions = await command.getArgumentCompletions(argumentText);
+		if (!Array.isArray(argumentSuggestions) || argumentSuggestions.length === 0) {
+			return null;
+		}
+
+		return {
+			items: argumentSuggestions,
+			prefix: argumentText,
+		};
+	}
+
+	private getPathSuggestions(textBeforeCursor: string, force: boolean): AutocompleteSuggestions | null {
+		const pathMatch = this.extractPathPrefix(textBeforeCursor, force);
 		if (pathMatch === null) {
 			return null;
 		}
@@ -559,52 +658,9 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 	// Get file/directory suggestions for a given path prefix
 	private getFileSuggestions(prefix: string): AutocompleteItem[] {
 		try {
-			let searchDir: string;
-			let searchPrefix: string;
 			const { rawPrefix, isAtPrefix, isQuotedPrefix } = parsePathPrefix(prefix);
-			let expandedPrefix = rawPrefix;
-
-			// Handle home directory expansion
-			if (expandedPrefix.startsWith("~")) {
-				expandedPrefix = this.expandHomePath(expandedPrefix);
-			}
-
-			const isRootPrefix =
-				rawPrefix === "" ||
-				rawPrefix === "./" ||
-				rawPrefix === "../" ||
-				rawPrefix === "~" ||
-				rawPrefix === "~/" ||
-				rawPrefix === "/" ||
-				(isAtPrefix && rawPrefix === "");
-
-			if (isRootPrefix) {
-				// Complete from specified position
-				if (rawPrefix.startsWith("~") || expandedPrefix.startsWith("/")) {
-					searchDir = expandedPrefix;
-				} else {
-					searchDir = join(this.basePath, expandedPrefix);
-				}
-				searchPrefix = "";
-			} else if (rawPrefix.endsWith("/")) {
-				// If prefix ends with /, show contents of that directory
-				if (rawPrefix.startsWith("~") || expandedPrefix.startsWith("/")) {
-					searchDir = expandedPrefix;
-				} else {
-					searchDir = join(this.basePath, expandedPrefix);
-				}
-				searchPrefix = "";
-			} else {
-				// Split into directory and file prefix
-				const dir = dirname(expandedPrefix);
-				const file = basename(expandedPrefix);
-				if (rawPrefix.startsWith("~") || expandedPrefix.startsWith("/")) {
-					searchDir = dir;
-				} else {
-					searchDir = join(this.basePath, dir);
-				}
-				searchPrefix = file;
-			}
+			const expandedPrefix = rawPrefix.startsWith("~") ? this.expandHomePath(rawPrefix) : rawPrefix;
+			const { searchDir, searchPrefix } = this.resolveSearchDir(rawPrefix, expandedPrefix, isAtPrefix);
 
 			const entries = readdirSync(searchDir, { withFileTypes: true });
 			const suggestions: AutocompleteItem[] = [];
@@ -614,55 +670,8 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 					continue;
 				}
 
-				// Check if entry is a directory (or a symlink pointing to a directory)
-				let isDirectory = entry.isDirectory();
-				if (!isDirectory && entry.isSymbolicLink()) {
-					try {
-						const fullPath = join(searchDir, entry.name);
-						isDirectory = statSync(fullPath).isDirectory();
-					} catch {
-						// Broken symlink or permission error - treat as file
-					}
-				}
-
-				let relativePath: string;
-				const name = entry.name;
-				const displayPrefix = rawPrefix;
-
-				if (displayPrefix.endsWith("/")) {
-					// If prefix ends with /, append entry to the prefix
-					relativePath = displayPrefix + name;
-				} else if (displayPrefix.includes("/") || displayPrefix.includes("\\")) {
-					// Preserve ~/ format for home directory paths
-					if (displayPrefix.startsWith("~/")) {
-						const homeRelativeDir = displayPrefix.slice(2); // Remove ~/
-						const dir = dirname(homeRelativeDir);
-						relativePath = `~/${dir === "." ? name : join(dir, name)}`;
-					} else if (displayPrefix.startsWith("/")) {
-						// Absolute path - construct properly
-						const dir = dirname(displayPrefix);
-						if (dir === "/") {
-							relativePath = `/${name}`;
-						} else {
-							relativePath = `${dir}/${name}`;
-						}
-					} else {
-						relativePath = join(dirname(displayPrefix), name);
-						// path.join normalizes away ./ prefix, preserve it
-						if (displayPrefix.startsWith("./") && !relativePath.startsWith("./")) {
-							relativePath = `./${relativePath}`;
-						}
-					}
-				} else {
-					// For standalone entries, preserve ~/ if original prefix was ~/
-					if (displayPrefix.startsWith("~")) {
-						relativePath = `~/${name}`;
-					} else {
-						relativePath = name;
-					}
-				}
-
-				relativePath = toDisplayPath(relativePath);
+				const isDirectory = checkEntryIsDirectory(entry, searchDir);
+				const relativePath = toDisplayPath(buildEntryRelativePath(rawPrefix, entry.name));
 				const pathValue = isDirectory ? `${relativePath}/` : relativePath;
 				const value = buildCompletionValue(pathValue, {
 					isDirectory,
@@ -672,24 +681,46 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 
 				suggestions.push({
 					value,
-					label: name + (isDirectory ? "/" : ""),
+					label: entry.name + (isDirectory ? "/" : ""),
 				});
 			}
 
-			// Sort directories first, then alphabetically
-			suggestions.sort((a, b) => {
-				const aIsDir = a.value.endsWith("/");
-				const bIsDir = b.value.endsWith("/");
-				if (aIsDir && !bIsDir) return -1;
-				if (!aIsDir && bIsDir) return 1;
-				return a.label.localeCompare(b.label);
-			});
-
+			suggestions.sort(compareDirectoryFirst);
 			return suggestions;
 		} catch (_e) {
-			// Directory doesn't exist or not accessible
 			return [];
 		}
+	}
+
+	private resolveSearchDir(
+		rawPrefix: string,
+		expandedPrefix: string,
+		isAtPrefix: boolean,
+	): { searchDir: string; searchPrefix: string } {
+		if (isRootOrTrailingSlashPrefix(rawPrefix, isAtPrefix) || rawPrefix.endsWith("/")) {
+			return {
+				searchDir: resolveAbsolutePath(rawPrefix, expandedPrefix, this.basePath),
+				searchPrefix: "",
+			};
+		}
+
+		return this.resolveNonRootSearchDir(rawPrefix, expandedPrefix);
+	}
+
+	/**
+	 * Resolve the search directory and file prefix for a non-root, non-trailing
+	 * slash path. Returns the directory and the file portion to match against.
+	 */
+	private resolveNonRootSearchDir(
+		rawPrefix: string,
+		expandedPrefix: string,
+	): { searchDir: string; searchPrefix: string } {
+		const dir = dirname(expandedPrefix);
+		const file = basename(expandedPrefix);
+		return {
+			searchDir: rawPrefix.startsWith("~") || expandedPrefix.startsWith("/") ? dir : join(this.basePath, dir),
+			searchPrefix: file,
+		};
 	}
 
 	// Score an entry against the query (higher = better match)

@@ -3,7 +3,7 @@ import { InMemorySessionStorage } from "./memory-storage.ts";
 import { createSessionId, createTimestamp, getEntriesToFork, toSession } from "./repo-utils.ts";
 
 export class InMemorySessionRepo implements SessionRepo<SessionMetadata, { id?: string }, void> {
-	private sessions = new Map<string, Session<SessionMetadata>>();
+	private readonly sessions = new Map<string, Session<SessionMetadata>>();
 
 	async create(options: { id?: string } = {}): Promise<Session<SessionMetadata>> {
 		const metadata: SessionMetadata = {

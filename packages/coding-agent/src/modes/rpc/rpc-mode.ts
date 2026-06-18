@@ -251,22 +251,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 		},
 
 		async editor(title: string, prefill?: string): Promise<string | undefined> {
-			const id = crypto.randomUUID();
-			return new Promise((resolve, reject) => {
-				pendingExtensionRequests.set(id, {
-					resolve: (response: RpcExtensionUIResponse) => {
-						if ("cancelled" in response && response.cancelled) {
-							resolve(undefined);
-						} else if ("value" in response) {
-							resolve(response.value);
-						} else {
-							resolve(undefined);
-						}
-					},
-					reject,
-				});
-				output({ type: "extension_ui_request", id, method: "editor", title, prefill } as RpcExtensionUIRequest);
-			});
+			return createEditorRequest(title, prefill, pendingExtensionRequests, output);
 		},
 
 		addAutocompleteProvider(): void {
@@ -378,298 +363,228 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 	await rebindSession();
 	registerSignalHandlers();
 
-	// Handle a single command
-	const handleCommand = async (command: RpcCommand): Promise<RpcResponse | undefined> => {
-		const id = command.id;
-
-		switch (command.type) {
-			// =================================================================
-			// Prompting
-			// =================================================================
-
-			case "prompt": {
-				// Start prompt handling immediately, but emit the authoritative response only after
-				// prompt preflight succeeds. Queued and immediately handled prompts also count as success.
-				let preflightSucceeded = false;
-				void session
-					.prompt(command.message, {
-						images: command.images,
-						streamingBehavior: command.streamingBehavior,
-						source: "rpc",
-						preflightResult: (didSucceed) => {
-							if (didSucceed) {
-								preflightSucceeded = true;
-								output(success(id, "prompt"));
-							}
-						},
-					})
-					.catch((e) => {
-						if (!preflightSucceeded) {
-							output(error(id, "prompt", e.message));
-						}
-					});
-				return undefined;
-			}
-
-			case "steer": {
-				await session.steer(command.message, command.images);
-				return success(id, "steer");
-			}
-
-			case "follow_up": {
-				await session.followUp(command.message, command.images);
-				return success(id, "follow_up");
-			}
-
-			case "abort": {
-				await session.abort();
-				return success(id, "abort");
-			}
-
-			case "new_session": {
-				const options = command.parentSession ? { parentSession: command.parentSession } : undefined;
-				const result = await runtimeHost.newSession(options);
-				if (!result.cancelled) {
-					await rebindSession();
-				}
-				return success(id, "new_session", result);
-			}
-
-			// =================================================================
-			// State
-			// =================================================================
-
-			case "get_state": {
-				const state: RpcSessionState = {
-					model: session.model,
-					thinkingLevel: session.thinkingLevel,
-					isStreaming: session.isStreaming,
-					isCompacting: session.isCompacting,
-					steeringMode: session.steeringMode,
-					followUpMode: session.followUpMode,
-					sessionFile: session.sessionFile,
-					sessionId: session.sessionId,
-					sessionName: session.sessionName,
-					autoCompactionEnabled: session.autoCompactionEnabled,
-					messageCount: session.messages.length,
-					pendingMessageCount: session.pendingMessageCount,
-				};
-				return success(id, "get_state", state);
-			}
-
-			// =================================================================
-			// Model
-			// =================================================================
-
-			case "set_model": {
-				const models = await session.modelRegistry.getAvailable();
-				const model = models.find((m) => m.provider === command.provider && m.id === command.modelId);
-				if (!model) {
-					return error(id, "set_model", `Model not found: ${command.provider}/${command.modelId}`);
-				}
-				await session.setModel(model);
-				return success(id, "set_model", model);
-			}
-
-			case "cycle_model": {
-				const result = await session.cycleModel();
-				if (!result) {
-					return success(id, "cycle_model", null);
-				}
-				return success(id, "cycle_model", result);
-			}
-
-			case "get_available_models": {
-				const models = await session.modelRegistry.getAvailable();
-				return success(id, "get_available_models", { models });
-			}
-
-			// =================================================================
-			// Thinking
-			// =================================================================
-
-			case "set_thinking_level": {
-				session.setThinkingLevel(command.level);
-				return success(id, "set_thinking_level");
-			}
-
-			case "cycle_thinking_level": {
-				const level = session.cycleThinkingLevel();
-				if (!level) {
-					return success(id, "cycle_thinking_level", null);
-				}
-				return success(id, "cycle_thinking_level", { level });
-			}
-
-			// =================================================================
-			// Queue Modes
-			// =================================================================
-
-			case "set_steering_mode": {
-				session.setSteeringMode(command.mode);
-				return success(id, "set_steering_mode");
-			}
-
-			case "set_follow_up_mode": {
-				session.setFollowUpMode(command.mode);
-				return success(id, "set_follow_up_mode");
-			}
-
-			// =================================================================
-			// Compaction
-			// =================================================================
-
-			case "compact": {
-				const result = await session.compact(command.customInstructions);
-				return success(id, "compact", result);
-			}
-
-			case "set_auto_compaction": {
-				session.setAutoCompactionEnabled(command.enabled);
-				return success(id, "set_auto_compaction");
-			}
-
-			// =================================================================
-			// Retry
-			// =================================================================
-
-			case "set_auto_retry": {
-				session.setAutoRetryEnabled(command.enabled);
-				return success(id, "set_auto_retry");
-			}
-
-			case "abort_retry": {
-				session.abortRetry();
-				return success(id, "abort_retry");
-			}
-
-			// =================================================================
-			// Bash
-			// =================================================================
-
-			case "bash": {
-				const result = await session.executeBash(command.command, undefined, {
-					excludeFromContext: command.excludeFromContext,
-				});
-				return success(id, "bash", result);
-			}
-
-			case "abort_bash": {
-				session.abortBash();
-				return success(id, "abort_bash");
-			}
-
-			// =================================================================
-			// Session
-			// =================================================================
-
-			case "get_session_stats": {
-				const stats = session.getSessionStats();
-				return success(id, "get_session_stats", stats);
-			}
-
-			case "export_html": {
-				const path = await session.exportToHtml(command.outputPath);
-				return success(id, "export_html", { path });
-			}
-
-			case "switch_session": {
-				const result = await runtimeHost.switchSession(command.sessionPath);
-				if (!result.cancelled) {
-					await rebindSession();
-				}
-				return success(id, "switch_session", result);
-			}
-
-			case "fork": {
-				const result = await runtimeHost.fork(command.entryId);
-				if (!result.cancelled) {
-					await rebindSession();
-				}
-				return success(id, "fork", { text: result.selectedText, cancelled: result.cancelled });
-			}
-
-			case "clone": {
-				const leafId = session.sessionManager.getLeafId();
-				if (!leafId) {
-					return error(id, "clone", "Cannot clone session: no current entry selected");
-				}
-				const result = await runtimeHost.fork(leafId, { position: "at" });
-				if (!result.cancelled) {
-					await rebindSession();
-				}
-				return success(id, "clone", { cancelled: result.cancelled });
-			}
-
-			case "get_fork_messages": {
-				const messages = session.getUserMessagesForForking();
-				return success(id, "get_fork_messages", { messages });
-			}
-
-			case "get_last_assistant_text": {
-				const text = session.getLastAssistantText();
-				return success(id, "get_last_assistant_text", { text });
-			}
-
-			case "set_session_name": {
-				const name = command.name.trim();
-				if (!name) {
-					return error(id, "set_session_name", "Session name cannot be empty");
-				}
-				session.setSessionName(name);
-				return success(id, "set_session_name");
-			}
-
-			// =================================================================
-			// Messages
-			// =================================================================
-
-			case "get_messages": {
-				return success(id, "get_messages", { messages: session.messages });
-			}
-
-			// =================================================================
-			// Commands (available for invocation via prompt)
-			// =================================================================
-
-			case "get_commands": {
-				const commands: RpcSlashCommand[] = [];
-
-				for (const command of session.extensionRunner.getRegisteredCommands()) {
-					commands.push({
-						name: command.invocationName,
-						description: command.description,
-						source: "extension",
-						sourceInfo: command.sourceInfo,
-					});
-				}
-
-				for (const template of session.promptTemplates) {
-					commands.push({
-						name: template.name,
-						description: template.description,
-						source: "prompt",
-						sourceInfo: template.sourceInfo,
-					});
-				}
-
-				for (const skill of session.resourceLoader.getSkills().skills) {
-					commands.push({
-						name: `skill:${skill.name}`,
-						description: skill.description,
-						source: "skill",
-						sourceInfo: skill.sourceInfo,
-					});
-				}
-
-				return success(id, "get_commands", { commands });
-			}
-
-			default: {
-				const unknownCommand = command as { type: string };
-				return error(undefined, unknownCommand.type, `Unknown command: ${unknownCommand.type}`);
-			}
+	const rebindIfNotCancelled = async (cancelled: boolean): Promise<void> => {
+		if (!cancelled) {
+			await rebindSession();
 		}
+	};
+
+	const collectSlashCommands = (): RpcSlashCommand[] => {
+		const commands: RpcSlashCommand[] = [];
+		for (const registeredCommand of session.extensionRunner.getRegisteredCommands()) {
+			commands.push({
+				name: registeredCommand.invocationName,
+				description: registeredCommand.description,
+				source: "extension",
+				sourceInfo: registeredCommand.sourceInfo,
+			});
+		}
+		for (const template of session.promptTemplates) {
+			commands.push({
+				name: template.name,
+				description: template.description,
+				source: "prompt",
+				sourceInfo: template.sourceInfo,
+			});
+		}
+		for (const skill of session.resourceLoader.getSkills().skills) {
+			commands.push({
+				name: `skill:${skill.name}`,
+				description: skill.description,
+				source: "skill",
+				sourceInfo: skill.sourceInfo,
+			});
+		}
+		return commands;
+	};
+
+	const commandHandlers: Record<string, (command: RpcCommand) => Promise<RpcResponse | undefined>> = {
+		prompt: async (command) => {
+			const id = command.id;
+			if (command.type !== "prompt") return undefined;
+			let preflightSucceeded = false;
+			void session
+				.prompt(command.message, {
+					images: command.images,
+					streamingBehavior: command.streamingBehavior,
+					source: "rpc",
+					preflightResult: (didSucceed) => {
+						if (didSucceed) {
+							preflightSucceeded = true;
+							output(success(id, "prompt"));
+						}
+					},
+				})
+				.catch((e) => {
+					if (!preflightSucceeded) {
+						output(error(id, "prompt", e.message));
+					}
+				});
+			return undefined;
+		},
+		steer: async (command) => {
+			if (command.type !== "steer") return undefined;
+			await session.steer(command.message, command.images);
+			return success(command.id, "steer");
+		},
+		follow_up: async (command) => {
+			if (command.type !== "follow_up") return undefined;
+			await session.followUp(command.message, command.images);
+			return success(command.id, "follow_up");
+		},
+		abort: async (command) => {
+			await session.abort();
+			return success(command.id, "abort");
+		},
+		new_session: async (command) => {
+			if (command.type !== "new_session") return undefined;
+			const options = command.parentSession ? { parentSession: command.parentSession } : undefined;
+			const result = await runtimeHost.newSession(options);
+			await rebindIfNotCancelled(result.cancelled);
+			return success(command.id, "new_session", result);
+		},
+		get_state: async (command) => {
+			const state: RpcSessionState = {
+				model: session.model,
+				thinkingLevel: session.thinkingLevel,
+				isStreaming: session.isStreaming,
+				isCompacting: session.isCompacting,
+				steeringMode: session.steeringMode,
+				followUpMode: session.followUpMode,
+				sessionFile: session.sessionFile,
+				sessionId: session.sessionId,
+				sessionName: session.sessionName,
+				autoCompactionEnabled: session.autoCompactionEnabled,
+				messageCount: session.messages.length,
+				pendingMessageCount: session.pendingMessageCount,
+			};
+			return success(command.id, "get_state", state);
+		},
+		set_model: async (command) => {
+			if (command.type !== "set_model") return undefined;
+			const models = session.modelRegistry.getAvailable();
+			const model = models.find((entry) => entry.provider === command.provider && entry.id === command.modelId);
+			if (!model) {
+				return error(command.id, "set_model", `Model not found: ${command.provider}/${command.modelId}`);
+			}
+			await session.setModel(model);
+			return success(command.id, "set_model", model);
+		},
+		cycle_model: async (command) => {
+			const result = await session.cycleModel();
+			return success(command.id, "cycle_model", result ?? null);
+		},
+		get_available_models: (command) => {
+			const models = session.modelRegistry.getAvailable();
+			return Promise.resolve(success(command.id, "get_available_models", { models }));
+		},
+		set_thinking_level: async (command) => {
+			if (command.type !== "set_thinking_level") return undefined;
+			session.setThinkingLevel(command.level);
+			return success(command.id, "set_thinking_level");
+		},
+		cycle_thinking_level: async (command) => {
+			const level = session.cycleThinkingLevel();
+			return success(command.id, "cycle_thinking_level", level ? { level } : null);
+		},
+		set_steering_mode: async (command) => {
+			if (command.type !== "set_steering_mode") return undefined;
+			session.setSteeringMode(command.mode);
+			return success(command.id, "set_steering_mode");
+		},
+		set_follow_up_mode: async (command) => {
+			if (command.type !== "set_follow_up_mode") return undefined;
+			session.setFollowUpMode(command.mode);
+			return success(command.id, "set_follow_up_mode");
+		},
+		compact: async (command) => {
+			if (command.type !== "compact") return undefined;
+			const result = await session.compact(command.customInstructions);
+			return success(command.id, "compact", result);
+		},
+		set_auto_compaction: async (command) => {
+			if (command.type !== "set_auto_compaction") return undefined;
+			session.setAutoCompactionEnabled(command.enabled);
+			return success(command.id, "set_auto_compaction");
+		},
+		set_auto_retry: async (command) => {
+			if (command.type !== "set_auto_retry") return undefined;
+			session.setAutoRetryEnabled(command.enabled);
+			return success(command.id, "set_auto_retry");
+		},
+		abort_retry: async (command) => {
+			session.abortRetry();
+			return success(command.id, "abort_retry");
+		},
+		bash: async (command) => {
+			if (command.type !== "bash") return undefined;
+			const result = await session.executeBash(command.command, undefined, {
+				excludeFromContext: command.excludeFromContext,
+			});
+			return success(command.id, "bash", result);
+		},
+		abort_bash: async (command) => {
+			session.abortBash();
+			return success(command.id, "abort_bash");
+		},
+		get_session_stats: async (command) => {
+			return success(command.id, "get_session_stats", session.getSessionStats());
+		},
+		export_html: async (command) => {
+			if (command.type !== "export_html") return undefined;
+			const path = await session.exportToHtml(command.outputPath);
+			return success(command.id, "export_html", { path });
+		},
+		switch_session: async (command) => {
+			if (command.type !== "switch_session") return undefined;
+			const result = await runtimeHost.switchSession(command.sessionPath);
+			await rebindIfNotCancelled(result.cancelled);
+			return success(command.id, "switch_session", result);
+		},
+		fork: async (command) => {
+			if (command.type !== "fork") return undefined;
+			const result = await runtimeHost.fork(command.entryId);
+			await rebindIfNotCancelled(result.cancelled);
+			return success(command.id, "fork", { text: result.selectedText, cancelled: result.cancelled });
+		},
+		clone: async (command) => {
+			const leafId = session.sessionManager.getLeafId();
+			if (!leafId) {
+				return error(command.id, "clone", "Cannot clone session: no current entry selected");
+			}
+			const result = await runtimeHost.fork(leafId, { position: "at" });
+			await rebindIfNotCancelled(result.cancelled);
+			return success(command.id, "clone", { cancelled: result.cancelled });
+		},
+		get_fork_messages: async (command) => {
+			return success(command.id, "get_fork_messages", { messages: session.getUserMessagesForForking() });
+		},
+		get_last_assistant_text: async (command) => {
+			return success(command.id, "get_last_assistant_text", { text: session.getLastAssistantText() });
+		},
+		set_session_name: async (command) => {
+			if (command.type !== "set_session_name") return undefined;
+			const name = command.name.trim();
+			if (!name) {
+				return error(command.id, "set_session_name", "Session name cannot be empty");
+			}
+			session.setSessionName(name);
+			return success(command.id, "set_session_name");
+		},
+		get_messages: async (command) => {
+			return success(command.id, "get_messages", { messages: session.messages });
+		},
+		get_commands: async (command) => {
+			return success(command.id, "get_commands", { commands: collectSlashCommands() });
+		},
+	};
+
+	const handleCommand = async (command: RpcCommand): Promise<RpcResponse | undefined> => {
+		const handler = commandHandlers[command.type];
+		if (!handler) {
+			return error(undefined, command.type, `Unknown command: ${command.type}`);
+		}
+		return handler(command);
 	};
 
 	/**
@@ -771,4 +686,28 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 
 	// Keep process alive forever
 	return new Promise(() => {});
+}
+
+function createEditorRequest(
+	title: string,
+	prefill: string | undefined,
+	pendingExtensionRequests: Map<string, { resolve: (value: any) => void; reject: (error: Error) => void }>,
+	output: (req: object | RpcExtensionUIRequest | RpcResponse) => void,
+): Promise<string | undefined> {
+	const id = crypto.randomUUID();
+	return new Promise((resolve, reject) => {
+		pendingExtensionRequests.set(id, {
+			resolve: (response: RpcExtensionUIResponse) => {
+				if ("cancelled" in response && response.cancelled) {
+					resolve(undefined);
+				} else if ("value" in response) {
+					resolve(response.value);
+				} else {
+					resolve(undefined);
+				}
+			},
+			reject,
+		});
+		output({ type: "extension_ui_request", id, method: "editor", title, prefill } as RpcExtensionUIRequest);
+	});
 }

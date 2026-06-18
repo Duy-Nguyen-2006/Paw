@@ -122,86 +122,95 @@ export async function createPawVerifyCommandResult(
 	const runtimeConfig = loadDefaultPawRuntimeConfig(repoRoot);
 	const nativeVerificationPlan = createPawNativeVerificationPlan(runtimeConfig.verify.v1_gates);
 
-	let verifyDecisions: PawVerifyGateDecision[];
-	let nativeVerificationRunResults: PawNativeVerificationRunResult[];
-	if (input.nativeVerificationExecutor !== undefined) {
-		nativeVerificationRunResults = await runPawNativeVerificationPlan(
-			nativeVerificationPlan,
-			input.nativeVerificationExecutor,
-			{
-				timeoutSec: runtimeConfig.resilience.tool_call.timeout_sec,
-				outputMaxChars: runtimeConfig.verify.summary_max_tokens,
-			},
-		);
-		verifyDecisions = mapPawNativeVerificationRunResults(nativeVerificationRunResults, runtimeConfig.verify);
-	} else {
-		nativeVerificationRunResults = [];
-		verifyDecisions = nativeVerificationPlan.map((entry) =>
-			evaluatePawVerifyGate({
-				gate: entry.gate,
-				available: false,
-				config: runtimeConfig.verify,
-				reason: entry.reason,
-			}),
-		);
-	}
-
-	const verification = await completePawVerification({
-		repoRoot,
-		sessionId,
-		verifyDecisions,
-		lockOptions: input.lockOptions,
-	});
-	if (verification.status === "completed" || verification.status === "completed_with_unverified") {
-		await writePawVerificationEvidence(repoRoot, sessionId, nativeVerificationRunResults);
-	}
-	const lockReleased = await releasePawSessionLock(repoRoot, sessionId, input.lockOptions);
-
-	switch (verification.status) {
-		case "completed":
-		case "completed_with_unverified":
-			return {
-				status: verification.status,
-				sessionId,
-				previousStateName: verification.previousState.name,
-				nextStateName: verification.nextState.name,
-				currentSliceId: verification.previousState.current_slice_id ?? "",
+	let lockReleased = false;
+	try {
+		let verifyDecisions: PawVerifyGateDecision[];
+		let nativeVerificationRunResults: PawNativeVerificationRunResult[];
+		if (input.nativeVerificationExecutor !== undefined) {
+			nativeVerificationRunResults = await runPawNativeVerificationPlan(
 				nativeVerificationPlan,
-				nativeVerificationRunResults,
-				verifyDecisions: verification.verifyDecisions,
-				unverifiedDecisions: verification.unverifiedDecisions,
-				lockReleased,
-			};
-		case "invalid_state":
-		case "no_selected_slice":
-			return {
-				status: "invalid_state",
-				sessionId,
-				previousStateName: verification.previousState.name,
-				issues: verification.issues,
-				lockReleased,
-			};
-		case "invalid_verify_decisions":
-		case "invalid_transition":
-			return {
-				status: "invalid_verification",
-				sessionId,
-				issues: verification.issues,
-				lockReleased,
-			};
-		case "not_locked":
-			return {
-				status: "invalid_verification",
-				sessionId,
-				issues: [{ path: "/lock", message: `Acquired lock was not current: ${verification.reason}.` }],
-				lockReleased,
-			};
-		case "locked_by_other":
-			return {
-				status: "locked",
-				sessionId,
-				lock: verification.lock,
-			};
+				input.nativeVerificationExecutor,
+				{
+					timeoutSec: runtimeConfig.resilience.tool_call.timeout_sec,
+					outputMaxChars: runtimeConfig.verify.summary_max_tokens,
+				},
+			);
+			verifyDecisions = mapPawNativeVerificationRunResults(nativeVerificationRunResults, runtimeConfig.verify);
+		} else {
+			nativeVerificationRunResults = [];
+			verifyDecisions = nativeVerificationPlan.map((entry) =>
+				evaluatePawVerifyGate({
+					gate: entry.gate,
+					available: false,
+					config: runtimeConfig.verify,
+					reason: entry.reason,
+				}),
+			);
+		}
+
+		const verification = await completePawVerification({
+			repoRoot,
+			sessionId,
+			verifyDecisions,
+			lockOptions: input.lockOptions,
+		});
+		if (verification.status === "completed" || verification.status === "completed_with_unverified") {
+			await writePawVerificationEvidence(repoRoot, sessionId, nativeVerificationRunResults);
+		}
+		lockReleased = await releasePawSessionLock(repoRoot, sessionId, input.lockOptions);
+
+		switch (verification.status) {
+			case "completed":
+			case "completed_with_unverified":
+				return {
+					status: verification.status,
+					sessionId,
+					previousStateName: verification.previousState.name,
+					nextStateName: verification.nextState.name,
+					currentSliceId: verification.previousState.current_slice_id ?? "",
+					nativeVerificationPlan,
+					nativeVerificationRunResults,
+					verifyDecisions: verification.verifyDecisions,
+					unverifiedDecisions: verification.unverifiedDecisions,
+					lockReleased,
+				};
+			case "invalid_state":
+			case "no_selected_slice":
+				return {
+					status: "invalid_state",
+					sessionId,
+					previousStateName: verification.previousState.name,
+					issues: verification.issues,
+					lockReleased,
+				};
+			case "invalid_verify_decisions":
+			case "invalid_transition":
+				return {
+					status: "invalid_verification",
+					sessionId,
+					issues: verification.issues,
+					lockReleased,
+				};
+			case "not_locked":
+				return {
+					status: "invalid_verification",
+					sessionId,
+					issues: [{ path: "/lock", message: `Acquired lock was not current: ${verification.reason}.` }],
+					lockReleased,
+				};
+			case "locked_by_other":
+				return {
+					status: "locked",
+					sessionId,
+					lock: verification.lock,
+				};
+			default:
+				throw new Error(`Unexpected verification status: ${(verification as { status: string }).status}`);
+		}
+	} finally {
+		if (!lockReleased) {
+			await releasePawSessionLock(repoRoot, sessionId, input.lockOptions);
+		}
 	}
 }
 
@@ -241,7 +250,7 @@ export type PawVerifyParsedArgs =
 
 export function parsePawVerifyArgs(args: string[]): PawVerifyParsedArgs {
 	const native = args.includes("--native");
-	const hasHelp = args.some((arg) => arg === "--help" || arg === "-h");
+	const hasHelp = args.includes("--help") || args.includes("-h");
 
 	if (hasHelp) {
 		return { kind: "help", native };

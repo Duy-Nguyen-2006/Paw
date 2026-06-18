@@ -112,7 +112,7 @@ describe("AgentSession prompt characterization", () => {
 
 		expect(toolRuns.sort()).toEqual(["fast:b", "slow:a"]);
 		expect(harness.session.messages.filter((message) => message.role === "toolResult")).toHaveLength(2);
-		expect(harness.session.messages[harness.session.messages.length - 1]?.role).toBe("assistant");
+		expect(harness.session.messages.at(-1)?.role).toBe("assistant");
 	});
 
 	it("preserves image attachments in the provider context", async () => {

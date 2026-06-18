@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 
-import { createReadStream } from "node:fs";
-import { promises as fs } from "node:fs";
+import { promises as fs }, { createReadStream } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
@@ -25,34 +24,27 @@ function parseArgs(argv) {
 		autoSincePath: DEFAULT_ACTIVE_EDIT_EXTENSION_PATH,
 	};
 
+	const BOOLEAN_FLAGS = new Map([
+		["--help", "help"], ["-h", "help"], ["--json", "json"],
+		["--include-records", "includeRecords"], ["--failed-only", "failedOnly"], ["--all-sessions", "allSessions"],
+	]);
+	const VALUE_FLAGS = new Map([
+		["--model", "modelFilter"], ["--sessions-dir", "sessionsDir"],
+		["--since", "since"], ["--auto-since-path", "autoSincePath"],
+	]);
+
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i];
-		if (arg === "--help" || arg === "-h") {
-			options.help = true;
-		} else if (arg === "--json") {
-			options.json = true;
-		} else if (arg === "--include-records") {
-			options.includeRecords = true;
-		} else if (arg === "--failed-only") {
-			options.failedOnly = true;
-		} else if (arg === "--model") {
-			options.modelFilter = argv[++i];
+		if (BOOLEAN_FLAGS.has(arg)) {
+			options[BOOLEAN_FLAGS.get(arg)] = true;
+		} else if (VALUE_FLAGS.has(arg)) {
+			options[VALUE_FLAGS.get(arg)] = argv[++i];
 		} else if (arg === "--ext") {
 			options.extFilter = argv[++i]?.toLowerCase();
 		} else if (arg === "--top") {
 			const value = Number.parseInt(argv[++i] ?? "", 10);
-			if (!Number.isFinite(value) || value <= 0) {
-				throw new Error("--top must be a positive integer");
-			}
+			if (!Number.isFinite(value) || value <= 0) throw new Error("--top must be a positive integer");
 			options.top = value;
-		} else if (arg === "--sessions-dir") {
-			options.sessionsDir = argv[++i];
-		} else if (arg === "--all-sessions") {
-			options.allSessions = true;
-		} else if (arg === "--since") {
-			options.since = argv[++i];
-		} else if (arg === "--auto-since-path") {
-			options.autoSincePath = argv[++i];
 		} else {
 			throw new Error(`Unknown argument: ${arg}`);
 		}
@@ -588,13 +580,7 @@ function printHumanReport(summary) {
 		console.log(`Skipped older session files: ${formatInt(scan.sessionFilesSkippedOlderThanSince)} of ${formatInt(scan.sessionFilesScanned)}`);
 	}
 	console.log(`Found ${formatInt(counts.totalEditCalls)} edit tool calls in ${formatInt(counts.assistantMessagesWithEditCalls)} assistant messages`);
-	if (filters.model || filters.extension || filters.failedOnly) {
-		const filterParts = [];
-		if (filters.model) filterParts.push(`model contains \"${filters.model}\"`);
-		if (filters.extension) filterParts.push(`extension = ${filters.extension}`);
-		if (filters.failedOnly) filterParts.push("failed only");
-		console.log(`Filters: ${filterParts.join(", ")}`);
-	}
+	printFilterSummary(filters);
 
 	console.log("\nSuccess rate");
 	console.log(`  success:    ${formatInt(counts.success)}  ${formatPercent(counts.success, counts.resolvedEditCalls)}`);
@@ -605,24 +591,9 @@ function printHumanReport(summary) {
 	console.log(`  single replacement: ${formatInt(counts.single)}  ${formatPercent(counts.single, counts.totalEditCalls)}`);
 	console.log(`  multi-edit (edits): ${formatInt(counts.multi)}  ${formatPercent(counts.multi, counts.totalEditCalls)}`);
 
-	console.log("\nFailures by edit type");
-	for (const mode of modeStats) {
-		console.log(
-			`  ${mode.mode.padEnd(6)} calls=${formatInt(mode.calls).padStart(4)} success=${mode.successRate === null ? "n/a" : formatPercent(mode.success, mode.resolved).padStart(6)} failed=${mode.failureRate === null ? "n/a" : formatPercent(mode.failed, mode.resolved).padStart(6)} unresolved=${formatInt(mode.unresolved)}`
-		);
-	}
-
-	console.log("\nMulti-edit bucket split");
-	for (const bucket of multiEditLengthBuckets) {
-		console.log(
-			`  ${bucket.label.padEnd(20)} ${formatInt(bucket.calls).padStart(4)} calls  success=${bucket.successRate === null ? "n/a" : formatPercent(bucket.success, bucket.resolved).padStart(6)} failed=${bucket.failureRate === null ? "n/a" : formatPercent(bucket.failed, bucket.resolved).padStart(6)}`
-		);
-	}
-
-	console.log("\nArgument style");
-	for (const entry of argStyles) {
-		console.log(`  ${entry.style.padEnd(22)} ${formatInt(entry.count).padStart(8)}  ${formatPercent(entry.count, counts.totalEditCalls)}`);
-	}
+	printModeStats(modeStats);
+	printBucketStats(multiEditLengthBuckets);
+	printArgStyles(argStyles, counts.totalEditCalls);
 
 	printGroupTable("By provider/model", providerStats, (group) => {
 		return [
@@ -639,6 +610,49 @@ function printHumanReport(summary) {
 		return `  ${group.key.padEnd(10)} calls=${formatInt(group.calls).padStart(6)}  success=${group.successRate === null ? "n/a" : formatPercent(group.success, group.resolved).padStart(6)}  medianInflation=${formatRatio(group.medianInflation)}`;
 	});
 
+	printInflationStats(inflation, counts);
+	printSameFileClusters(sameFileClusters);
+	printFailureKinds(failureKinds);
+	printFailureBuckets(inflation.failureByBucket);
+	printWorstExamples(worstExamples);
+	printParserNotes(scan);
+}
+
+function printFilterSummary(filters) {
+	if (!filters.model && !filters.extension && !filters.failedOnly) return;
+	const filterParts = [];
+	if (filters.model) filterParts.push(`model contains "${filters.model}"`);
+	if (filters.extension) filterParts.push(`extension = ${filters.extension}`);
+	if (filters.failedOnly) filterParts.push("failed only");
+	console.log(`Filters: ${filterParts.join(", ")}`);
+}
+
+function printModeStats(modeStats) {
+	console.log("\nFailures by edit type");
+	for (const mode of modeStats) {
+		const success = mode.successRate === null ? "n/a" : formatPercent(mode.success, mode.resolved).padStart(6);
+		const failed = mode.failureRate === null ? "n/a" : formatPercent(mode.failed, mode.resolved).padStart(6);
+		console.log(`  ${mode.mode.padEnd(6)} calls=${formatInt(mode.calls).padStart(4)} success=${success} failed=${failed} unresolved=${formatInt(mode.unresolved)}`);
+	}
+}
+
+function printBucketStats(buckets) {
+	console.log("\nMulti-edit bucket split");
+	for (const bucket of buckets) {
+		const success = bucket.successRate === null ? "n/a" : formatPercent(bucket.success, bucket.resolved).padStart(6);
+		const failed = bucket.failureRate === null ? "n/a" : formatPercent(bucket.failed, bucket.resolved).padStart(6);
+		console.log(`  ${bucket.label.padEnd(20)} ${formatInt(bucket.calls).padStart(4)} calls  success=${success} failed=${failed}`);
+	}
+}
+
+function printArgStyles(argStyles, totalEditCalls) {
+	console.log("\nArgument style");
+	for (const entry of argStyles) {
+		console.log(`  ${entry.style.padEnd(22)} ${formatInt(entry.count).padStart(8)}  ${formatPercent(entry.count, totalEditCalls)}`);
+	}
+}
+
+function printInflationStats(inflation, counts) {
 	console.log("\nContext inflation");
 	console.log(`  median inflation: ${formatRatio(inflation.median)}`);
 	console.log(`  p90 inflation:    ${formatRatio(inflation.p90)}`);
@@ -655,49 +669,80 @@ function printHumanReport(summary) {
 	for (const entry of inflation.pathologicalThresholds) {
 		console.log(`  inflation >= ${String(entry.threshold).padEnd(3)}x ${formatInt(entry.count).padStart(8)}`);
 	}
+}
 
+function printSameFileClusters(sameFileClusters) {
 	console.log("\nSame-file multi-call behavior");
 	console.log(`  assistant msgs with 2+ edit calls to same file: ${formatInt(sameFileClusters.assistantMessagesWithCluster)}`);
 	console.log(`  total same-file clusters:                      ${formatInt(sameFileClusters.clustersCount)}`);
 	console.log(`  calls inside those clusters:                  ${formatInt(sameFileClusters.callsInsideClusters)}`);
-	console.log(`  average calls per cluster:                    ${sameFileClusters.averageCallsPerCluster === null ? "n/a" : sameFileClusters.averageCallsPerCluster.toFixed(2)}`);
+	const avgCluster = sameFileClusters.averageCallsPerCluster === null ? "n/a" : sameFileClusters.averageCallsPerCluster.toFixed(2);
+	console.log(`  average calls per cluster:                    ${avgCluster}`);
 	console.log(`  assistant msgs using one multi-edit call:     ${formatInt(sameFileClusters.assistantMessagesWithMultiEdit)}`);
-	console.log(`  ratio multi-call / multi-edit assistant msgs: ${sameFileClusters.ratioClusterAssistantMessagesToMultiEditAssistantMessages === null ? "n/a" : sameFileClusters.ratioClusterAssistantMessagesToMultiEditAssistantMessages.toFixed(2)}`);
+	const ratio = sameFileClusters.ratioClusterAssistantMessagesToMultiEditAssistantMessages === null ? "n/a" : sameFileClusters.ratioClusterAssistantMessagesToMultiEditAssistantMessages.toFixed(2);
+	console.log(`  ratio multi-call / multi-edit assistant msgs: ${ratio}`);
+}
 
+function printFailureKinds(failureKinds) {
 	console.log("\nFailures by kind");
 	if (failureKinds.length === 0) {
 		console.log("  none");
-	} else {
-		for (const failure of failureKinds) {
-			console.log(`  ${failure.kind.padEnd(22)} ${formatInt(failure.count).padStart(8)}`);
-		}
+		return;
 	}
+	for (const failure of failureKinds) {
+		console.log(`  ${failure.kind.padEnd(22)} ${formatInt(failure.count).padStart(8)}`);
+	}
+}
 
+function printFailureBuckets(failureByBucket) {
 	console.log("\nFailure rate by inflation bucket");
-	for (const bucket of inflation.failureByBucket) {
-		console.log(`  ${bucket.label.padEnd(14)} ${bucket.failureRate === null ? "n/a" : formatPercent(bucket.failed, bucket.resolved).padStart(6)}  (${formatInt(bucket.count)} calls)`);
+	for (const bucket of failureByBucket) {
+		const rate = bucket.failureRate === null ? "n/a" : formatPercent(bucket.failed, bucket.resolved).padStart(6);
+		console.log(`  ${bucket.label.padEnd(14)} ${rate}  (${formatInt(bucket.count)} calls)`);
 	}
+}
 
+function printWorstExamples(worstExamples) {
 	console.log(`\nWorst ${formatInt(worstExamples.length)} examples`);
 	for (let i = 0; i < worstExamples.length; i++) {
 		const example = worstExamples[i];
-		console.log(
-			`  ${i + 1}. ${example.providerModel} ${example.extension} inflation=${formatRatio(example.inflationRatio)} failed=${example.failed ? example.errorKind : "false"}`
-		);
+		const failed = example.failed ? example.errorKind : "false";
+		console.log(`  ${i + 1}. ${example.providerModel} ${example.extension} inflation=${formatRatio(example.inflationRatio)} failed=${failed}`);
 		console.log(`     path: ${example.path}`);
 		console.log(`     totalEditBytes=${formatBytes(example.totalEditBytes)} coreBytes=${formatBytes(example.coreBytes)} mode=${example.mode} edits=${example.editsCount}`);
 	}
+}
 
-	if (scan.malformedLines > 0 || scan.unmatchedToolResults > 0) {
-		console.log("\nParser notes");
-		if (scan.malformedLines > 0) console.log(`  malformed lines skipped: ${formatInt(scan.malformedLines)}`);
-		if (scan.unmatchedToolResults > 0) console.log(`  unmatched edit tool results: ${formatInt(scan.unmatchedToolResults)}`);
-	}
+function printParserNotes(scan) {
+	if (scan.malformedLines <= 0 && scan.unmatchedToolResults <= 0) return;
+	console.log("\nParser notes");
+	if (scan.malformedLines > 0) console.log(`  malformed lines skipped: ${formatInt(scan.malformedLines)}`);
+	if (scan.unmatchedToolResults > 0) console.log(`  unmatched edit tool results: ${formatInt(scan.unmatchedToolResults)}`);
 }
 
 async function scanSessions(sessionsDir, since) {
 	const records = [];
-	const meta = {
+	const meta = createScanMeta(sessionsDir, since);
+
+	for await (const sessionFile of walkJsonlFiles(sessionsDir)) {
+		meta.sessionFilesScanned++;
+		const sessionTimestampMs = parseSessionFileTimestamp(sessionFile);
+		if (isSessionTooOld(since, sessionTimestampMs)) {
+			meta.sessionFilesSkippedOlderThanSince++;
+			continue;
+		}
+		meta.sessionFilesIncluded++;
+		const sessionResult = await scanOneSessionForEdits(sessionFile, meta);
+		records.push(...sessionResult.records);
+		if (sessionResult.fileHadEditCall) meta.sessionFilesWithEditCalls++;
+	}
+
+	return { records, meta };
+}
+
+/** Initialize the meta counters that track the scan's progress. */
+function createScanMeta(sessionsDir, since) {
+	return {
 		sessionsDir,
 		sessionFilesScanned: 0,
 		sessionFilesIncluded: 0,
@@ -707,86 +752,118 @@ async function scanSessions(sessionsDir, since) {
 		malformedLines: 0,
 		unmatchedToolResults: 0,
 	};
+}
 
-	for await (const sessionFile of walkJsonlFiles(sessionsDir)) {
-		meta.sessionFilesScanned++;
-		const sessionTimestampMs = parseSessionFileTimestamp(sessionFile);
-		if (since && sessionTimestampMs !== null && sessionTimestampMs < since.ms) {
-			meta.sessionFilesSkippedOlderThanSince++;
-			continue;
+/** Return true when the session file's timestamp precedes the cutoff. */
+function isSessionTooOld(since, sessionTimestampMs) {
+	if (!since || sessionTimestampMs === null) return false;
+	return sessionTimestampMs < since.ms;
+}
+
+async function scanOneSessionForEdits(sessionFile, meta) {
+	const pending = new Map();
+	const unsourced = [];
+	let fileHadEditCall = false;
+	const input = createReadStream(sessionFile, { encoding: "utf8" });
+	const rl = createInterface({ input, crlfDelay: Infinity });
+
+	for await (const line of rl) {
+		if (!line.trim()) continue;
+		const entry = parseSessionLineForEdits(line, meta);
+		if (entry === null) continue;
+		const { hadEdit, record } = applyEditEntry(entry, sessionFile, pending, unsourced, meta);
+		if (hadEdit) fileHadEditCall = true;
+		if (record) {
+			if (record.toolCallId) pending.set(record.toolCallId, record);
+			else unsourced.push(record);
 		}
-		meta.sessionFilesIncluded++;
-		const pending = new Map();
-		let fileHadEditCall = false;
-		const input = createReadStream(sessionFile, { encoding: "utf8" });
-		const rl = createInterface({ input, crlfDelay: Infinity });
-
-		for await (const line of rl) {
-			if (!line.trim()) continue;
-			let entry;
-			try {
-				entry = JSON.parse(line);
-			} catch {
-				meta.malformedLines++;
-				continue;
-			}
-
-			if (entry?.type !== "message" || !entry.message) continue;
-			const message = entry.message;
-
-			if (message.role === "assistant" && Array.isArray(message.content)) {
-				for (const block of message.content) {
-					if (block?.type !== "toolCall" || block.name !== "edit") continue;
-					fileHadEditCall = true;
-					const analysis = analyzeToolArguments(block.arguments);
-					const record = {
-						sessionFile,
-						assistantEntryId: entry.id,
-						toolCallId: typeof block.id === "string" ? block.id : "",
-						timestamp: entry.timestamp,
-						api: typeof message.api === "string" ? message.api : null,
-						provider: typeof message.provider === "string" ? message.provider : "[unknown]",
-						model: typeof message.model === "string" ? message.model : "[unknown]",
-						providerModel: `${typeof message.provider === "string" ? message.provider : "[unknown]"}/${typeof message.model === "string" ? message.model : "[unknown]"}`,
-						success: null,
-						errorKind: null,
-						errorText: "",
-						resultSummary: "",
-						matchedResult: false,
-						...analysis,
-					};
-					records.push(record);
-					if (record.toolCallId) pending.set(record.toolCallId, record);
-				}
-			}
-
-			if (message.role === "toolResult" && message.toolName === "edit") {
-				const toolCallId = typeof message.toolCallId === "string" ? message.toolCallId : "";
-				const record = pending.get(toolCallId);
-				if (!record) {
-					meta.unmatchedToolResults++;
-					continue;
-				}
-				const text = extractTextContent(message.content);
-				record.matchedResult = true;
-				record.success = message.isError === true ? false : true;
-				record.resultSummary = text;
-				record.errorText = message.isError === true ? text : "";
-				record.errorKind = classifyErrorKind(text, message.isError === true, true);
-				pending.delete(toolCallId);
-			}
-		}
-
-		for (const record of pending.values()) {
-			record.matchedResult = false;
-			record.success = null;
-			record.errorKind = classifyErrorKind("", false, false);
-		}
-
-		if (fileHadEditCall) meta.sessionFilesWithEditCalls++;
 	}
+	finalizePendingEditRecords(pending);
+	return { records: [...unsourced, ...pending.values()], fileHadEditCall };
+}
 
-	return { records, meta };
+/** Parse one JSONL line, counting malformed entries in `meta`. */
+function parseSessionLineForEdits(line, meta) {
+	let entry;
+	try {
+		entry = JSON.parse(line);
+	} catch {
+		meta.malformedLines++;
+		return null;
+	}
+	if (entry?.type !== "message" || !entry.message) return null;
+	return entry;
+}
+
+/**
+ * Apply a message entry to the in-progress edit tracking, returning
+ * `{ hadEdit, record }` so the caller can update file-level flags and stash
+ * newly-created records.
+ */
+function applyEditEntry(entry, sessionFile, pending, unsourced, meta) {
+	const message = entry.message;
+	if (message.role === "assistant" && Array.isArray(message.content)) {
+		const record = collectEditToolCall(entry, message, sessionFile);
+		if (record) return { hadEdit: true, record };
+	}
+	if (message.role === "toolResult" && message.toolName === "edit") {
+		resolveEditToolResult(message, pending, meta);
+	}
+	return { hadEdit: false, record: null };
+}
+
+/** Create an edit record for an assistant tool-call block, if it is an edit. */
+function collectEditToolCall(entry, message, sessionFile) {
+	for (const block of message.content) {
+		if (block?.type !== "toolCall" || block.name !== "edit") continue;
+		const analysis = analyzeToolArguments(block.arguments);
+		const provider = typeof message.provider === "string" ? message.provider : "[unknown]";
+		const model = typeof message.model === "string" ? message.model : "[unknown]";
+		return {
+			sessionFile,
+			assistantEntryId: entry.id,
+			toolCallId: typeof block.id === "string" ? block.id : "",
+			timestamp: entry.timestamp,
+			api: typeof message.api === "string" ? message.api : null,
+			provider,
+			model,
+			providerModel: `${provider}/${model}`,
+			success: null,
+			errorKind: null,
+			errorText: "",
+			resultSummary: "",
+			matchedResult: false,
+			...analysis,
+		};
+	}
+	return null;
+}
+
+/** Apply a tool-result message to the matching pending record, or count it as unmatched. */
+function resolveEditToolResult(message, pending, meta) {
+	const toolCallId = typeof message.toolCallId === "string" ? message.toolCallId : "";
+	const record = pending.get(toolCallId);
+	if (!record) {
+		meta.unmatchedToolResults++;
+		return;
+	}
+	const text = extractTextContent(message.content);
+	const isError = message.isError === true;
+	record.matchedResult = true;
+	record.success = isError ? false : true;
+	record.resultSummary = text;
+	record.errorText = isError ? text : "";
+	record.errorKind = classifyErrorKind(text, isError, true);
+	pending.delete(toolCallId);
+}
+
+/** Mark any pending edit records that never received a tool-result. */
+function finalizePendingEditRecords(pending) {
+	for (const record of pending.values()) {
+		record.matchedResult = false;
+		record.success = null;
+		record.errorKind = classifyErrorKind("", false, false);
+	}
 }
 
 function applyFilters(records, options) {

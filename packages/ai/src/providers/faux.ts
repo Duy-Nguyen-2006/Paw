@@ -302,90 +302,133 @@ async function streamWithDeltas(
 	signal: AbortSignal | undefined,
 ): Promise<void> {
 	const partial: AssistantMessage = { ...message, content: [] };
-	if (signal?.aborted) {
-		const aborted = createAbortedMessage(partial);
-		stream.push({ type: "error", reason: "aborted", error: aborted });
-		stream.end(aborted);
-		return;
-	}
+	if (checkAborted(signal, partial, stream)) return;
 
 	stream.push({ type: "start", partial: { ...partial } });
 
 	for (let index = 0; index < message.content.length; index++) {
-		if (signal?.aborted) {
-			const aborted = createAbortedMessage(partial);
-			stream.push({ type: "error", reason: "aborted", error: aborted });
-			stream.end(aborted);
-			return;
-		}
-
-		const block = message.content[index];
-
-		if (block.type === "thinking") {
-			partial.content = [...partial.content, { type: "thinking", thinking: "" }];
-			stream.push({ type: "thinking_start", contentIndex: index, partial: { ...partial } });
-			for (const chunk of splitStringByTokenSize(block.thinking, minTokenSize, maxTokenSize)) {
-				await scheduleChunk(chunk, tokensPerSecond);
-				if (signal?.aborted) {
-					const aborted = createAbortedMessage(partial);
-					stream.push({ type: "error", reason: "aborted", error: aborted });
-					stream.end(aborted);
-					return;
-				}
-				(partial.content[index] as ThinkingContent).thinking += chunk;
-				stream.push({ type: "thinking_delta", contentIndex: index, delta: chunk, partial: { ...partial } });
-			}
-			stream.push({
-				type: "thinking_end",
-				contentIndex: index,
-				content: block.thinking,
-				partial: { ...partial },
-			});
-			continue;
-		}
-
-		if (block.type === "text") {
-			partial.content = [...partial.content, { type: "text", text: "" }];
-			stream.push({ type: "text_start", contentIndex: index, partial: { ...partial } });
-			for (const chunk of splitStringByTokenSize(block.text, minTokenSize, maxTokenSize)) {
-				await scheduleChunk(chunk, tokensPerSecond);
-				if (signal?.aborted) {
-					const aborted = createAbortedMessage(partial);
-					stream.push({ type: "error", reason: "aborted", error: aborted });
-					stream.end(aborted);
-					return;
-				}
-				(partial.content[index] as TextContent).text += chunk;
-				stream.push({ type: "text_delta", contentIndex: index, delta: chunk, partial: { ...partial } });
-			}
-			stream.push({ type: "text_end", contentIndex: index, content: block.text, partial: { ...partial } });
-			continue;
-		}
-
-		partial.content = [...partial.content, { type: "toolCall", id: block.id, name: block.name, arguments: {} }];
-		stream.push({ type: "toolcall_start", contentIndex: index, partial: { ...partial } });
-		for (const chunk of splitStringByTokenSize(JSON.stringify(block.arguments), minTokenSize, maxTokenSize)) {
-			await scheduleChunk(chunk, tokensPerSecond);
-			if (signal?.aborted) {
-				const aborted = createAbortedMessage(partial);
-				stream.push({ type: "error", reason: "aborted", error: aborted });
-				stream.end(aborted);
-				return;
-			}
-			stream.push({ type: "toolcall_delta", contentIndex: index, delta: chunk, partial: { ...partial } });
-		}
-		(partial.content[index] as ToolCall).arguments = block.arguments;
-		stream.push({ type: "toolcall_end", contentIndex: index, toolCall: block, partial: { ...partial } });
+		if (checkAborted(signal, partial, stream)) return;
+		await streamContentBlock(
+			message.content[index],
+			index,
+			partial,
+			stream,
+			minTokenSize,
+			maxTokenSize,
+			tokensPerSecond,
+			signal,
+		);
 	}
 
+	emitFauxStreamTerminalEvent(stream, message);
+}
+
+/** Stream a single content block (thinking, text, or tool call) based on its type. */
+async function streamContentBlock(
+	block: AssistantMessage["content"][number],
+	index: number,
+	partial: AssistantMessage,
+	stream: AssistantMessageEventStream,
+	minTokenSize: number,
+	maxTokenSize: number,
+	tokensPerSecond: number | undefined,
+	signal: AbortSignal | undefined,
+): Promise<void> {
+	if (block.type === "thinking") {
+		await streamThinkingBlock(block, index, partial, stream, minTokenSize, maxTokenSize, tokensPerSecond, signal);
+		return;
+	}
+	if (block.type === "text") {
+		await streamTextBlock(block, index, partial, stream, minTokenSize, maxTokenSize, tokensPerSecond, signal);
+		return;
+	}
+	await streamToolCallBlock(block, index, partial, stream, minTokenSize, maxTokenSize, tokensPerSecond, signal);
+}
+
+/** Emit either an error event (when stopped for error/abort) or a done event. */
+function emitFauxStreamTerminalEvent(stream: AssistantMessageEventStream, message: AssistantMessage): void {
 	if (message.stopReason === "error" || message.stopReason === "aborted") {
 		stream.push({ type: "error", reason: message.stopReason, error: message });
 		stream.end(message);
 		return;
 	}
-
 	stream.push({ type: "done", reason: message.stopReason, message });
 	stream.end(message);
+}
+
+function checkAborted(
+	signal: AbortSignal | undefined,
+	partial: AssistantMessage,
+	stream: AssistantMessageEventStream,
+): boolean {
+	if (!signal?.aborted) return false;
+	const aborted = createAbortedMessage(partial);
+	stream.push({ type: "error", reason: "aborted", error: aborted });
+	stream.end(aborted);
+	return true;
+}
+
+async function streamThinkingBlock(
+	block: ThinkingContent,
+	index: number,
+	partial: AssistantMessage,
+	stream: AssistantMessageEventStream,
+	minTokenSize: number,
+	maxTokenSize: number,
+	tokensPerSecond: number | undefined,
+	signal: AbortSignal | undefined,
+): Promise<void> {
+	partial.content = [...partial.content, { type: "thinking", thinking: "" }];
+	stream.push({ type: "thinking_start", contentIndex: index, partial: { ...partial } });
+	for (const chunk of splitStringByTokenSize(block.thinking, minTokenSize, maxTokenSize)) {
+		await scheduleChunk(chunk, tokensPerSecond);
+		if (checkAborted(signal, partial, stream)) return;
+		(partial.content[index] as ThinkingContent).thinking += chunk;
+		stream.push({ type: "thinking_delta", contentIndex: index, delta: chunk, partial: { ...partial } });
+	}
+	stream.push({ type: "thinking_end", contentIndex: index, content: block.thinking, partial: { ...partial } });
+}
+
+async function streamTextBlock(
+	block: TextContent,
+	index: number,
+	partial: AssistantMessage,
+	stream: AssistantMessageEventStream,
+	minTokenSize: number,
+	maxTokenSize: number,
+	tokensPerSecond: number | undefined,
+	signal: AbortSignal | undefined,
+): Promise<void> {
+	partial.content = [...partial.content, { type: "text", text: "" }];
+	stream.push({ type: "text_start", contentIndex: index, partial: { ...partial } });
+	for (const chunk of splitStringByTokenSize(block.text, minTokenSize, maxTokenSize)) {
+		await scheduleChunk(chunk, tokensPerSecond);
+		if (checkAborted(signal, partial, stream)) return;
+		(partial.content[index] as TextContent).text += chunk;
+		stream.push({ type: "text_delta", contentIndex: index, delta: chunk, partial: { ...partial } });
+	}
+	stream.push({ type: "text_end", contentIndex: index, content: block.text, partial: { ...partial } });
+}
+
+async function streamToolCallBlock(
+	block: ToolCall,
+	index: number,
+	partial: AssistantMessage,
+	stream: AssistantMessageEventStream,
+	minTokenSize: number,
+	maxTokenSize: number,
+	tokensPerSecond: number | undefined,
+	signal: AbortSignal | undefined,
+): Promise<void> {
+	partial.content = [...partial.content, { type: "toolCall", id: block.id, name: block.name, arguments: {} }];
+	stream.push({ type: "toolcall_start", contentIndex: index, partial: { ...partial } });
+	for (const chunk of splitStringByTokenSize(JSON.stringify(block.arguments), minTokenSize, maxTokenSize)) {
+		await scheduleChunk(chunk, tokensPerSecond);
+		if (checkAborted(signal, partial, stream)) return;
+		stream.push({ type: "toolcall_delta", contentIndex: index, delta: chunk, partial: { ...partial } });
+	}
+	(partial.content[index] as ToolCall).arguments = block.arguments;
+	stream.push({ type: "toolcall_end", contentIndex: index, toolCall: block, partial: { ...partial } });
 }
 
 export function registerFauxProvider(options: RegisterFauxProviderOptions = {}): FauxProviderRegistration {

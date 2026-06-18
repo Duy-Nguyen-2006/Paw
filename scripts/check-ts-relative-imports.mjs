@@ -34,7 +34,7 @@ const failures = [];
 
 collectTypescriptFiles(".");
 
-for (const file of files.sort()) {
+for (const file of files.sort((a, b) => a.localeCompare(b))) {
 	const sourceText = readFileSync(file, "utf8");
 	const sourceFile = ts.createSourceFile(file, sourceText, ts.ScriptTarget.Latest, true);
 

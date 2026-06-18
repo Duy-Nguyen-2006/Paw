@@ -132,38 +132,40 @@ export function isPawSecretPath(path: string, config: PawSecretsConfig): boolean
 	return config.read_plane_exclude.some((pattern) => matchesSecretPattern(normalizedPath, pattern));
 }
 
-export function classifyPawRedaction(value: string, config: PawSecretsConfig): PawRedactionDecision {
-	if (!config.redact_at_io_write) {
-		return { decision: "none", patterns: [] };
-	}
-
+function collectConfiguredRedactionPatterns(value: string, config: PawSecretsConfig): PawRedactionPattern[] {
 	const patterns: PawRedactionPattern[] = [];
 
 	if (isConfiguredRedactionPattern("private_keys", config) && /-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(value)) {
 		patterns.push("private_keys");
 	}
-
 	if (
 		isConfiguredRedactionPattern("auth_headers", config) &&
 		/(?:^|\n)\s*(?:authorization|proxy-authorization)\s*:/i.test(value)
 	) {
 		patterns.push("auth_headers");
 	}
-
 	if (isConfiguredRedactionPattern("cookies", config) && /(?:^|\n)\s*(?:cookie|set-cookie)\s*:/i.test(value)) {
 		patterns.push("cookies");
 	}
-
 	if (
 		isConfiguredRedactionPattern("env_values", config) &&
 		/(?:^|\n)\s*[A-Za-z_][A-Za-z0-9_]*\s*=\s*["']?[^\s"'][^\n]*/.test(value)
 	) {
 		patterns.push("env_values");
 	}
-
 	if (isConfiguredRedactionPattern("api_keys", config) && hasApiKeyLikeValue(value)) {
 		patterns.push("api_keys");
 	}
+
+	return patterns;
+}
+
+export function classifyPawRedaction(value: string, config: PawSecretsConfig): PawRedactionDecision {
+	if (!config.redact_at_io_write) {
+		return { decision: "none", patterns: [] };
+	}
+
+	const patterns = collectConfiguredRedactionPatterns(value, config);
 
 	if (isConfiguredRedactionPattern("tokens", config) && hasTokenLikeValue(value)) {
 		patterns.push("tokens");
@@ -291,7 +293,7 @@ function isHighEntropyCandidate(token: string): boolean {
 		return false;
 	}
 
-	return /[A-Z]/.test(token) && /[a-z]/.test(token) && /[0-9]/.test(token);
+	return /[A-Z]/.test(token) && /[a-z]/.test(token) && /\d/.test(token);
 }
 
 function shannonEntropy(value: string): number {

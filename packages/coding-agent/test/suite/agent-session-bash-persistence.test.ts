@@ -31,7 +31,7 @@ describe("AgentSession bash and persistence characterization", () => {
 		});
 
 		expect(harness.session.hasPendingBashMessages).toBe(false);
-		expect(harness.session.messages[harness.session.messages.length - 1]?.role).toBe("bashExecution");
+		expect(harness.session.messages.at(-1)?.role).toBe("bashExecution");
 		expect(getEntryTypes(harness)).toContain("message");
 	});
 
@@ -102,7 +102,7 @@ describe("AgentSession bash and persistence characterization", () => {
 		const result = await harness.session.executeBash("printf 'hello'");
 
 		expect(result.output).toContain("hello");
-		expect(harness.session.messages[harness.session.messages.length - 1]?.role).toBe("bashExecution");
+		expect(harness.session.messages.at(-1)?.role).toBe("bashExecution");
 	});
 
 	it("cancels running bash commands with abortBash", async () => {
@@ -237,6 +237,6 @@ describe("AgentSession bash and persistence characterization", () => {
 		const result = await harness.session.executeBash("custom", undefined, { operations });
 
 		expect(result.output).toContain("hello from custom ops");
-		expect(harness.session.messages[harness.session.messages.length - 1]?.role).toBe("bashExecution");
+		expect(harness.session.messages.at(-1)?.role).toBe("bashExecution");
 	});
 });

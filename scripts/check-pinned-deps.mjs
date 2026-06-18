@@ -41,7 +41,7 @@ const failures = [];
 
 collectPackageJsonFiles(".");
 
-for (const file of packageJsonFiles.sort()) {
+for (const file of packageJsonFiles.sort((a, b) => a.localeCompare(b))) {
 	const packageJson = JSON.parse(readFileSync(file, "utf8"));
 
 	for (const section of dependencySections) {

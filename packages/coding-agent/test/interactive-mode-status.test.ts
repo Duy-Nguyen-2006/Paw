@@ -22,7 +22,7 @@ function renderAll(container: Container, width = 120): string {
 class TestFocusableComponent implements Component, Focusable {
 	focused = false;
 	inputs: string[] = [];
-	private readonly label: string;
+	private label: string;
 	private text = "";
 
 	constructor(label: string) {
@@ -57,7 +57,7 @@ async function flushTui(tui: TUI, terminal: VirtualTerminal): Promise<void> {
 function normalizeRenderedOutput(container: Container, width = 220): string {
 	return renderAll(container, width)
 		.replace(/\u001b\[[0-9;]*m/g, "")
-		.replace(/\\/g, "/")
+		.replaceAll("\\", "/")
 		.split("\n")
 		.map((line) => line.replace(/\s+$/g, ""))
 		.join("\n")
@@ -937,10 +937,10 @@ describe("InteractiveMode.showLoadedResources", () => {
 			force: false,
 		});
 
-		const output = renderAll(fakeThis.chatContainer).replace(/\\/g, "/");
+		const output = renderAll(fakeThis.chatContainer).replaceAll("\\", "/");
 		expect(output).toContain("[Context]");
 		expect(output).toContain("~/.pi/agent/AGENTS.md, AGENTS.md");
-		expect(output).not.toContain(`${cwd.replace(/\\/g, "/")}/AGENTS.md`);
+		expect(output).not.toContain(`${cwd.replaceAll("\\", "/")}/AGENTS.md`);
 	});
 
 	test("shows full context paths when expanded", () => {
@@ -957,7 +957,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 			force: false,
 		});
 
-		const output = renderAll(fakeThis.chatContainer).replace(/\\/g, "/");
+		const output = renderAll(fakeThis.chatContainer).replaceAll("\\", "/");
 		expect(output).toContain("[Context]");
 		expect(output).toContain("~/.pi/agent/AGENTS.md");
 		expect(output).toContain("~/Development/pi-mono/AGENTS.md");

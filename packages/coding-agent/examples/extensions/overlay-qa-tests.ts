@@ -19,10 +19,10 @@
  *   /overlay-streaming  - Multiple input panels with simulated streaming (Tab to cycle focus)
  */
 
+import { spawn } from "node:child_process";
 import type { ExtensionAPI, ExtensionCommandContext, Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, OverlayAnchor, OverlayHandle, OverlayOptions, TUI } from "@earendil-works/pi-tui";
 import { Input, matchesKey, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { spawn } from "child_process";
 
 // Global handle for toggle demo (in real code, use a more elegant pattern)
 let globalToggleHandle: OverlayHandle | null = null;
@@ -334,8 +334,8 @@ abstract class BaseOverlay {
 
 // Anchor position test
 class AnchorTestComponent extends BaseOverlay {
-	private anchor: OverlayAnchor;
-	private done: (result: "next" | "confirm" | "cancel") => void;
+	private readonly anchor: OverlayAnchor;
+	private readonly done: (result: "next" | "confirm" | "cancel") => void;
 
 	constructor(theme: Theme, anchor: OverlayAnchor, done: (result: "next" | "confirm" | "cancel") => void) {
 		super(theme);
@@ -373,8 +373,8 @@ class AnchorTestComponent extends BaseOverlay {
 
 // Margin/offset test
 class MarginTestComponent extends BaseOverlay {
-	private config: { name: string; options: OverlayOptions };
-	private done: (result: "next" | "close") => void;
+	private readonly config: { name: string; options: OverlayOptions };
+	private readonly done: (result: "next" | "close") => void;
 
 	constructor(
 		theme: Theme,
@@ -413,9 +413,9 @@ class MarginTestComponent extends BaseOverlay {
 
 // Stacked overlay test
 class StackOverlayComponent extends BaseOverlay {
-	private num: number;
-	private position: string;
-	private done: (result: string) => void;
+	private readonly num: number;
+	private readonly position: string;
+	private readonly done: (result: string) => void;
 
 	constructor(theme: Theme, num: number, position: string, done: (result: string) => void) {
 		super(theme);
@@ -458,14 +458,14 @@ class StackOverlayComponent extends BaseOverlay {
 
 // Streaming overflow test - spawns real process with colored output (original crash scenario)
 class StreamingOverflowComponent extends BaseOverlay {
-	private tui: TUI;
-	private lines: string[] = [];
+	private readonly tui: TUI;
+	private readonly lines: string[] = [];
 	private proc: ReturnType<typeof spawn> | null = null;
 	private scrollOffset = 0;
-	private maxVisibleLines = 15;
+	private readonly maxVisibleLines = 15;
 	private finished = false;
 	private disposed = false;
-	private done: () => void;
+	private readonly done: () => void;
 
 	constructor(tui: TUI, theme: Theme, done: () => void) {
 		super(theme);
@@ -591,7 +591,7 @@ class StreamingOverflowComponent extends BaseOverlay {
 
 // Edge position test
 class EdgeTestComponent extends BaseOverlay {
-	private done: () => void;
+	private readonly done: () => void;
 
 	constructor(theme: Theme, done: () => void) {
 		super(theme);
@@ -626,8 +626,8 @@ class EdgeTestComponent extends BaseOverlay {
 
 // Percentage positioning test
 class PercentTestComponent extends BaseOverlay {
-	private config: { name: string; row: number; col: number };
-	private done: (result: "next" | "close") => void;
+	private readonly config: { name: string; row: number; col: number };
+	private readonly done: (result: "next" | "close") => void;
 
 	constructor(
 		theme: Theme,
@@ -666,7 +666,7 @@ class PercentTestComponent extends BaseOverlay {
 
 // MaxHeight test - renders 20 lines, truncated to 10 by maxHeight
 class MaxHeightTestComponent extends BaseOverlay {
-	private done: () => void;
+	private readonly done: () => void;
 
 	constructor(theme: Theme, done: () => void) {
 		super(theme);
@@ -701,10 +701,10 @@ class MaxHeightTestComponent extends BaseOverlay {
 
 // Responsive sidepanel - demonstrates percentage width and visibility callback
 class SidepanelComponent extends BaseOverlay {
-	private tui: TUI;
-	private items = ["Dashboard", "Messages", "Settings", "Help", "About"];
+	private readonly tui: TUI;
+	private readonly items = ["Dashboard", "Messages", "Settings", "Help", "About"];
 	private selectedIndex = 0;
-	private done: () => void;
+	private readonly done: () => void;
 
 	constructor(tui: TUI, theme: Theme, done: () => void) {
 		super(theme);
@@ -762,13 +762,13 @@ class SidepanelComponent extends BaseOverlay {
 
 // Animation demo - proves overlays can handle real-time updates like pi-doom
 class AnimationDemoComponent extends BaseOverlay {
-	private tui: TUI;
+	private readonly tui: TUI;
 	private frame = 0;
 	private interval: ReturnType<typeof setInterval> | null = null;
 	private fps = 0;
 	private lastFpsUpdate = Date.now();
 	private framesSinceLastFps = 0;
-	private done: () => void;
+	private readonly done: () => void;
 
 	constructor(tui: TUI, theme: Theme, done: () => void) {
 		super(theme);
@@ -877,10 +877,10 @@ function hslToRgb(h: number, s: number, l: number): [number, number, number] {
 
 // Toggle demo - demonstrates OverlayHandle.setHidden() via onHandle callback
 class ToggleDemoComponent extends BaseOverlay {
-	private tui: TUI;
+	private readonly tui: TUI;
 	private toggleCount = 0;
 	private isToggling = false;
-	private done: () => void;
+	private readonly done: () => void;
 
 	constructor(tui: TUI, theme: Theme, done: () => void) {
 		super(theme);
@@ -940,14 +940,14 @@ class ToggleDemoComponent extends BaseOverlay {
 
 class PassiveDemoController extends BaseOverlay {
 	focused = false;
-	private tui: TUI;
+	private readonly tui: TUI;
 	private typed = "";
-	private timerComponent: TimerPanel;
+	private readonly timerComponent: TimerPanel;
 	private timerHandle: OverlayHandle | null = null;
 	private interval: ReturnType<typeof setInterval> | null = null;
 	private inputCount = 0;
 	private lastInputDebug = "";
-	private done: () => void;
+	private readonly done: () => void;
 
 	constructor(tui: TUI, theme: Theme, done: () => void) {
 		super(theme);
@@ -1170,7 +1170,7 @@ class FocusPanel extends BaseOverlay {
 	private readonly color: FocusPanelColor;
 	private readonly controller: FocusDemoController;
 	private readonly input = new Input();
-	private inputs: string[] = [];
+	private readonly inputs: string[] = [];
 
 	constructor({
 		theme,
@@ -1249,14 +1249,14 @@ class FocusPanel extends BaseOverlay {
 // === Streaming input panel test (/overlay-streaming) ===
 
 class StreamingInputController extends BaseOverlay {
-	private tui: TUI;
+	private readonly tui: TUI;
 	private panels: StreamingInputPanel[] = [];
 	private handles: OverlayHandle[] = [];
 	private focusIndex = -1; // -1 = controller focused, 0-2 = panel focused
-	private streamLines: string[] = [];
+	private readonly streamLines: string[] = [];
 	private streamInterval: ReturnType<typeof setInterval> | null = null;
 	private lineCount = 0;
-	private done: () => void;
+	private readonly done: () => void;
 
 	constructor(tui: TUI, theme: Theme, done: () => void) {
 		super(theme);
@@ -1381,12 +1381,12 @@ class StreamingInputController extends BaseOverlay {
 
 class StreamingInputPanel implements Component {
 	handle: OverlayHandle | null = null;
-	private theme: Theme;
+	private readonly theme: Theme;
 	private typed = "";
 	readonly label: string;
-	private color: "error" | "success" | "accent";
-	private onTab: () => void;
-	private onClose: () => void;
+	private readonly color: "error" | "success" | "accent";
+	private readonly onTab: () => void;
+	private readonly onClose: () => void;
 
 	constructor(
 		theme: Theme,

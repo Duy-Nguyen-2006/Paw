@@ -1,5 +1,5 @@
-import { existsSync, readdirSync, readFileSync, statSync } from "fs";
-import { basename, dirname, join, resolve, sep } from "path";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import { CONFIG_DIR_NAME } from "../config.ts";
 import { parseFrontmatter } from "../utils/frontmatter.ts";
 import { resolvePath } from "../utils/paths.ts";
@@ -25,7 +25,6 @@ export function parseCommandArgs(argsString: string): string[] {
 	const args: string[] = [];
 	let current = "";
 	let inQuote: string | null = null;
-
 	for (let i = 0; i < argsString.length; i++) {
 		const char = argsString[i];
 
@@ -73,18 +72,18 @@ export function substituteArgs(content: string, args: string[]): string {
 		/\$\{(\d+):-([^}]*)\}|\$\{@:(\d+)(?::(\d+))?\}|\$(ARGUMENTS|@|\d+)/g,
 		(_match, defaultNum, defaultValue, sliceStart, sliceLength, simple) => {
 			if (defaultNum) {
-				const index = parseInt(defaultNum, 10) - 1;
+				const index = Number.parseInt(defaultNum, 10) - 1;
 				const value = args[index];
 				return value ? value : defaultValue;
 			}
 
 			if (sliceStart) {
-				let start = parseInt(sliceStart, 10) - 1; // Convert to 0-indexed (user provides 1-indexed)
+				let start = Number.parseInt(sliceStart, 10) - 1; // Convert to 0-indexed (user provides 1-indexed)
 				// Treat 0 as 1 (bash convention: args start at 1)
 				if (start < 0) start = 0;
 
 				if (sliceLength) {
-					const length = parseInt(sliceLength, 10);
+					const length = Number.parseInt(sliceLength, 10);
 					return args.slice(start, start + length).join(" ");
 				}
 				return args.slice(start).join(" ");
@@ -94,7 +93,7 @@ export function substituteArgs(content: string, args: string[]): string {
 				return allArgs;
 			}
 
-			const index = parseInt(simple, 10) - 1;
+			const index = Number.parseInt(simple, 10) - 1;
 			return args[index] ?? "";
 		},
 	);
@@ -232,8 +231,10 @@ export function loadPromptTemplates(options: LoadPromptTemplatesOptions): Prompt
 	};
 
 	if (includeDefaults) {
-		templates.push(...loadTemplatesFromDir(globalPromptsDir, getSourceInfo));
-		templates.push(...loadTemplatesFromDir(projectPromptsDir, getSourceInfo));
+		templates.push(
+			...loadTemplatesFromDir(globalPromptsDir, getSourceInfo),
+			...loadTemplatesFromDir(projectPromptsDir, getSourceInfo),
+		);
 	}
 
 	// 3. Load explicit prompt paths

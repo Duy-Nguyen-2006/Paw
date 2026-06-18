@@ -67,7 +67,6 @@ const require = createRequire(import.meta.url);
  * In Bun binary mode, virtualModules is used instead.
  */
 let _aliases: Record<string, string> | null = null;
-
 function getAliases(): Record<string, string> {
 	if (_aliases) return _aliases;
 

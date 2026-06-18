@@ -69,13 +69,15 @@ export function formatPawCleanDryRunReport(report: PawCleanDryRunReport): string
 		lines.push(".paw is missing; no sessions or artifacts were scanned.");
 	}
 
-	lines.push(`sessions: keep ${report.plan.keep_sessions.length}, remove ${report.plan.remove_sessions.length}`);
-	lines.push(...formatKeptSessions(report.plan.keep_sessions));
-	lines.push(...formatRemovals(report.plan.remove_sessions));
-	lines.push(`artifacts: keep ${report.plan.keep_artifacts.length}, remove ${report.plan.remove_artifacts.length}`);
-	lines.push(...formatKeptArtifacts(report.plan.keep_artifacts));
-	lines.push(...formatRemovals(report.plan.remove_artifacts));
-	lines.push("No files were deleted.");
+	lines.push(
+		`sessions: keep ${report.plan.keep_sessions.length}, remove ${report.plan.remove_sessions.length}`,
+		...formatKeptSessions(report.plan.keep_sessions),
+		...formatRemovals(report.plan.remove_sessions),
+		`artifacts: keep ${report.plan.keep_artifacts.length}, remove ${report.plan.remove_artifacts.length}`,
+		...formatKeptArtifacts(report.plan.keep_artifacts),
+		...formatRemovals(report.plan.remove_artifacts),
+		"No files were deleted.",
+	);
 
 	return lines.join("\n");
 }

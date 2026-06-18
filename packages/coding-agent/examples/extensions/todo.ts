@@ -38,9 +38,9 @@ const TodoParams = Type.Object({
  * UI component for the /todos command
  */
 class TodoListComponent {
-	private todos: Todo[];
-	private theme: Theme;
-	private onClose: () => void;
+	private readonly todos: Todo[];
+	private readonly theme: Theme;
+	private readonly onClose: () => void;
 	private cachedWidth?: number;
 	private cachedLines?: string[];
 

@@ -8,8 +8,8 @@ import { truncateToWidth } from "../src/utils.ts";
  * Simple key code logger component
  */
 class KeyLogger implements Component {
-	private log: string[] = [];
-	private maxLines = 20;
+	private readonly log: string[] = [];
+	private readonly maxLines = 20;
 	private tui: TUI;
 	private terminal: ProcessTerminal;
 
@@ -29,7 +29,7 @@ class KeyLogger implements Component {
 		// Convert to various representations
 		const hex = Buffer.from(data).toString("hex");
 		const charCodes = Array.from(data)
-			.map((c) => c.charCodeAt(0))
+			.map((c) => c.codePointAt(0)!)
 			.join(", ");
 		const repr = data
 			.replace(/\x1b/g, "\\x1b")

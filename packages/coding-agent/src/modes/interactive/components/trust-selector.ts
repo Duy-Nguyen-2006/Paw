@@ -31,11 +31,11 @@ function formatDecision(trustPath: string | undefined, decision: ProjectTrustSto
 
 export class TrustSelectorComponent extends Container {
 	private selectedIndex: number;
-	private readonly listContainer: Container;
-	private readonly trustOptions: ProjectTrustOption[];
-	private readonly savedDecision: ProjectTrustStoreEntry | null;
-	private readonly onSelectCallback: (selection: TrustSelection) => void;
-	private readonly onCancelCallback: () => void;
+	private listContainer: Container;
+	private trustOptions: ProjectTrustOption[];
+	private savedDecision: ProjectTrustStoreEntry | null;
+	private onSelectCallback: (selection: TrustSelection) => void;
+	private onCancelCallback: () => void;
 
 	constructor(options: TrustSelectorOptions) {
 		super();

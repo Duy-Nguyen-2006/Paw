@@ -458,7 +458,12 @@ function collectAncestorAgentsSkillDirs(startDir: string): string[] {
 	return skillDirs;
 }
 
-function collectAutoPromptEntries(dir: string): string[] {
+/**
+ * Walk a single directory and return paths whose entries pass the predicate
+ * and aren't matched by the ignore filter. Symbolic links are stat'd to
+ * resolve the actual kind of entry.
+ */
+function collectDirEntries(dir: string, accept: (entryName: string, isFile: boolean) => boolean): string[] {
 	const entries: string[] = [];
 	if (!existsSync(dir)) return entries;
 
@@ -484,7 +489,7 @@ function collectAutoPromptEntries(dir: string): string[] {
 			const relPath = toPosixPath(relative(dir, fullPath));
 			if (ig.ignores(relPath)) continue;
 
-			if (isFile && entry.name.endsWith(".md")) {
+			if (isFile && accept(entry.name, true)) {
 				entries.push(fullPath);
 			}
 		}
@@ -495,41 +500,12 @@ function collectAutoPromptEntries(dir: string): string[] {
 	return entries;
 }
 
+function collectAutoPromptEntries(dir: string): string[] {
+	return collectDirEntries(dir, (name) => name.endsWith(".md"));
+}
+
 function collectAutoThemeEntries(dir: string): string[] {
-	const entries: string[] = [];
-	if (!existsSync(dir)) return entries;
-
-	const ig = ignore();
-	addIgnoreRules(ig, dir, dir);
-
-	try {
-		const dirEntries = readdirSync(dir, { withFileTypes: true });
-		for (const entry of dirEntries) {
-			if (entry.name.startsWith(".")) continue;
-			if (entry.name === "node_modules") continue;
-
-			const fullPath = join(dir, entry.name);
-			let isFile = entry.isFile();
-			if (entry.isSymbolicLink()) {
-				try {
-					isFile = statSync(fullPath).isFile();
-				} catch {
-					continue;
-				}
-			}
-
-			const relPath = toPosixPath(relative(dir, fullPath));
-			if (ig.ignores(relPath)) continue;
-
-			if (isFile && entry.name.endsWith(".json")) {
-				entries.push(fullPath);
-			}
-		}
-	} catch {
-		// Ignore errors
-	}
-
-	return entries;
+	return collectDirEntries(dir, (name) => name.endsWith(".json"));
 }
 
 function readPiManifestFile(packageJsonPath: string): PiManifest | null {
@@ -593,37 +569,58 @@ function collectAutoExtensionEntries(dir: string): string[] {
 			if (entry.name === "node_modules") continue;
 
 			const fullPath = join(dir, entry.name);
-			let isDir = entry.isDirectory();
-			let isFile = entry.isFile();
-
-			if (entry.isSymbolicLink()) {
-				try {
-					const stats = statSync(fullPath);
-					isDir = stats.isDirectory();
-					isFile = stats.isFile();
-				} catch {
-					continue;
-				}
-			}
+			const kind = resolveEntryKind(entry, fullPath);
+			if (!kind) continue;
 
 			const relPath = toPosixPath(relative(dir, fullPath));
-			const ignorePath = isDir ? `${relPath}/` : relPath;
+			const ignorePath = kind.isDir ? `${relPath}/` : relPath;
 			if (ig.ignores(ignorePath)) continue;
 
-			if (isFile && (entry.name.endsWith(".ts") || entry.name.endsWith(".js"))) {
-				entries.push(fullPath);
-			} else if (isDir) {
-				const resolvedEntries = resolveExtensionEntries(fullPath);
-				if (resolvedEntries) {
-					entries.push(...resolvedEntries);
-				}
-			}
+			pushExtensionEntries(entry.name, fullPath, kind, entries);
 		}
 	} catch {
 		// Ignore errors
 	}
 
 	return entries;
+}
+
+/**
+ * Resolve the effective kind (file/dir) of a directory entry, following
+ * symlinks via stat. Returns null when stat fails on a symlink.
+ */
+function resolveEntryKind(
+	entry: { isSymbolicLink(): boolean; isDirectory(): boolean; isFile(): boolean },
+	fullPath: string,
+): { isDir: boolean; isFile: boolean } | null {
+	if (!entry.isSymbolicLink()) {
+		return { isDir: entry.isDirectory(), isFile: entry.isFile() };
+	}
+	try {
+		const stats = statSync(fullPath);
+		return { isDir: stats.isDirectory(), isFile: stats.isFile() };
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Push matching extension file paths (or resolved directory entries) into the accumulator.
+ */
+function pushExtensionEntries(
+	name: string,
+	fullPath: string,
+	kind: { isDir: boolean; isFile: boolean },
+	entries: string[],
+): void {
+	if (kind.isFile && (name.endsWith(".ts") || name.endsWith(".js"))) {
+		entries.push(fullPath);
+	} else if (kind.isDir) {
+		const resolvedEntries = resolveExtensionEntries(fullPath);
+		if (resolvedEntries) {
+			entries.push(...resolvedEntries);
+		}
+	}
 }
 
 /**
@@ -724,12 +721,16 @@ function isEnabledByOverrides(filePath: string, patterns: string[], baseDir: str
  * - `+path`: force-include exact path (overrides exclusions)
  * - `-path`: force-exclude exact path (overrides force-includes)
  */
-function applyPatterns(allPaths: string[], patterns: string[], baseDir: string): Set<string> {
+function categorizePatterns(patterns: string[]): {
+	includes: string[];
+	excludes: string[];
+	forceIncludes: string[];
+	forceExcludes: string[];
+} {
 	const includes: string[] = [];
 	const excludes: string[] = [];
 	const forceIncludes: string[] = [];
 	const forceExcludes: string[] = [];
-
 	for (const p of patterns) {
 		if (p.startsWith("+")) {
 			forceIncludes.push(p.slice(1));
@@ -741,6 +742,11 @@ function applyPatterns(allPaths: string[], patterns: string[], baseDir: string):
 			includes.push(p);
 		}
 	}
+	return { includes, excludes, forceIncludes, forceExcludes };
+}
+
+function applyPatterns(allPaths: string[], patterns: string[], baseDir: string): Set<string> {
+	const { includes, excludes, forceIncludes, forceExcludes } = categorizePatterns(patterns);
 
 	// Step 1: Apply includes (or all if no includes)
 	let result: string[];
@@ -1062,58 +1068,87 @@ export class DefaultPackageManager implements PackageManager {
 			return;
 		}
 
+		const { npmCandidates, gitCandidates } = this.partitionUpdateCandidates(sources);
+		const npmUpdateTargets = await this.collectNpmUpdateTargets(npmCandidates);
+		const tasks = this.buildUpdateTasks(npmUpdateTargets, gitCandidates);
+		await Promise.all(tasks);
+	}
+
+	/**
+	 * Split configured sources into npm candidates (unpinned only) and git
+	 * candidates. Pinned git refs are still included because they describe a
+	 * configured checkout target that should be reconciled.
+	 */
+	private partitionUpdateCandidates(sources: ConfiguredUpdateSource[]): {
+		npmCandidates: NpmUpdateTarget[];
+		gitCandidates: GitUpdateTarget[];
+	} {
 		const npmCandidates: NpmUpdateTarget[] = [];
 		const gitCandidates: GitUpdateTarget[] = [];
-
 		for (const entry of sources) {
 			const parsed = this.parseSource(entry.source);
-			// Pinned npm versions are fixed. Pinned git refs are configured checkout targets,
-			// so include them to reconcile an existing clone when the configured ref changes.
 			if (parsed.type === "npm") {
-				if (!parsed.pinned) {
-					npmCandidates.push({ ...entry, parsed });
-				}
+				if (!parsed.pinned) npmCandidates.push({ ...entry, parsed });
 			} else if (parsed.type === "git") {
 				gitCandidates.push({ ...entry, parsed });
 			}
 		}
+		return { npmCandidates, gitCandidates };
+	}
 
+	/**
+	 * Run the npm "should update" check in parallel for each candidate and
+	 * group the resulting update targets by user/project scope.
+	 */
+	private async collectNpmUpdateTargets(npmCandidates: NpmUpdateTarget[]): Promise<{
+		user: NpmUpdateTarget[];
+		project: NpmUpdateTarget[];
+	}> {
 		const npmCheckTasks = npmCandidates.map((entry) => async () => ({
 			entry,
 			shouldUpdate: await this.shouldUpdateNpmSource(entry.parsed, entry.scope),
 		}));
 		const npmCheckResults = await this.runWithConcurrency(npmCheckTasks, UPDATE_CHECK_CONCURRENCY);
-		const userNpmUpdates: NpmUpdateTarget[] = [];
-		const projectNpmUpdates: NpmUpdateTarget[] = [];
+		const user: NpmUpdateTarget[] = [];
+		const project: NpmUpdateTarget[] = [];
 		for (const result of npmCheckResults) {
-			if (!result.shouldUpdate) {
-				continue;
-			}
-			if (result.entry.scope === "user") {
-				userNpmUpdates.push(result.entry);
-			} else {
-				projectNpmUpdates.push(result.entry);
-			}
+			if (!result.shouldUpdate) continue;
+			if (result.entry.scope === "user") user.push(result.entry);
+			else project.push(result.entry);
 		}
+		return { user, project };
+	}
 
+	/**
+	 * Build the promise list that applies npm batches (per scope) and the
+	 * concurrent git update pool.
+	 */
+	private buildUpdateTasks(
+		npmUpdateTargets: { user: NpmUpdateTarget[]; project: NpmUpdateTarget[] },
+		gitCandidates: GitUpdateTarget[],
+	): Promise<void>[] {
 		const tasks: Promise<void>[] = [];
-		if (userNpmUpdates.length > 0) {
-			tasks.push(this.updateNpmBatch(userNpmUpdates, "user"));
+		if (npmUpdateTargets.user.length > 0) {
+			tasks.push(this.updateNpmBatch(npmUpdateTargets.user, "user"));
 		}
-		if (projectNpmUpdates.length > 0) {
-			tasks.push(this.updateNpmBatch(projectNpmUpdates, "project"));
+		if (npmUpdateTargets.project.length > 0) {
+			tasks.push(this.updateNpmBatch(npmUpdateTargets.project, "project"));
 		}
 		if (gitCandidates.length > 0) {
-			const gitTasks = gitCandidates.map(
-				(entry) => async () =>
-					this.withProgress("update", entry.source, `Updating ${entry.source}...`, async () => {
-						await this.updateGit(entry.parsed, entry.scope);
-					}),
-			);
-			tasks.push(this.runWithConcurrency(gitTasks, GIT_UPDATE_CONCURRENCY).then(() => {}));
+			tasks.push(this.runGitUpdatePool(gitCandidates));
 		}
+		return tasks;
+	}
 
-		await Promise.all(tasks);
+	/** Schedule concurrent git updates via withProgress and run them in parallel. */
+	private async runGitUpdatePool(gitCandidates: GitUpdateTarget[]): Promise<void> {
+		const gitTasks = gitCandidates.map(
+			(entry) => async () =>
+				this.withProgress("update", entry.source, `Updating ${entry.source}...`, async () => {
+					await this.updateGit(entry.parsed, entry.scope);
+				}),
+		);
+		await this.runWithConcurrency(gitTasks, GIT_UPDATE_CONCURRENCY);
 	}
 
 	private async shouldUpdateNpmSource(source: NpmSource, scope: InstalledSourceScope): Promise<boolean> {

@@ -54,9 +54,11 @@ export type RpcEventListener = (event: AgentEvent) => void;
 export class RpcClient {
 	private process: ChildProcess | null = null;
 	private stopReadingStdout: (() => void) | null = null;
-	private eventListeners: RpcEventListener[] = [];
-	private pendingRequests: Map<string, { resolve: (response: RpcResponse) => void; reject: (error: Error) => void }> =
-		new Map();
+	private readonly eventListeners: RpcEventListener[] = [];
+	private readonly pendingRequests: Map<
+		string,
+		{ resolve: (response: RpcResponse) => void; reject: (error: Error) => void }
+	> = new Map();
 	private requestId = 0;
 	private stderr = "";
 	private exitError: Error | null = null;

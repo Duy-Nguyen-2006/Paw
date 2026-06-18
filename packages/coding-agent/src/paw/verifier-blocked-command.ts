@@ -151,7 +151,7 @@ export type PawBlockVerifierParsedArgs =
 const BLOCK_VERIFIER_SCALAR_OPTIONS = new Set(["--decision-file"]);
 
 export function parsePawBlockVerifierArgs(args: string[]): PawBlockVerifierParsedArgs {
-	if (args.some((arg) => arg === "--help" || arg === "-h")) {
+	if (args.includes("--help") || args.includes("-h")) {
 		return { kind: "help" };
 	}
 
@@ -576,47 +576,45 @@ function extractVerifyDecisions(parsed: unknown): unknown[] | undefined {
 	return undefined;
 }
 
+function collectVerifyGateFieldIssues(record: Record<string, unknown>, basePath: string): PawValidationIssue[] {
+	const itemIssues: PawValidationIssue[] = [];
+	if (typeof record.status !== "string") {
+		itemIssues.push({ path: `${basePath}/status`, message: "status must be a string." });
+	}
+	const gate = record.gate;
+	if (typeof gate !== "string" || gate.trim().length === 0) {
+		itemIssues.push({ path: `${basePath}/gate`, message: "gate must be a non-empty string." });
+	}
+	if (!isPawVerifyGateSet(record.gateSet)) {
+		itemIssues.push({ path: `${basePath}/gateSet`, message: 'gateSet must be "v1", "v2", or "unconfigured".' });
+	}
+	if (typeof record.verified !== "boolean") {
+		itemIssues.push({ path: `${basePath}/verified`, message: "verified must be a boolean." });
+	}
+	if (typeof record.applicable !== "boolean") {
+		itemIssues.push({ path: `${basePath}/applicable`, message: "applicable must be a boolean." });
+	}
+	return itemIssues;
+}
+
 function normalizeVerifyGateDecision(
 	decision: unknown,
 	basePath: string,
 	issues: PawValidationIssue[],
 ): PawVerifyGateDecision | undefined {
-	const itemIssues: PawValidationIssue[] = [];
 	if (typeof decision !== "object" || decision === null) {
-		itemIssues.push({ path: basePath, message: "Each verify decision must be an object." });
-		issues.push(...itemIssues);
+		issues.push({ path: basePath, message: "Each verify decision must be an object." });
 		return undefined;
 	}
 
 	const record = decision as Record<string, unknown>;
-	const status = record.status;
-	const gate = record.gate;
-	const gateSet = record.gateSet;
-	const verified = record.verified;
-	const applicable = record.applicable;
-	const reason = record.reason;
-
-	if (typeof status !== "string") {
-		itemIssues.push({ path: `${basePath}/status`, message: "status must be a string." });
-	}
-	if (typeof gate !== "string" || gate.trim().length === 0) {
-		itemIssues.push({ path: `${basePath}/gate`, message: "gate must be a non-empty string." });
-	}
-	if (!isPawVerifyGateSet(gateSet)) {
-		itemIssues.push({ path: `${basePath}/gateSet`, message: 'gateSet must be "v1", "v2", or "unconfigured".' });
-	}
-	if (typeof verified !== "boolean") {
-		itemIssues.push({ path: `${basePath}/verified`, message: "verified must be a boolean." });
-	}
-	if (typeof applicable !== "boolean") {
-		itemIssues.push({ path: `${basePath}/applicable`, message: "applicable must be a boolean." });
-	}
-
+	const itemIssues = collectVerifyGateFieldIssues(record, basePath);
 	if (itemIssues.length > 0) {
 		issues.push(...itemIssues);
 		return undefined;
 	}
 
+	const { status, gate, gateSet, verified, applicable, reason } = record;
 	const normalizedStatus = status as string;
 	const normalizedGate = gate as string;
 	const normalizedGateSet = gateSet as PawVerifyGateSet;

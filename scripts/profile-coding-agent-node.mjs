@@ -70,8 +70,8 @@ function parseMode(value) {
 	throw new Error(`Invalid --mode: ${value}`);
 }
 
-function parseArgs(argv) {
-	const options = {
+function createDefaultProfileOptions() {
+	return {
 		mode: "tui",
 		runs: 1,
 		warmup: 0,
@@ -84,83 +84,68 @@ function parseArgs(argv) {
 		isolatedAgentDir: false,
 		cpuProfile: false,
 	};
+}
+
+const VALUE_FLAGS_WITH_PARSER = {
+	"--mode": (argv, index) => parseMode(argv[index]),
+	"--runs": (argv, index) => parseIntegerFlag(argv[index], "--runs"),
+	"--warmup": (argv, index) => parseIntegerFlag(argv[index], "--warmup"),
+	"--profile-dir": (argv, index) => resolve(argv[index]),
+	"--label": (argv, index) => argv[index],
+	"--runtime": (argv, index) => parseRuntime(argv[index]),
+	"--agent-dir": (argv, index) => resolve(argv[index]),
+};
+
+const BOOLEAN_FLAG_TARGETS = {
+	"--help": { key: "help", value: true },
+	"-h": { key: "help", value: true },
+	"--no-offline": { key: "offline", value: false },
+	"--isolated-agent-dir": { key: "isolatedAgentDir", value: true },
+	"--skip-build": { key: "build", value: false },
+	"--cpu-profile": { key: "cpuProfile", value: true },
+};
+
+const VALUE_FLAG_TARGETS = {
+	"--mode": "mode",
+	"--runs": "runs",
+	"--warmup": "warmup",
+	"--profile-dir": "profileDir",
+	"--label": "label",
+	"--runtime": "runtime",
+	"--agent-dir": "agentDir",
+};
+
+/** Apply a boolean flag (e.g. `--cpu-profile`) to `options`, returning whether it matched. */
+function applyBooleanFlag(options, arg) {
+	const target = BOOLEAN_FLAG_TARGETS[arg];
+	if (!target) return false;
+	options[target.key] = target.value;
+	return true;
+}
+
+/** Apply a value flag (e.g. `--mode tui`) to `options`, returning the new argv index. */
+function applyValueFlag(options, arg, argv, valueIndex) {
+	const target = VALUE_FLAG_TARGETS[arg];
+	if (!target) return valueIndex;
+	const parser = VALUE_FLAGS_WITH_PARSER[arg];
+	options[target] = parser(argv, valueIndex);
+	return valueIndex;
+}
+
+function parseArgs(argv) {
+	const options = createDefaultProfileOptions();
 
 	for (let index = 0; index < argv.length; index++) {
 		const arg = argv[index];
 
-		if (arg === "--help" || arg === "-h") {
-			options.help = true;
+		if (applyBooleanFlag(options, arg)) continue;
+		if (arg in VALUE_FLAGS_WITH_PARSER) {
+			if (index + 1 >= argv.length) {
+				throw new Error(`Missing value for ${arg}`);
+			}
+			index = applyValueFlag(options, arg, argv, index + 1);
 			continue;
 		}
-
-		if (arg === "--no-offline") {
-			options.offline = false;
-			continue;
-		}
-
-		if (arg === "--isolated-agent-dir") {
-			options.isolatedAgentDir = true;
-			continue;
-		}
-
-		if (arg === "--skip-build") {
-			options.build = false;
-			continue;
-		}
-
-		if (arg === "--cpu-profile") {
-			options.cpuProfile = true;
-			continue;
-		}
-
-		if (
-			(arg === "--mode" ||
-				arg === "--runs" ||
-				arg === "--warmup" ||
-				arg === "--profile-dir" ||
-				arg === "--label" ||
-				arg === "--runtime" ||
-				arg === "--agent-dir") &&
-			index + 1 >= argv.length
-		) {
-			throw new Error(`Missing value for ${arg}`);
-		}
-
-		if (arg === "--mode") {
-			options.mode = parseMode(argv[++index]);
-			continue;
-		}
-
-		if (arg === "--runs") {
-			options.runs = parseIntegerFlag(argv[++index], "--runs");
-			continue;
-		}
-
-		if (arg === "--warmup") {
-			options.warmup = parseIntegerFlag(argv[++index], "--warmup");
-			continue;
-		}
-
-		if (arg === "--profile-dir") {
-			options.profileDir = resolve(argv[++index]);
-			continue;
-		}
-
-		if (arg === "--label") {
-			options.label = argv[++index];
-			continue;
-		}
-
-		if (arg === "--runtime") {
-			options.runtime = parseRuntime(argv[++index]);
-			continue;
-		}
-
-		if (arg === "--agent-dir") {
-			options.agentDir = resolve(argv[++index]);
-			continue;
-		}
-
 		throw new Error(`Unknown option: ${arg}`);
 	}
 
@@ -209,7 +194,7 @@ function summarize(values) {
 	const median = sorted.length % 2 === 0 ? (sorted[middle - 1] + sorted[middle]) / 2 : sorted[middle];
 	return {
 		min: sorted[0],
-		max: sorted[sorted.length - 1],
+		max: sorted.at(-1),
 		avg: total / sorted.length,
 		median,
 	};
@@ -262,7 +247,7 @@ function summarizeTimingMaps(runs) {
 }
 
 function toMetricName(label) {
-	return `${label.replaceAll(/[^a-zA-Z0-9]+/g, "_").replaceAll(/^_+|_+$/g, "")}_ms`;
+	return `${label.replace(/[^a-zA-Z0-9]+/g, "_").replace(/^_+|_+$/g, "")}_ms`;
 }
 
 async function waitForExit(child, errorPrefix) {
@@ -536,10 +521,7 @@ async function main() {
 		return;
 	}
 
-	if (options.agentDir && options.isolatedAgentDir) {
-		throw new Error("--agent-dir and --isolated-agent-dir cannot be combined");
-	}
-
+	validateMainOptions(options);
 	if (options.mode === "tui" && (!process.stdin.isTTY || !process.stdout.isTTY)) {
 		throw new Error("TUI benchmark must be run from an interactive terminal.");
 	}
@@ -548,70 +530,74 @@ async function main() {
 	options.label = resolveLabel(options.mode, options.label);
 	const profileDir = resolveProfileDir(runtime, options.profileDir);
 
-	if (runtime === "node" && options.build) {
-		await runBuild();
-	}
-	if (runtime === "bun") {
-		process.stdout.write(
-			`Using Bun runtime with ${options.mode === "rpc" ? "packages/coding-agent/src/cli.ts --mode rpc" : "packages/coding-agent/src/cli.ts"}\n`,
-		);
-	}
+	if (runtime === "node" && options.build) await runBuild();
+	if (runtime === "bun") printBunRuntimeHint(options.mode);
 
 	const entryPath = runtime === "bun" ? srcCliPath : distCliPath;
-	if (!existsSync(entryPath)) {
-		throw new Error(`CLI entrypoint not found: ${entryPath}`);
-	}
-
+	if (!existsSync(entryPath)) throw new Error(`CLI entrypoint not found: ${entryPath}`);
 	mkdirSync(profileDir, { recursive: true });
 
-	const measuredRuns = [];
-	const totalRuns = options.warmup + options.runs;
-	for (let runIndex = 0; runIndex < totalRuns; runIndex++) {
-		const measuredIndex = runIndex >= options.warmup ? runIndex - options.warmup + 1 : undefined;
-		const result = await runBenchmarkRun({
-			runtime,
-			runIndex,
-			measuredIndex,
-			options,
-			profileDir,
-		});
-
-		process.stdout.write(
-			`[${measuredIndex === undefined ? `warmup ${runIndex + 1}` : `run ${measuredIndex}`}] elapsed=${formatMs(result.elapsedMs)}\n`,
-		);
-
-		if (measuredIndex !== undefined) {
-			measuredRuns.push(result);
-		}
-	}
-
+	const measuredRuns = await runBenchmarkRuns(runtime, options, profileDir);
 	if (measuredRuns.length === 0) {
 		process.stdout.write("\nNo measured runs requested.\n");
 		return;
 	}
 
+	printBenchmarkResults(runtime, options, profileDir, measuredRuns);
+}
+
+function validateMainOptions(options) {
+	if (options.agentDir && options.isolatedAgentDir) {
+		throw new Error("--agent-dir and --isolated-agent-dir cannot be combined");
+	}
+}
+
+function printBunRuntimeHint(mode) {
+	const entry = mode === "rpc" ? "packages/coding-agent/src/cli.ts --mode rpc" : "packages/coding-agent/src/cli.ts";
+	process.stdout.write(`Using Bun runtime with ${entry}\n`);
+}
+
+async function runBenchmarkRuns(runtime, options, profileDir) {
+	const measuredRuns = [];
+	const totalRuns = options.warmup + options.runs;
+	for (let runIndex = 0; runIndex < totalRuns; runIndex++) {
+		const measuredIndex = runIndex >= options.warmup ? runIndex - options.warmup + 1 : undefined;
+		const result = await runBenchmarkRun({ runtime, runIndex, measuredIndex, options, profileDir });
+		const label = measuredIndex === undefined ? `warmup ${runIndex + 1}` : `run ${measuredIndex}`;
+		process.stdout.write(`[${label}] elapsed=${formatMs(result.elapsedMs)}\n`);
+		if (measuredIndex !== undefined) measuredRuns.push(result);
+	}
+	return measuredRuns;
+}
+
+function printBenchmarkResults(runtime, options, profileDir, measuredRuns) {
 	const elapsedSummary = summarize(measuredRuns.map((run) => run.elapsedMs));
 	const timingSummaries = summarizeTimingMaps(measuredRuns);
-	const maxElapsedRun = measuredRuns.reduce((slowest, run) => (run.elapsedMs > slowest.elapsedMs ? run : slowest));
+	const maxElapsedRun = measuredRuns.reduce(
+		(slowest, run) => (run.elapsedMs > slowest.elapsedMs ? run : slowest),
+		measuredRuns[0],
+	);
+
 	if (measuredRuns.length === 1) {
-		process.stdout.write("\nResult\n");
-		process.stdout.write(`  runtime:          ${runtime}\n`);
-		process.stdout.write(`  mode:             ${options.mode}\n`);
-		process.stdout.write(`  elapsed:          ${formatMs(measuredRuns[0].elapsedMs)}\n`);
-		for (const [label, summary] of timingSummaries.entries()) {
-			process.stdout.write(`  ${label}: ${formatMs(summary.median)}\n`);
-		}
-		if (options.cpuProfile && maxElapsedRun.profilePath) {
-			process.stdout.write(`  selected profile: ${toDisplayPath(maxElapsedRun.profilePath)}\n`);
-			process.stdout.write(`  profiles dir:     ${toDisplayPath(profileDir)}\n`);
-		}
-		process.stdout.write(`METRIC startup_time_ms=${measuredRuns[0].elapsedMs.toFixed(1)}\n`);
-		for (const [label, summary] of timingSummaries.entries()) {
-			process.stdout.write(`METRIC ${toMetricName(label)}=${summary.median.toFixed(1)}\n`);
-		}
+		printSingleRunResult(runtime, options, profileDir, measuredRuns[0], timingSummaries, maxElapsedRun);
 		return;
 	}
 
+	printMultiRunSummary(runtime, options, profileDir, elapsedSummary, timingSummaries, maxElapsedRun);
+}
+
+function printSingleRunResult(runtime, options, profileDir, run, timingSummaries, maxElapsedRun) {
+	process.stdout.write("\nResult\n");
+	process.stdout.write(`  runtime:          ${runtime}\n`);
+	process.stdout.write(`  mode:             ${options.mode}\n`);
+	process.stdout.write(`  elapsed:          ${formatMs(run.elapsedMs)}\n`);
+	printTimingSummaries(timingSummaries, "  ");
+	printCpuProfileInfo(options, maxElapsedRun, profileDir);
+	process.stdout.write(`METRIC startup_time_ms=${run.elapsedMs.toFixed(1)}\n`);
+	printTimingMetrics(timingSummaries);
+}
+
+function printMultiRunSummary(runtime, options, profileDir, elapsedSummary, timingSummaries, maxElapsedRun) {
 	process.stdout.write("\nSummary\n");
 	process.stdout.write(`  runtime:          ${runtime}\n`);
 	process.stdout.write(`  mode:             ${options.mode}\n`);
@@ -619,14 +605,25 @@ async function main() {
 	process.stdout.write(`  elapsed median:   ${formatMs(elapsedSummary.median)}\n`);
 	process.stdout.write(`  elapsed avg:      ${formatMs(elapsedSummary.avg)}\n`);
 	process.stdout.write(`  elapsed max:      ${formatMs(elapsedSummary.max)}\n`);
-	for (const [label, summary] of timingSummaries.entries()) {
-		process.stdout.write(`  ${label} median: ${formatMs(summary.median)}\n`);
-	}
-	if (options.cpuProfile && maxElapsedRun.profilePath) {
-		process.stdout.write(`  selected profile: ${toDisplayPath(maxElapsedRun.profilePath)}\n`);
-		process.stdout.write(`  profiles dir:     ${toDisplayPath(profileDir)}\n`);
-	}
+	printTimingSummaries(timingSummaries, "  ");
+	printCpuProfileInfo(options, maxElapsedRun, profileDir);
 	process.stdout.write(`METRIC startup_time_ms=${elapsedSummary.median.toFixed(1)}\n`);
+	printTimingMetrics(timingSummaries);
+}
+
+function printTimingSummaries(timingSummaries, indent) {
+	for (const [label, summary] of timingSummaries.entries()) {
+		process.stdout.write(`${indent}${label}: ${formatMs(summary.median)}\n`);
+	}
+}
+
+function printCpuProfileInfo(options, maxElapsedRun, profileDir) {
+	if (!options.cpuProfile || !maxElapsedRun.profilePath) return;
+	process.stdout.write(`  selected profile: ${toDisplayPath(maxElapsedRun.profilePath)}\n`);
+	process.stdout.write(`  profiles dir:     ${toDisplayPath(profileDir)}\n`);
+}
+
+function printTimingMetrics(timingSummaries) {
 	for (const [label, summary] of timingSummaries.entries()) {
 		process.stdout.write(`METRIC ${toMetricName(label)}=${summary.median.toFixed(1)}\n`);
 	}

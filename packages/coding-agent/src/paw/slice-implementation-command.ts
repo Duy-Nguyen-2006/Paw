@@ -91,7 +91,7 @@ export type PawBeginImplementationParsedArgs =
 	| { kind: "ok"; sessionId: string };
 
 export function parsePawBeginImplementationArgs(args: string[]): PawBeginImplementationParsedArgs {
-	if (args.some((arg) => arg === "--help" || arg === "-h")) {
+	if (args.includes("--help") || args.includes("-h")) {
 		return { kind: "help" };
 	}
 

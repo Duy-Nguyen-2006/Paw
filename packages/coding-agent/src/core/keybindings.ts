@@ -1,3 +1,5 @@
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
 	type Keybinding,
 	type KeybindingDefinitions,
@@ -6,8 +8,6 @@ import {
 	TUI_KEYBINDINGS,
 	KeybindingsManager as TuiKeybindingsManager,
 } from "@earendil-works/pi-tui";
-import { existsSync, readFileSync } from "fs";
-import { join } from "path";
 import { getAgentDir } from "../config.ts";
 
 export interface AppKeybindings {
@@ -319,7 +319,7 @@ function orderKeybindingsConfig(config: Record<string, unknown>): Record<string,
 
 	const extras = Object.keys(config)
 		.filter((key) => !Object.hasOwn(ordered, key))
-		.sort();
+		.sort((a, b) => a.localeCompare(b));
 	for (const key of extras) {
 		ordered[key] = config[key];
 	}

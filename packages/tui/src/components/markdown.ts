@@ -415,7 +415,7 @@ export class Markdown implements Component {
 				}
 
 				// Avoid rendering an extra empty quote line before the outer blockquote spacing.
-				while (renderedQuoteLines.length > 0 && renderedQuoteLines[renderedQuoteLines.length - 1] === "") {
+				while (renderedQuoteLines.length > 0 && renderedQuoteLines.at(-1) === "") {
 					renderedQuoteLines.pop();
 				}
 

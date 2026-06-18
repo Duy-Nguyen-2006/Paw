@@ -267,7 +267,7 @@ export class ExtensionRunner {
 	private cwd: string;
 	private sessionManager: SessionManager;
 	private modelRegistry: ModelRegistry;
-	private errorListeners: Set<ExtensionErrorListener> = new Set();
+	private readonly errorListeners: Set<ExtensionErrorListener> = new Set();
 	private getModel: () => Model<any> | undefined = () => undefined;
 	private isIdleFn: () => boolean = () => true;
 	private isProjectTrustedFn: () => boolean = () => true;
@@ -739,32 +739,48 @@ export class ExtensionRunner {
 
 		for (const ext of this.extensions) {
 			const handlers = ext.handlers.get(event.type);
-			if (!handlers || handlers.length === 0) continue;
+			if (!handlers?.length) continue;
 
-			for (const handler of handlers) {
-				try {
-					const handlerResult = await handler(event, ctx);
-
-					if (this.isSessionBeforeEvent(event) && handlerResult) {
-						result = handlerResult as SessionBeforeEventResult;
-						if (result.cancel) {
-							return result as RunnerEmitResult<TEvent>;
-						}
-					}
-				} catch (err) {
-					const message = err instanceof Error ? err.message : String(err);
-					const stack = err instanceof Error ? err.stack : undefined;
-					this.emitError({
-						extensionPath: ext.path,
-						event: event.type,
-						error: message,
-						stack,
-					});
-				}
+			result = await this.processEventHandlers(event, ctx, ext, handlers, result);
+			if (result?.cancel) {
+				return result as RunnerEmitResult<TEvent>;
 			}
 		}
 
 		return result as RunnerEmitResult<TEvent>;
+	}
+
+	private async processEventHandlers<TEvent extends RunnerEmitEvent>(
+		event: TEvent,
+		ctx: ExtensionContext,
+		ext: Extension,
+		handlers: Array<(event: any, ctx: ExtensionContext) => Promise<any>>,
+		currentResult: SessionBeforeEventResult | undefined,
+	): Promise<SessionBeforeEventResult | undefined> {
+		const isBeforeEvent = this.isSessionBeforeEvent(event);
+		let result = currentResult;
+
+		for (const handler of handlers) {
+			let handlerResult: unknown;
+			try {
+				handlerResult = await handler(event, ctx);
+			} catch (err) {
+				this.reportHandlerError(ext.path, event.type, err);
+				continue;
+			}
+
+			if (!isBeforeEvent || !handlerResult) continue;
+			result = handlerResult as SessionBeforeEventResult;
+			if (result.cancel) break;
+		}
+
+		return result;
+	}
+
+	private reportHandlerError(extensionPath: string, event: string, err: unknown): void {
+		const message = err instanceof Error ? err.message : String(err);
+		const stack = err instanceof Error ? err.stack : undefined;
+		this.emitError({ extensionPath, event, error: message, stack });
 	}
 
 	async emitMessageEnd(event: MessageEndEvent): Promise<AgentMessage | undefined> {
@@ -871,7 +887,7 @@ export class ExtensionRunner {
 				const handlerResult = await handler(event, ctx);
 
 				if (handlerResult) {
-					result = handlerResult as ToolCallEventResult;
+					result = handlerResult;
 					if (result.block) {
 						return result;
 					}
@@ -893,7 +909,7 @@ export class ExtensionRunner {
 				try {
 					const handlerResult = await handler(event, ctx);
 					if (handlerResult) {
-						return handlerResult as UserBashEventResult;
+						return handlerResult;
 					}
 				} catch (err) {
 					const message = err instanceof Error ? err.message : String(err);

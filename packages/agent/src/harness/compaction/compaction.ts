@@ -1,4 +1,4 @@
-import type { AssistantMessage, ImageContent, Model, TextContent, Usage } from "@earendil-works/pi-ai";
+import type { ImageContent, Model, TextContent, Usage } from "@earendil-works/pi-ai";
 import { completeSimple } from "@earendil-works/pi-ai";
 import type { AgentMessage, ThinkingLevel } from "../../types.ts";
 import {
@@ -33,33 +33,38 @@ function safeJsonStringify(value: unknown): string {
 	}
 }
 
+function loadPrevCompactionFileOps(
+	entries: SessionTreeEntry[],
+	prevCompactionIndex: number,
+	fileOps: FileOperations,
+): void {
+	if (prevCompactionIndex < 0) return;
+	const prevCompaction = entries[prevCompactionIndex] as CompactionEntry;
+	if (prevCompaction.fromHook || !prevCompaction.details) return;
+	const details = prevCompaction.details as CompactionDetails;
+	if (Array.isArray(details.readFiles)) {
+		for (const f of details.readFiles) fileOps.read.add(f);
+	}
+	if (Array.isArray(details.modifiedFiles)) {
+		for (const f of details.modifiedFiles) fileOps.edited.add(f);
+	}
+}
+
 function extractFileOperations(
 	messages: AgentMessage[],
 	entries: SessionTreeEntry[],
 	prevCompactionIndex: number,
 ): FileOperations {
 	const fileOps = createFileOps();
-	if (prevCompactionIndex >= 0) {
-		const prevCompaction = entries[prevCompactionIndex] as CompactionEntry;
-		if (!prevCompaction.fromHook && prevCompaction.details) {
-			const details = prevCompaction.details as CompactionDetails;
-			if (Array.isArray(details.readFiles)) {
-				for (const f of details.readFiles) fileOps.read.add(f);
-			}
-			if (Array.isArray(details.modifiedFiles)) {
-				for (const f of details.modifiedFiles) fileOps.edited.add(f);
-			}
-		}
-	}
+	loadPrevCompactionFileOps(entries, prevCompactionIndex, fileOps);
 	for (const msg of messages) {
 		extractFileOpsFromMessage(msg, fileOps);
 	}
-
 	return fileOps;
 }
 function getMessageFromEntry(entry: SessionTreeEntry): AgentMessage | undefined {
 	if (entry.type === "message") {
-		return entry.message as AgentMessage;
+		return entry.message;
 	}
 	if (entry.type === "custom_message") {
 		return createCustomMessage(
@@ -121,7 +126,7 @@ export function calculateContextTokens(usage: Usage): number {
 }
 function getAssistantUsage(msg: AgentMessage): Usage | undefined {
 	if (msg.role === "assistant" && "usage" in msg) {
-		const assistantMsg = msg as AssistantMessage;
+		const assistantMsg = msg;
 		if (assistantMsg.stopReason !== "aborted" && assistantMsg.stopReason !== "error" && assistantMsg.usage) {
 			return assistantMsg.usage;
 		}
@@ -134,7 +139,7 @@ export function getLastAssistantUsage(entries: SessionTreeEntry[]): Usage | unde
 	for (let i = entries.length - 1; i >= 0; i--) {
 		const entry = entries[i];
 		if (entry.type === "message") {
-			const usage = getAssistantUsage(entry.message as AgentMessage);
+			const usage = getAssistantUsage(entry.message);
 			if (usage) return usage;
 		}
 	}
@@ -216,47 +221,51 @@ function estimateTextAndImageContentChars(content: string | Array<{ type: string
 	return chars;
 }
 
+function estimateAssistantContentChars(
+	content: Array<{ type: string; text?: string; thinking?: string; name?: string; arguments?: unknown }>,
+): number {
+	let chars = 0;
+	for (const block of content) {
+		if (block.type === "text") {
+			chars += (block.text ?? "").length;
+		} else if (block.type === "thinking") {
+			chars += (block.thinking ?? "").length;
+		} else if (block.type === "toolCall") {
+			chars += (block.name ?? "").length + safeJsonStringify(block.arguments).length;
+		}
+	}
+	return chars;
+}
+
 /** Estimate token count for one message using a conservative character heuristic. */
 export function estimateTokens(message: AgentMessage): number {
 	let chars = 0;
 
 	switch (message.role) {
-		case "user": {
+		case "user":
 			chars = estimateTextAndImageContentChars(
 				(message as { content: string | Array<{ type: string; text?: string }> }).content,
 			);
-			return Math.ceil(chars / 4);
-		}
-		case "assistant": {
-			const assistant = message as AssistantMessage;
-			for (const block of assistant.content) {
-				if (block.type === "text") {
-					chars += block.text.length;
-				} else if (block.type === "thinking") {
-					chars += block.thinking.length;
-				} else if (block.type === "toolCall") {
-					chars += block.name.length + safeJsonStringify(block.arguments).length;
-				}
-			}
-			return Math.ceil(chars / 4);
-		}
+			break;
+		case "assistant":
+			chars = estimateAssistantContentChars(message.content as any);
+			break;
 		case "custom":
-		case "toolResult": {
+		case "toolResult":
 			chars = estimateTextAndImageContentChars(message.content);
-			return Math.ceil(chars / 4);
-		}
-		case "bashExecution": {
+			break;
+		case "bashExecution":
 			chars = message.command.length + message.output.length;
-			return Math.ceil(chars / 4);
-		}
+			break;
 		case "branchSummary":
-		case "compactionSummary": {
+		case "compactionSummary":
 			chars = message.summary.length;
-			return Math.ceil(chars / 4);
-		}
+			break;
+		default:
+			return 0;
 	}
 
-	return 0;
+	return Math.ceil(chars / 4);
 }
 function findValidCutPoints(entries: SessionTreeEntry[], startIndex: number, endIndex: number): number[] {
 	const cutPoints: number[] = [];
@@ -337,13 +346,38 @@ export function findCutPoint(
 	if (cutPoints.length === 0) {
 		return { firstKeptEntryIndex: startIndex, turnStartIndex: -1, isSplitTurn: false };
 	}
+	const cutIndex = selectCutIndex(entries, startIndex, endIndex, cutPoints, keepRecentTokens);
+	const adjustedCutIndex = adjustCutIndexToAllowedBoundary(entries, startIndex, cutIndex);
+	const cutEntry = entries[adjustedCutIndex];
+	const isUserMessage = cutEntry.type === "message" && cutEntry.message.role === "user";
+	const turnStartIndex = isUserMessage ? -1 : findTurnStartIndex(entries, adjustedCutIndex, startIndex);
+
+	return {
+		firstKeptEntryIndex: adjustedCutIndex,
+		turnStartIndex,
+		isSplitTurn: !isUserMessage && turnStartIndex !== -1,
+	};
+}
+
+/**
+ * Walk entries backward from `endIndex - 1`, accumulating message tokens until
+ * `keepRecentTokens` is reached, and return the smallest cut-point at or after
+ * that index. Falls back to the first cut point if no messages contribute.
+ */
+function selectCutIndex(
+	entries: SessionTreeEntry[],
+	startIndex: number,
+	endIndex: number,
+	cutPoints: number[],
+	keepRecentTokens: number,
+): number {
 	let accumulatedTokens = 0;
 	let cutIndex = cutPoints[0];
 
 	for (let i = endIndex - 1; i >= startIndex; i--) {
 		const entry = entries[i];
 		if (entry.type !== "message") continue;
-		const messageTokens = estimateTokens(entry.message as AgentMessage);
+		const messageTokens = estimateTokens(entry.message);
 		accumulatedTokens += messageTokens;
 		if (accumulatedTokens >= keepRecentTokens) {
 			for (let c = 0; c < cutPoints.length; c++) {
@@ -355,25 +389,27 @@ export function findCutPoint(
 			break;
 		}
 	}
-	while (cutIndex > startIndex) {
-		const prevEntry = entries[cutIndex - 1];
+	return cutIndex;
+}
+
+/**
+ * Walk backwards from `cutIndex` while the previous entry is a non-message,
+ * non-compaction record (e.g. thinking-level change), stopping at the first
+ * message or compaction entry.
+ */
+function adjustCutIndexToAllowedBoundary(entries: SessionTreeEntry[], startIndex: number, cutIndex: number): number {
+	let adjusted = cutIndex;
+	while (adjusted > startIndex) {
+		const prevEntry = entries[adjusted - 1];
 		if (prevEntry.type === "compaction") {
 			break;
 		}
 		if (prevEntry.type === "message") {
 			break;
 		}
-		cutIndex--;
+		adjusted--;
 	}
-	const cutEntry = entries[cutIndex];
-	const isUserMessage = cutEntry.type === "message" && cutEntry.message.role === "user";
-	const turnStartIndex = isUserMessage ? -1 : findTurnStartIndex(entries, cutIndex, startIndex);
-
-	return {
-		firstKeptEntryIndex: cutIndex,
-		turnStartIndex,
-		isSplitTurn: !isUserMessage && turnStartIndex !== -1,
-	};
+	return adjusted;
 }
 
 export const SUMMARIZATION_SYSTEM_PROMPT = `You are a context summarization assistant. Your task is to read a conversation between a user and an AI assistant, then produce a structured summary following the exact format specified.
@@ -543,7 +579,7 @@ export function prepareCompaction(
 	pathEntries: SessionTreeEntry[],
 	settings: CompactionSettings,
 ): Result<CompactionPreparation | undefined, CompactionError> {
-	if (pathEntries.length === 0 || pathEntries[pathEntries.length - 1].type === "compaction") {
+	if (pathEntries.length === 0 || pathEntries.at(-1)?.type === "compaction") {
 		return ok(undefined);
 	}
 
@@ -623,6 +659,45 @@ Be concise. Focus on what's needed to understand the kept suffix.`;
 
 export { serializeConversation } from "./utils.ts";
 
+async function generateSplitTurnSummary(
+	preparation: CompactionPreparation,
+	model: Model<any>,
+	apiKey: string,
+	headers?: Record<string, string>,
+	customInstructions?: string,
+	signal?: AbortSignal,
+	thinkingLevel?: ThinkingLevel,
+): Promise<Result<string, CompactionError>> {
+	const { messagesToSummarize, turnPrefixMessages, previousSummary, settings } = preparation;
+	const [historyResult, turnPrefixResult] = await Promise.all([
+		messagesToSummarize.length > 0
+			? generateSummary(
+					messagesToSummarize,
+					model,
+					settings.reserveTokens,
+					apiKey,
+					headers,
+					signal,
+					customInstructions,
+					previousSummary,
+					thinkingLevel,
+				)
+			: Promise.resolve(ok<string, CompactionError>("No prior history.")),
+		generateTurnPrefixSummary(
+			turnPrefixMessages,
+			model,
+			settings.reserveTokens,
+			apiKey,
+			headers,
+			signal,
+			thinkingLevel,
+		),
+	]);
+	if (!historyResult.ok) return err(historyResult.error);
+	if (!turnPrefixResult.ok) return err(turnPrefixResult.error);
+	return ok(`${historyResult.value}\n\n---\n\n**Turn Context (split turn):**\n\n${turnPrefixResult.value}`);
+}
+
 /** Generate compaction summary data from prepared session history. */
 export async function compact(
 	preparation: CompactionPreparation,
@@ -633,66 +708,38 @@ export async function compact(
 	signal?: AbortSignal,
 	thinkingLevel?: ThinkingLevel,
 ): Promise<Result<CompactionResult, CompactionError>> {
-	const {
-		firstKeptEntryId,
-		messagesToSummarize,
-		turnPrefixMessages,
-		isSplitTurn,
-		tokensBefore,
-		previousSummary,
-		fileOps,
-		settings,
-	} = preparation;
+	const { firstKeptEntryId, messagesToSummarize, isSplitTurn, tokensBefore, previousSummary, fileOps, settings } =
+		preparation;
 
 	if (!firstKeptEntryId) {
 		return err(new CompactionError("invalid_session", "First kept entry has no UUID - session may need migration"));
 	}
 
-	let summary: string;
+	const summaryResult =
+		isSplitTurn && preparation.turnPrefixMessages.length > 0
+			? await generateSplitTurnSummary(
+					preparation,
+					model,
+					apiKey,
+					headers,
+					customInstructions,
+					signal,
+					thinkingLevel,
+				)
+			: await generateSummary(
+					messagesToSummarize,
+					model,
+					settings.reserveTokens,
+					apiKey,
+					headers,
+					signal,
+					customInstructions,
+					previousSummary,
+					thinkingLevel,
+				);
 
-	if (isSplitTurn && turnPrefixMessages.length > 0) {
-		const [historyResult, turnPrefixResult] = await Promise.all([
-			messagesToSummarize.length > 0
-				? generateSummary(
-						messagesToSummarize,
-						model,
-						settings.reserveTokens,
-						apiKey,
-						headers,
-						signal,
-						customInstructions,
-						previousSummary,
-						thinkingLevel,
-					)
-				: Promise.resolve(ok<string, CompactionError>("No prior history.")),
-			generateTurnPrefixSummary(
-				turnPrefixMessages,
-				model,
-				settings.reserveTokens,
-				apiKey,
-				headers,
-				signal,
-				thinkingLevel,
-			),
-		]);
-		if (!historyResult.ok) return err(historyResult.error);
-		if (!turnPrefixResult.ok) return err(turnPrefixResult.error);
-		summary = `${historyResult.value}\n\n---\n\n**Turn Context (split turn):**\n\n${turnPrefixResult.value}`;
-	} else {
-		const summaryResult = await generateSummary(
-			messagesToSummarize,
-			model,
-			settings.reserveTokens,
-			apiKey,
-			headers,
-			signal,
-			customInstructions,
-			previousSummary,
-			thinkingLevel,
-		);
-		if (!summaryResult.ok) return err(summaryResult.error);
-		summary = summaryResult.value;
-	}
+	if (!summaryResult.ok) return err(summaryResult.error);
+	let summary = summaryResult.value;
 
 	const { readFiles, modifiedFiles } = computeFileLists(fileOps);
 	summary += formatFileOperations(readFiles, modifiedFiles);

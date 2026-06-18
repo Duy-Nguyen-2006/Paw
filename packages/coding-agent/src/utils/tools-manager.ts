@@ -1,10 +1,10 @@
+import { type SpawnSyncReturns, spawnSync } from "node:child_process";
+import { chmodSync, createWriteStream, existsSync, mkdirSync, readdirSync, renameSync, rmSync } from "node:fs";
+import { arch, platform } from "node:os";
+import { join } from "node:path";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import chalk from "chalk";
-import { type SpawnSyncReturns, spawnSync } from "child_process";
-import { chmodSync, createWriteStream, existsSync, mkdirSync, readdirSync, renameSync, rmSync } from "fs";
-import { arch, platform } from "os";
-import { join } from "path";
-import { Readable } from "stream";
-import { pipeline } from "stream/promises";
 import { APP_NAME, getBinDir } from "../config.ts";
 
 const TOOLS_DIR = getBinDir();
@@ -333,9 +333,7 @@ export async function ensureTool(tool: "fd" | "rg", silent: boolean = false): Pr
 	if (!config) return undefined;
 
 	if (isOfflineModeEnabled()) {
-		if (!silent) {
-			console.log(chalk.yellow(`${config.name} not found. Offline mode enabled, skipping download.`));
-		}
+		logSkipDownload(config.name, silent, "Offline mode enabled, skipping download.");
 		return undefined;
 	}
 
@@ -343,9 +341,7 @@ export async function ensureTool(tool: "fd" | "rg", silent: boolean = false): Pr
 	// Users must install via pkg.
 	if (platform() === "android") {
 		const pkgName = TERMUX_PACKAGES[tool] ?? tool;
-		if (!silent) {
-			console.log(chalk.yellow(`${config.name} not found. Install with: pkg install ${pkgName}`));
-		}
+		logSkipDownload(config.name, silent, `Install with: pkg install ${pkgName}`);
 		return undefined;
 	}
 
@@ -354,6 +350,20 @@ export async function ensureTool(tool: "fd" | "rg", silent: boolean = false): Pr
 		console.log(chalk.dim(`${config.name} not found. Downloading...`));
 	}
 
+	return downloadAndReportTool(tool, config, silent);
+}
+
+function logSkipDownload(name: string, silent: boolean, message: string): void {
+	if (!silent) {
+		console.log(chalk.yellow(`${name} not found. ${message}`));
+	}
+}
+
+async function downloadAndReportTool(
+	tool: "fd" | "rg",
+	config: { name: string },
+	silent: boolean,
+): Promise<string | undefined> {
 	try {
 		const path = await downloadTool(tool);
 		if (!silent) {

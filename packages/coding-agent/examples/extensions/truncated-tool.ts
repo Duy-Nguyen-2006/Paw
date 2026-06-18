@@ -14,7 +14,10 @@
  * built-in `grep` tool in src/core/tools/grep.ts for a more complete implementation.
  */
 
+import { execSync } from "node:child_process";
 import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
 	DEFAULT_MAX_BYTES,
@@ -25,9 +28,6 @@ import {
 	withFileMutationQueue,
 } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import { execSync } from "child_process";
-import { tmpdir } from "os";
-import { join } from "path";
 import { Type } from "typebox";
 
 const RgParams = Type.Object({

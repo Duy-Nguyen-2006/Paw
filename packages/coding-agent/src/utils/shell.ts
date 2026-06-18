@@ -1,6 +1,6 @@
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { delimiter } from "node:path";
-import { spawn, spawnSync } from "child_process";
 import { getBinDir } from "../config.ts";
 
 export interface ShellConfig {
@@ -54,6 +54,33 @@ function findBashOnPath(): string | null {
  * 2. On Windows: Git Bash in known locations, then bash on PATH
  * 3. On Unix: /bin/bash, then bash on PATH, then fallback to sh
  */
+function getGitBashCandidatePaths(): string[] {
+	const paths: string[] = [];
+	const programFiles = process.env.ProgramFiles;
+	if (programFiles) {
+		paths.push(`${programFiles}\\Git\\bin\\bash.exe`);
+	}
+	const programFilesX86 = process.env["ProgramFiles(x86)"];
+	if (programFilesX86) {
+		paths.push(`${programFilesX86}\\Git\\bin\\bash.exe`);
+	}
+	return paths;
+}
+
+function getWindowsShellConfig(): ShellConfig | undefined {
+	for (const path of getGitBashCandidatePaths()) {
+		if (existsSync(path)) {
+			return { shell: path, args: ["-c"] };
+		}
+	}
+
+	const bashOnPath = findBashOnPath();
+	if (bashOnPath) {
+		return { shell: bashOnPath, args: ["-c"] };
+	}
+	return undefined;
+}
+
 export function getShellConfig(customShellPath?: string): ShellConfig {
 	// 1. Check user-specified shell path
 	if (customShellPath) {
@@ -64,27 +91,9 @@ export function getShellConfig(customShellPath?: string): ShellConfig {
 	}
 
 	if (process.platform === "win32") {
-		// 2. Try Git Bash in known locations
-		const paths: string[] = [];
-		const programFiles = process.env.ProgramFiles;
-		if (programFiles) {
-			paths.push(`${programFiles}\\Git\\bin\\bash.exe`);
-		}
-		const programFilesX86 = process.env["ProgramFiles(x86)"];
-		if (programFilesX86) {
-			paths.push(`${programFilesX86}\\Git\\bin\\bash.exe`);
-		}
-
-		for (const path of paths) {
-			if (existsSync(path)) {
-				return { shell: path, args: ["-c"] };
-			}
-		}
-
-		// 3. Fallback: search bash.exe on PATH (Cygwin, MSYS2, WSL, etc.)
-		const bashOnPath = findBashOnPath();
-		if (bashOnPath) {
-			return { shell: bashOnPath, args: ["-c"] };
+		const windowsShell = getWindowsShellConfig();
+		if (windowsShell) {
+			return windowsShell;
 		}
 
 		throw new Error(
@@ -92,7 +101,9 @@ export function getShellConfig(customShellPath?: string): ShellConfig {
 				`  1. Install Git for Windows: https://git-scm.com/download/win\n` +
 				`  2. Add your bash to PATH (Cygwin, MSYS2, etc.)\n` +
 				"  3. Set shellPath in settings.json\n\n" +
-				`Searched Git Bash in:\n${paths.map((p) => `  ${p}`).join("\n")}`,
+				`Searched Git Bash in:\n${getGitBashCandidatePaths()
+					.map((candidate) => `  ${candidate}`)
+					.join("\n")}`,
 		);
 	}
 
@@ -144,7 +155,7 @@ export function sanitizeBinaryOutput(str: string): string {
 			// - Control chars except \t \n \r
 			// - Characters with undefined code points
 
-			const code = char.codePointAt(0);
+			const code = char.codePointAt(0)!;
 
 			// Skip if code point is undefined (edge case with invalid strings)
 			if (code === undefined) return false;

@@ -37,7 +37,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 		skills: providedSkills,
 	} = options;
 	const resolvedCwd = cwd;
-	const promptCwd = resolvedCwd.replace(/\\/g, "/");
+	const promptCwd = resolvedCwd.replaceAll("\\", "/");
 
 	const now = new Date();
 	const year = now.getFullYear();

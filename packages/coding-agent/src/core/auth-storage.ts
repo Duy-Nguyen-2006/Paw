@@ -6,6 +6,8 @@
  * try to refresh tokens simultaneously.
  */
 
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import {
 	findEnvKeys,
 	getEnvApiKey,
@@ -14,8 +16,6 @@ import {
 	type OAuthProviderId,
 } from "@earendil-works/pi-ai";
 import { getOAuthApiKey, getOAuthProvider, getOAuthProviders } from "@earendil-works/pi-ai/oauth";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
-import { dirname, join } from "path";
 import lockfile from "proper-lockfile";
 import { getAgentDir } from "../config.ts";
 import { normalizePath } from "../utils/paths.ts";
@@ -197,7 +197,7 @@ export class InMemoryAuthStorageBackend implements AuthStorageBackend {
  */
 export class AuthStorage {
 	private data: AuthStorageData = {};
-	private runtimeOverrides: Map<string, string> = new Map();
+	private readonly runtimeOverrides: Map<string, string> = new Map();
 	private fallbackResolver?: (provider: string) => string | undefined;
 	private loadError: Error | null = null;
 	private errors: Error[] = [];

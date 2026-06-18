@@ -18,6 +18,14 @@ interface CliDirs {
 	projectDir: string;
 }
 
+interface CliProjectFixture {
+	name: string;
+	files: Array<{
+		path: string;
+		content: string;
+	}>;
+}
+
 interface CliResult {
 	code: number | null;
 	signal: NodeJS.Signals | null;
@@ -37,7 +45,80 @@ function createTempDir(): string {
 	return dir;
 }
 
-function setupProject(): CliDirs {
+const cliProjectFixtures: CliProjectFixture[] = [
+	{
+		name: "Next.js-like",
+		files: [
+			{
+				path: "package.json",
+				content: JSON.stringify(
+					{
+						name: "nextjs-like-app",
+						private: true,
+						scripts: {
+							dev: "next dev",
+							build: "next build",
+							start: "next start",
+						},
+						dependencies: {
+							next: "latest",
+							react: "latest",
+							"react-dom": "latest",
+						},
+					},
+					null,
+					"\t",
+				),
+			},
+			{
+				path: "pages/index.tsx",
+				content: "export default function Home() { return <main>Next.js-like fixture</main>; }\n",
+			},
+		],
+	},
+	{
+		name: "FastAPI-like",
+		files: [
+			{
+				path: "pyproject.toml",
+				content: `[project]\nname = "fastapi-like-app"\nversion = "0.1.0"\ndependencies = ["fastapi", "uvicorn"]\n`,
+			},
+			{
+				path: "app/main.py",
+				content: "from fastapi import FastAPI\napp = FastAPI()\n",
+			},
+		],
+	},
+	{
+		name: "Node CLI-like",
+		files: [
+			{
+				path: "package.json",
+				content: JSON.stringify(
+					{
+						name: "node-cli-like-app",
+						private: true,
+						type: "module",
+						bin: {
+							"node-cli-like": "./bin/cli.js",
+						},
+						scripts: {
+							start: "node ./bin/cli.js",
+						},
+					},
+					null,
+					"\t",
+				),
+			},
+			{
+				path: "bin/cli.js",
+				content: "#!/usr/bin/env node\nconsole.log('Node CLI-like fixture');\n",
+			},
+		],
+	},
+];
+
+function setupProject(fixture: CliProjectFixture): CliDirs {
 	const tempRoot = createTempDir();
 	const dirs = {
 		agentDir: join(tempRoot, "agent"),
@@ -46,6 +127,11 @@ function setupProject(): CliDirs {
 	mkdirSync(dirs.agentDir, { recursive: true });
 	mkdirSync(join(dirs.projectDir, "paw-spec"), { recursive: true });
 	writeFileSync(join(dirs.projectDir, "paw-spec", "config.yaml"), readFileSync(sourceConfigPath, "utf-8"), "utf-8");
+	for (const file of fixture.files) {
+		const fullPath = join(dirs.projectDir, file.path);
+		mkdirSync(dirname(fullPath), { recursive: true });
+		writeFileSync(fullPath, file.content, "utf-8");
+	}
 	return dirs;
 }
 
@@ -161,60 +247,62 @@ function seedVerifyingSession(projectDir: string, sessionId: string): void {
 }
 
 describe("spawned Paw CLI validation", () => {
-	it("runs a deterministic init, session, verify, finalize, and report flow without provider calls", async () => {
-		const dirs = setupProject();
+	for (const fixture of cliProjectFixtures) {
+		it(`runs a deterministic init, session, verify, finalize, and report flow without provider calls for ${fixture.name}`, async () => {
+			const dirs = setupProject(fixture);
 
-		const init = await runCli(dirs, ["paw", "init"]);
-		expect(init).toMatchObject({ code: 0, signal: null, stderr: "" });
-		expect(init.stdout).toContain(".paw initialized");
-		expect(existsSync(join(dirs.projectDir, ".paw", "config.yaml"))).toBe(true);
+			const init = await runCli(dirs, ["paw", "init"]);
+			expect(init).toMatchObject({ code: 0, signal: null, stderr: "" });
+			expect(init.stdout).toContain(".paw initialized");
+			expect(existsSync(join(dirs.projectDir, ".paw", "config.yaml"))).toBe(true);
 
-		const start = await runCli(dirs, ["paw", "start", "session-1"]);
-		expect(start).toMatchObject({ code: 0, signal: null, stderr: "" });
-		expect(start.stdout).toContain("Paw start");
-		expect(start.stdout).toContain("status: started");
-		expect(start.stdout).toContain("state: INTAKE");
+			const start = await runCli(dirs, ["paw", "start", "session-1"]);
+			expect(start).toMatchObject({ code: 0, signal: null, stderr: "" });
+			expect(start.stdout).toContain("Paw start");
+			expect(start.stdout).toContain("status: started");
+			expect(start.stdout).toContain("state: INTAKE");
 
-		const status = await runCli(dirs, ["paw", "status"]);
-		expect(status).toMatchObject({ code: 0, signal: null, stderr: "" });
-		expect(status.stdout).toContain("Paw status");
-		expect(status.stdout).toContain("initialized: yes");
-		expect(status.stdout).toContain("sessions: 1");
+			const status = await runCli(dirs, ["paw", "status"]);
+			expect(status).toMatchObject({ code: 0, signal: null, stderr: "" });
+			expect(status.stdout).toContain("Paw status");
+			expect(status.stdout).toContain("initialized: yes");
+			expect(status.stdout).toContain("sessions: 1");
 
-		seedVerifyingSession(dirs.projectDir, "session-1");
-		const verify = await runCli(dirs, ["paw", "verify", "session-1"]);
-		expect(verify).toMatchObject({ code: 0, signal: null, stderr: "" });
-		expect(verify.stdout).toContain("Paw verify");
-		expect(verify.stdout).toContain("status: completed_with_unverified");
-		expect(verify.stdout).toContain("state: VERIFYING -> SLICE_DONE");
-		expect(verify.stdout).toContain("native executed gates: none");
+			seedVerifyingSession(dirs.projectDir, "session-1");
+			const verify = await runCli(dirs, ["paw", "verify", "session-1"]);
+			expect(verify).toMatchObject({ code: 0, signal: null, stderr: "" });
+			expect(verify.stdout).toContain("Paw verify");
+			expect(verify.stdout).toContain("status: completed_with_unverified");
+			expect(verify.stdout).toContain("state: VERIFYING -> SLICE_DONE");
+			expect(verify.stdout).toContain("native executed gates: none");
 
-		const finalize = await runCli(dirs, [
-			"paw",
-			"finalize",
-			"session-1",
-			"--summary",
-			"Spawned CLI proof complete.",
-			"--evidence",
-			"spawned paw verify completed without native provider execution",
-		]);
-		expect(finalize).toMatchObject({ code: 0, signal: null, stderr: "" });
-		expect(finalize.stdout).toContain("Paw finalize");
-		expect(finalize.stdout).toContain("status: completed");
-		expect(finalize.stdout).toContain("state: SLICE_DONE -> FINAL_REPORT");
+			const finalize = await runCli(dirs, [
+				"paw",
+				"finalize",
+				"session-1",
+				"--summary",
+				"Spawned CLI proof complete.",
+				"--evidence",
+				"spawned paw verify completed without native provider execution",
+			]);
+			expect(finalize).toMatchObject({ code: 0, signal: null, stderr: "" });
+			expect(finalize.stdout).toContain("Paw finalize");
+			expect(finalize.stdout).toContain("status: completed");
+			expect(finalize.stdout).toContain("state: SLICE_DONE -> FINAL_REPORT");
 
-		const report = await runCli(dirs, ["paw", "report", "session-1"]);
-		expect(report).toMatchObject({ code: 0, signal: null, stderr: "" });
-		expect(report.stdout).toContain("Spawned CLI proof complete.");
-		expect(report.stdout).toContain("spawned paw verify completed without native provider execution");
+			const report = await runCli(dirs, ["paw", "report", "session-1"]);
+			expect(report).toMatchObject({ code: 0, signal: null, stderr: "" });
+			expect(report.stdout).toContain("Spawned CLI proof complete.");
+			expect(report.stdout).toContain("spawned paw verify completed without native provider execution");
 
-		const finalState = JSON.parse(
-			readFileSync(join(dirs.projectDir, ".paw", "sessions", "session-1", "state.json"), "utf-8"),
-		) as {
-			name?: string;
-		};
-		expect(finalState.name).toBe("FINAL_REPORT");
-		expect(existsSync(join(dirs.projectDir, ".paw", "sessions", "session-1", "report.json"))).toBe(true);
-		expect(existsSync(join(dirs.agentDir, "models.json"))).toBe(false);
-	}, 30_000);
+			const finalState = JSON.parse(
+				readFileSync(join(dirs.projectDir, ".paw", "sessions", "session-1", "state.json"), "utf-8"),
+			) as {
+				name?: string;
+			};
+			expect(finalState.name).toBe("FINAL_REPORT");
+			expect(existsSync(join(dirs.projectDir, ".paw", "sessions", "session-1", "report.json"))).toBe(true);
+			expect(existsSync(join(dirs.agentDir, "models.json"))).toBe(false);
+		}, 30_000);
+	}
 });

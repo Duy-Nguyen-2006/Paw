@@ -11,7 +11,7 @@ const NODE_OS_SPECIFIER = "node:" + "os";
 const NODE_PATH_SPECIFIER = "node:" + "path";
 
 // Eagerly load in Node.js/Bun environment only
-if (typeof process !== "undefined" && (process.versions?.node || process.versions?.bun)) {
+if (process !== undefined && (process.versions?.node || process.versions?.bun)) {
 	dynamicImport(NODE_FS_SPECIFIER).then((m) => {
 		_existsSync = (m as typeof import("node:fs")).existsSync;
 	});
@@ -26,7 +26,6 @@ if (typeof process !== "undefined" && (process.versions?.node || process.version
 import type { KnownProvider } from "./types.ts";
 
 let _procEnvCache: Map<string, string> | null = null;
-
 /**
  * Fallback for https://github.com/oven-sh/bun/issues/27802
  * Bun compiled binaries have an empty `process.env` inside sandbox
@@ -34,7 +33,7 @@ let _procEnvCache: Map<string, string> | null = null;
  */
 function getProcEnv(key: string): string | undefined {
 	if (!process.versions?.bun) return undefined;
-	if (typeof process === "undefined") return undefined;
+	if (process === undefined) return undefined;
 
 	// If process.env already has entries, the bug is not triggered.
 	if (Object.keys(process.env).length > 0) return undefined;
@@ -59,14 +58,13 @@ function getProcEnv(key: string): string | undefined {
 }
 
 let cachedVertexAdcCredentialsExists: boolean | null = null;
-
 function hasVertexAdcCredentials(): boolean {
 	if (cachedVertexAdcCredentialsExists === null) {
 		// If node modules haven't loaded yet (async import race at startup),
 		// return false WITHOUT caching so the next call retries once they're ready.
 		// Only cache false permanently in a browser environment where fs is never available.
 		if (!_existsSync || !_homedir || !_join) {
-			const isNode = typeof process !== "undefined" && (process.versions?.node || process.versions?.bun);
+			const isNode = process !== undefined && (process.versions?.node || process.versions?.bun);
 			if (!isNode) {
 				// Definitively in a browser — safe to cache false permanently
 				cachedVertexAdcCredentialsExists = false;

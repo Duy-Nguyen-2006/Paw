@@ -9,7 +9,7 @@
       const binary = atob(base64);
       const bytes = new Uint8Array(binary.length);
       for (let i = 0; i < binary.length; i++) {
-        bytes[i] = binary.charCodeAt(i);
+        bytes[i] = binary.codePointAt(i)!;
       }
       const data = JSON.parse(new TextDecoder('utf-8').decode(bytes));
       const { header, entries, leafId: defaultLeafId, systemPrompt, tools, renderedTools } = data;
@@ -180,11 +180,7 @@
        * Returns array of { node, indent, showConnector, isLast, gutters, isVirtualRootChild, multipleRoots }.
        * Matches tree-selector.ts logic exactly.
        */
-      function flattenTree(roots, activePathIds) {
-        const result = [];
-        const multipleRoots = roots.length > 1;
-
-        // Mark which subtrees contain the active leaf
+      function buildContainsActiveMap(roots, activePathIds) {
         const containsActive = new Map();
         function markActive(node) {
           let has = activePathIds.has(node.entry.id);
@@ -195,6 +191,27 @@
           return has;
         }
         roots.forEach(markActive);
+        return containsActive;
+      }
+
+      function computeChildIndent(indent, justBranched, multipleChildren) {
+        if (multipleChildren) return indent + 1;
+        if (justBranched && indent > 0) return indent + 1;
+        return indent;
+      }
+
+      function buildChildGutters(indent, showConnector, isVirtualRootChild, isLast, multipleRoots, gutters) {
+        const connectorDisplayed = showConnector && !isVirtualRootChild;
+        if (!connectorDisplayed) return gutters;
+        const currentDisplayIndent = multipleRoots ? Math.max(0, indent - 1) : indent;
+        const connectorPosition = Math.max(0, currentDisplayIndent - 1);
+        return [...gutters, { position: connectorPosition, show: !isLast }];
+      }
+
+      function flattenTree(roots, activePathIds) {
+        const result = [];
+        const multipleRoots = roots.length > 1;
+        const containsActive = buildContainsActiveMap(roots, activePathIds);
 
         // Stack: [node, indent, justBranched, showConnector, isLast, gutters, isVirtualRootChild]
         const stack = [];
@@ -215,34 +232,12 @@
 
           const children = node.children;
           const multipleChildren = children.length > 1;
-
-          // Order children (active branch first)
           const orderedChildren = [...children].sort((a, b) =>
             Number(containsActive.get(b)) - Number(containsActive.get(a))
           );
+          const childIndent = computeChildIndent(indent, justBranched, multipleChildren);
+          const childGutters = buildChildGutters(indent, showConnector, isVirtualRootChild, isLast, multipleRoots, gutters);
 
-          // Calculate child indent (matches tree-selector.ts)
-          let childIndent;
-          if (multipleChildren) {
-            // Parent branches: children get +1
-            childIndent = indent + 1;
-          } else if (justBranched && indent > 0) {
-            // First generation after a branch: +1 for visual grouping
-            childIndent = indent + 1;
-          } else {
-            // Single-child chain: stay flat
-            childIndent = indent;
-          }
-
-          // Build gutters for children
-          const connectorDisplayed = showConnector && !isVirtualRootChild;
-          const currentDisplayIndent = multipleRoots ? Math.max(0, indent - 1) : indent;
-          const connectorPosition = Math.max(0, currentDisplayIndent - 1);
-          const childGutters = connectorDisplayed
-            ? [...gutters, { position: connectorPosition, show: !isLast }]
-            : gutters;
-
-          // Add children in reverse order for stack
           for (let i = orderedChildren.length - 1; i >= 0; i--) {
             const childIsLast = i === orderedChildren.length - 1;
             stack.push([orderedChildren[i], childIndent, multipleChildren, multipleChildren, childIsLast, childGutters, false]);
@@ -255,6 +250,16 @@
       /**
        * Build ASCII prefix string for tree node.
        */
+      function getPrefixChar(level, posInLevel, gutter, connector, connectorPosition, isLast) {
+        if (gutter) return posInLevel === 0 ? (gutter.show ? '│' : ' ') : ' ';
+        if (connector && level === connectorPosition) {
+          if (posInLevel === 0) return isLast ? '└' : '├';
+          if (posInLevel === 1) return '─';
+          return ' ';
+        }
+        return ' ';
+      }
+
       function buildTreePrefix(flatNode) {
         const { indent, showConnector, isLast, gutters, isVirtualRootChild, multipleRoots } = flatNode;
         const displayIndent = multipleRoots ? Math.max(0, indent - 1) : indent;
@@ -266,21 +271,8 @@
         for (let i = 0; i < totalChars; i++) {
           const level = Math.floor(i / 3);
           const posInLevel = i % 3;
-
           const gutter = gutters.find(g => g.position === level);
-          if (gutter) {
-            prefixChars.push(posInLevel === 0 ? (gutter.show ? '│' : ' ') : ' ');
-          } else if (connector && level === connectorPosition) {
-            if (posInLevel === 0) {
-              prefixChars.push(isLast ? '└' : '├');
-            } else if (posInLevel === 1) {
-              prefixChars.push('─');
-            } else {
-              prefixChars.push(' ');
-            }
-          } else {
-            prefixChars.push(' ');
-          }
+          prefixChars.push(getPrefixChar(level, posInLevel, gutter, connector, connectorPosition, isLast));
         }
         return prefixChars.join('');
       }
@@ -365,61 +357,49 @@
       /**
        * Filter flat nodes based on current filterMode and searchQuery.
        */
+      const SETTINGS_ENTRY_TYPES = new Set(['label', 'custom', 'model_change', 'thinking_level_change']);
+
+      const FILTER_MODE_CHECKS = {
+        'user-only': (entry) => entry.type === 'message' && entry.message.role === 'user',
+        'no-tools': (entry) => !SETTINGS_ENTRY_TYPES.has(entry.type) && !(entry.type === 'message' && entry.message.role === 'toolResult'),
+        'labeled-only': (_entry, label) => label !== undefined,
+        'all': () => true,
+        'default': (entry) => !SETTINGS_ENTRY_TYPES.has(entry.type),
+      };
+
+      function passesModeFilter(entry, label) {
+        const check = FILTER_MODE_CHECKS[filterMode] || FILTER_MODE_CHECKS['default'];
+        return check(entry, label);
+      }
+
+      function isHiddenAssistantOnly(entry) {
+        if (entry.type !== 'message' || entry.message.role !== 'assistant') return false;
+        const msg = entry.message;
+        if (hasTextContent(msg.content)) return false;
+        const isErrorOrAborted = msg.stopReason && msg.stopReason !== 'stop' && msg.stopReason !== 'toolUse';
+        return !isErrorOrAborted;
+      }
+
+      function passesSearchFilter(entry, label, searchTokens) {
+        if (searchTokens.length === 0) return true;
+        const nodeText = getSearchableText(entry, label);
+        return searchTokens.every(t => nodeText.includes(t));
+      }
+
       function filterNodes(flatNodes, currentLeafId) {
         const searchTokens = searchQuery.toLowerCase().split(/\s+/).filter(Boolean);
 
         const filtered = flatNodes.filter(flatNode => {
           const entry = flatNode.node.entry;
           const label = flatNode.node.label;
-          const isCurrentLeaf = entry.id === currentLeafId;
 
-          // Always show current leaf
-          if (isCurrentLeaf) return true;
-
-          // Hide assistant messages with only tool calls (no text) unless error/aborted
-          if (entry.type === 'message' && entry.message.role === 'assistant') {
-            const msg = entry.message;
-            const hasText = hasTextContent(msg.content);
-            const isErrorOrAborted = msg.stopReason && msg.stopReason !== 'stop' && msg.stopReason !== 'toolUse';
-            if (!hasText && !isErrorOrAborted) return false;
-          }
-
-          // Apply filter mode
-          const isSettingsEntry = ['label', 'custom', 'model_change', 'thinking_level_change'].includes(entry.type);
-          let passesFilter = true;
-
-          switch (filterMode) {
-            case 'user-only':
-              passesFilter = entry.type === 'message' && entry.message.role === 'user';
-              break;
-            case 'no-tools':
-              passesFilter = !isSettingsEntry && !(entry.type === 'message' && entry.message.role === 'toolResult');
-              break;
-            case 'labeled-only':
-              passesFilter = label !== undefined;
-              break;
-            case 'all':
-              passesFilter = true;
-              break;
-            default: // 'default'
-              passesFilter = !isSettingsEntry;
-              break;
-          }
-
-          if (!passesFilter) return false;
-
-          // Apply search filter
-          if (searchTokens.length > 0) {
-            const nodeText = getSearchableText(entry, label);
-            if (!searchTokens.every(t => nodeText.includes(t))) return false;
-          }
-
-          return true;
+          if (entry.id === currentLeafId) return true;
+          if (isHiddenAssistantOnly(entry)) return false;
+          if (!passesModeFilter(entry, label)) return false;
+          return passesSearchFilter(entry, label, searchTokens);
         });
 
-        // Recalculate visual structure based on visible tree
         recalculateVisualStructure(filtered, flatNodes);
-
         return filtered;
       }
 
@@ -429,71 +409,60 @@
        * Filtering can hide intermediate entries; descendants attach to the nearest visible ancestor.
        * Keep indentation semantics aligned with flattenTree() so single-child chains don't drift right.
        */
-      function recalculateVisualStructure(filteredNodes, allFlatNodes) {
-        if (filteredNodes.length === 0) return;
+      function findVisibleAncestor(nodeId, visibleIds, entryMap) {
+        let currentId = entryMap.get(nodeId)?.node.entry.parentId;
+        while (currentId != null) {
+          if (visibleIds.has(currentId)) return currentId;
+          currentId = entryMap.get(currentId)?.node.entry.parentId;
+        }
+        return null;
+      }
 
+      function buildVisibleTree(filteredNodes, allFlatNodes) {
         const visibleIds = new Set(filteredNodes.map(n => n.node.entry.id));
-
-        // Build entry map for parent lookup (using full tree)
         const entryMap = new Map();
         for (const flatNode of allFlatNodes) {
           entryMap.set(flatNode.node.entry.id, flatNode);
         }
 
-        // Find nearest visible ancestor for a node
-        function findVisibleAncestor(nodeId) {
-          let currentId = entryMap.get(nodeId)?.node.entry.parentId;
-          while (currentId != null) {
-            if (visibleIds.has(currentId)) {
-              return currentId;
-            }
-            currentId = entryMap.get(currentId)?.node.entry.parentId;
-          }
-          return null;
-        }
-
-        // Build visible tree structure
-        const visibleParent = new Map();
         const visibleChildren = new Map();
-        visibleChildren.set(null, []); // root-level nodes
+        visibleChildren.set(null, []);
 
         for (const flatNode of filteredNodes) {
           const nodeId = flatNode.node.entry.id;
-          const ancestorId = findVisibleAncestor(nodeId);
-          visibleParent.set(nodeId, ancestorId);
-
-          if (!visibleChildren.has(ancestorId)) {
-            visibleChildren.set(ancestorId, []);
-          }
+          const ancestorId = findVisibleAncestor(nodeId, visibleIds, entryMap);
+          if (!visibleChildren.has(ancestorId)) visibleChildren.set(ancestorId, []);
           visibleChildren.get(ancestorId).push(nodeId);
         }
 
-        // Update multipleRoots based on visible roots
-        const visibleRootIds = visibleChildren.get(null);
-        const multipleRoots = visibleRootIds.length > 1;
-
-        // Build a map for quick lookup: nodeId → FlatNode
         const filteredNodeMap = new Map();
         for (const flatNode of filteredNodes) {
           filteredNodeMap.set(flatNode.node.entry.id, flatNode);
         }
 
-        // DFS traversal of visible tree, applying same indentation rules as flattenTree()
-        // Stack items: [nodeId, indent, justBranched, showConnector, isLast, gutters, isVirtualRootChild]
-        const stack = [];
+        return { visibleChildren, filteredNodeMap };
+      }
 
-        // Add visible roots in reverse order (to process in forward order via stack)
+      function applyVisualProperties(flatNode, indent, showConnector, isLast, gutters, isVirtualRootChild, multipleRoots) {
+        flatNode.indent = indent;
+        flatNode.showConnector = showConnector;
+        flatNode.isLast = isLast;
+        flatNode.gutters = gutters;
+        flatNode.isVirtualRootChild = isVirtualRootChild;
+        flatNode.multipleRoots = multipleRoots;
+      }
+
+      function recalculateVisualStructure(filteredNodes, allFlatNodes) {
+        if (filteredNodes.length === 0) return;
+
+        const { visibleChildren, filteredNodeMap } = buildVisibleTree(filteredNodes, allFlatNodes);
+        const visibleRootIds = visibleChildren.get(null);
+        const multipleRoots = visibleRootIds.length > 1;
+
+        const stack = [];
         for (let i = visibleRootIds.length - 1; i >= 0; i--) {
           const isLast = i === visibleRootIds.length - 1;
-          stack.push([
-            visibleRootIds[i],
-            multipleRoots ? 1 : 0,
-            multipleRoots,
-            multipleRoots,
-            isLast,
-            [],
-            multipleRoots
-          ]);
+          stack.push([visibleRootIds[i], multipleRoots ? 1 : 0, multipleRoots, multipleRoots, isLast, [], multipleRoots]);
         }
 
         while (stack.length > 0) {
@@ -502,51 +471,16 @@
           const flatNode = filteredNodeMap.get(nodeId);
           if (!flatNode) continue;
 
-          // Update this node's visual properties
-          flatNode.indent = indent;
-          flatNode.showConnector = showConnector;
-          flatNode.isLast = isLast;
-          flatNode.gutters = gutters;
-          flatNode.isVirtualRootChild = isVirtualRootChild;
-          flatNode.multipleRoots = multipleRoots;
+          applyVisualProperties(flatNode, indent, showConnector, isLast, gutters, isVirtualRootChild, multipleRoots);
 
-          // Get visible children of this node
           const children = visibleChildren.get(nodeId) || [];
           const multipleChildren = children.length > 1;
+          const childIndent = computeChildIndent(indent, justBranched, multipleChildren);
+          const childGutters = buildChildGutters(indent, showConnector, isVirtualRootChild, isLast, multipleRoots, gutters);
 
-          // Calculate child indent using same rules as flattenTree():
-          // - Parent branches (multiple children): children get +1
-          // - Just branched and indent > 0: children get +1 for visual grouping
-          // - Single-child chain: stay flat
-          let childIndent;
-          if (multipleChildren) {
-            childIndent = indent + 1;
-          } else if (justBranched && indent > 0) {
-            childIndent = indent + 1;
-          } else {
-            childIndent = indent;
-          }
-
-          // Build gutters for children (same logic as flattenTree)
-          const connectorDisplayed = showConnector && !isVirtualRootChild;
-          const currentDisplayIndent = multipleRoots ? Math.max(0, indent - 1) : indent;
-          const connectorPosition = Math.max(0, currentDisplayIndent - 1);
-          const childGutters = connectorDisplayed
-            ? [...gutters, { position: connectorPosition, show: !isLast }]
-            : gutters;
-
-          // Add children in reverse order (to process in forward order via stack)
           for (let i = children.length - 1; i >= 0; i--) {
             const childIsLast = i === children.length - 1;
-            stack.push([
-              children[i],
-              childIndent,
-              multipleChildren,
-              multipleChildren,
-              childIsLast,
-              childGutters,
-              false
-            ]);
+            stack.push([children[i], childIndent, multipleChildren, multipleChildren, childIsLast, childGutters, false]);
           }
         }
       }
@@ -640,66 +574,70 @@
         const normalize = s => s.replace(/[\n\t]/g, ' ').trim();
         const labelHtml = label ? `<span class="tree-label">[${escapeHtml(label)}]</span> ` : '';
 
-        switch (entry.type) {
-          case 'message': {
-            const msg = entry.message;
-            if (msg.role === 'user') {
-              const rawContent = extractContent(msg.content);
-              const skillBlock = parseSkillBlock(rawContent);
-              if (skillBlock) {
-                let treeHtml = labelHtml + `<span class="tree-role-skill">skill:</span> ${escapeHtml(skillBlock.name)}`;
-                if (skillBlock.userMessage) {
-                  treeHtml += ` · <span class="tree-role-user">user:</span> ${escapeHtml(truncate(normalize(skillBlock.userMessage)))}`;
-                }
-                return treeHtml;
-              }
-              const content = truncate(normalize(rawContent));
-              return labelHtml + `<span class="tree-role-user">user:</span> ${escapeHtml(content)}`;
-            }
-            if (msg.role === 'assistant') {
-              const textContent = truncate(normalize(extractContent(msg.content)));
-              if (textContent) {
-                return labelHtml + `<span class="tree-role-assistant">assistant:</span> ${escapeHtml(textContent)}`;
-              }
-              if (msg.stopReason === 'aborted') {
-                return labelHtml + `<span class="tree-role-assistant">assistant:</span> <span class="tree-muted">(aborted)</span>`;
-              }
-              if (msg.errorMessage) {
-                return labelHtml + `<span class="tree-role-assistant">assistant:</span> <span class="tree-error">${escapeHtml(truncate(msg.errorMessage))}</span>`;
-              }
-              return labelHtml + `<span class="tree-role-assistant">assistant:</span> <span class="tree-muted">(no text)</span>`;
-            }
-            if (msg.role === 'toolResult') {
-              const toolCall = msg.toolCallId ? toolCallMap.get(msg.toolCallId) : null;
-              if (toolCall) {
-                return labelHtml + `<span class="tree-role-tool">${escapeHtml(formatToolCall(toolCall.name, toolCall.arguments))}</span>`;
-              }
-              return labelHtml + `<span class="tree-role-tool">[${escapeHtml(msg.toolName || 'tool')}]</span>`;
-            }
-            if (msg.role === 'bashExecution') {
-              const cmd = truncate(normalize(msg.command || ''));
-              return labelHtml + `<span class="tree-role-tool">[bash]:</span> ${escapeHtml(cmd)}`;
-            }
-            return labelHtml + `<span class="tree-muted">[${escapeHtml(msg.role)}]</span>`;
-          }
-          case 'compaction':
-            return labelHtml + `<span class="tree-compaction">[compaction: ${Math.round(entry.tokensBefore/1000)}k tokens]</span>`;
-          case 'branch_summary': {
-            const summary = truncate(normalize(entry.summary || ''));
-            return labelHtml + `<span class="tree-branch-summary">[branch summary]:</span> ${escapeHtml(summary)}`;
-          }
-          case 'custom_message': {
-            const content = typeof entry.content === 'string' ? entry.content : extractContent(entry.content);
-            return labelHtml + `<span class="tree-custom">[${escapeHtml(entry.customType)}]:</span> ${escapeHtml(truncate(normalize(content)))}`;
-          }
-          case 'model_change':
-            return labelHtml + `<span class="tree-muted">[model: ${escapeHtml(entry.modelId)}]</span>`;
-          case 'thinking_level_change':
-            return labelHtml + `<span class="tree-muted">[thinking: ${escapeHtml(entry.thinkingLevel)}]</span>`;
-          default:
-            return labelHtml + `<span class="tree-muted">[${escapeHtml(entry.type)}]</span>`;
+        if (entry.type === 'message') {
+          return getTreeMessageHtml(entry.message, labelHtml, normalize);
         }
+        const renderer = TREE_NODE_RENDERERS[entry.type];
+        if (renderer) return renderer(entry, labelHtml, normalize);
+        return labelHtml + `<span class="tree-muted">[${escapeHtml(entry.type)}]</span>`;
       }
+
+      function getTreeMessageHtml(msg, labelHtml, normalize) {
+        if (msg.role === 'user') return getTreeUserHtml(msg, labelHtml, normalize);
+        if (msg.role === 'assistant') return getTreeAssistantHtml(msg, labelHtml, normalize);
+        if (msg.role === 'toolResult') return getTreeToolResultHtml(msg, labelHtml);
+        if (msg.role === 'bashExecution') {
+          const cmd = truncate(normalize(msg.command || ''));
+          return labelHtml + `<span class="tree-role-tool">[bash]:</span> ${escapeHtml(cmd)}`;
+        }
+        return labelHtml + `<span class="tree-muted">[${escapeHtml(msg.role)}]</span>`;
+      }
+
+      function getTreeUserHtml(msg, labelHtml, normalize) {
+        const rawContent = extractContent(msg.content);
+        const skillBlock = parseSkillBlock(rawContent);
+        if (skillBlock) {
+          let treeHtml = labelHtml + `<span class="tree-role-skill">skill:</span> ${escapeHtml(skillBlock.name)}`;
+          if (skillBlock.userMessage) {
+            treeHtml += ` · <span class="tree-role-user">user:</span> ${escapeHtml(truncate(normalize(skillBlock.userMessage)))}`;
+          }
+          return treeHtml;
+        }
+        return labelHtml + `<span class="tree-role-user">user:</span> ${escapeHtml(truncate(normalize(rawContent)))}`;
+      }
+
+      function getTreeAssistantHtml(msg, labelHtml, normalize) {
+        const textContent = truncate(normalize(extractContent(msg.content)));
+        if (textContent) return labelHtml + `<span class="tree-role-assistant">assistant:</span> ${escapeHtml(textContent)}`;
+        if (msg.stopReason === 'aborted') return labelHtml + `<span class="tree-role-assistant">assistant:</span> <span class="tree-muted">(aborted)</span>`;
+        if (msg.errorMessage) return labelHtml + `<span class="tree-role-assistant">assistant:</span> <span class="tree-error">${escapeHtml(truncate(msg.errorMessage))}</span>`;
+        return labelHtml + `<span class="tree-role-assistant">assistant:</span> <span class="tree-muted">(no text)</span>`;
+      }
+
+      function getTreeToolResultHtml(msg, labelHtml) {
+        const toolCall = msg.toolCallId ? toolCallMap.get(msg.toolCallId) : null;
+        if (toolCall) return labelHtml + `<span class="tree-role-tool">${escapeHtml(formatToolCall(toolCall.name, toolCall.arguments))}</span>`;
+        return labelHtml + `<span class="tree-role-tool">[${escapeHtml(msg.toolName || 'tool')}]</span>`;
+      }
+
+      const TREE_NODE_RENDERERS = {
+        compaction(entry, labelHtml) {
+          return labelHtml + `<span class="tree-compaction">[compaction: ${Math.round(entry.tokensBefore/1000)}k tokens]</span>`;
+        },
+        branch_summary(entry, labelHtml, normalize) {
+          return labelHtml + `<span class="tree-branch-summary">[branch summary]:</span> ${escapeHtml(truncate(normalize(entry.summary || '')))}`;
+        },
+        custom_message(entry, labelHtml, normalize) {
+          const content = typeof entry.content === 'string' ? entry.content : extractContent(entry.content);
+          return labelHtml + `<span class="tree-custom">[${escapeHtml(entry.customType)}]:</span> ${escapeHtml(truncate(normalize(content)))}`;
+        },
+        model_change(entry, labelHtml) {
+          return labelHtml + `<span class="tree-muted">[model: ${escapeHtml(entry.modelId)}]</span>`;
+        },
+        thinking_level_change(entry, labelHtml) {
+          return labelHtml + `<span class="tree-muted">[thinking: ${escapeHtml(entry.thinkingLevel)}]</span>`;
+        },
+      };
 
       // ============================================================
       // TREE RENDERING (DOM manipulation)
@@ -709,6 +647,63 @@
       let currentTargetId = urlTargetId || leafId;
       let treeRendered = false;
 
+      function createTreeNodeElement(flatNode, activePathIds, currentTargetId) {
+        const entry = flatNode.node.entry;
+        const isOnPath = activePathIds.has(entry.id);
+        const isTarget = entry.id === currentTargetId;
+
+        const div = document.createElement('div');
+        div.className = 'tree-node';
+        if (isOnPath) div.classList.add('in-path');
+        if (isTarget) div.classList.add('active');
+        div.dataset.id = entry.id;
+
+        const prefixSpan = document.createElement('span');
+        prefixSpan.className = 'tree-prefix';
+        prefixSpan.textContent = buildTreePrefix(flatNode);
+
+        const marker = document.createElement('span');
+        marker.className = 'tree-marker';
+        marker.textContent = isOnPath ? '\u2022' : ' ';
+
+        const contentSpan = document.createElement('span');
+        contentSpan.className = 'tree-content';
+        contentSpan.innerHTML = getTreeNodeDisplayHtml(entry, flatNode.node.label);
+
+        div.appendChild(prefixSpan);
+        div.appendChild(marker);
+        div.appendChild(contentSpan);
+        div.addEventListener('click', () => {
+          if (window.getSelection().toString()) return;
+          const newestLeafId = findNewestLeaf(entry.id);
+          navigateTo(newestLeafId, 'target', entry.id);
+        });
+
+        return div;
+      }
+
+      function renderFullTree(container, filtered, activePathIds, currentTargetId) {
+        container.innerHTML = '';
+        for (const flatNode of filtered) {
+          container.appendChild(createTreeNodeElement(flatNode, activePathIds, currentTargetId));
+        }
+      }
+
+      function updateTreeMarkers(container, activePathIds, currentTargetId) {
+        const nodes = container.querySelectorAll('.tree-node');
+        for (const node of nodes) {
+          const id = node.dataset.id;
+          const isOnPath = activePathIds.has(id);
+          const isTarget = id === currentTargetId;
+
+          node.classList.toggle('in-path', isOnPath);
+          node.classList.toggle('active', isTarget);
+
+          const marker = node.querySelector('.tree-marker');
+          if (marker) marker.textContent = isOnPath ? '\u2022' : ' ';
+        }
+      }
+
       function renderTree() {
         const tree = buildTree();
         const activePathIds = buildActivePathIds(currentLeafId);
@@ -716,74 +711,18 @@
         const filtered = filterNodes(flatNodes, currentLeafId);
         const container = document.getElementById('tree-container');
 
-        // Full render only on first call or when filter/search changes
         if (!treeRendered) {
-          container.innerHTML = '';
-
-          for (const flatNode of filtered) {
-            const entry = flatNode.node.entry;
-            const isOnPath = activePathIds.has(entry.id);
-            const isTarget = entry.id === currentTargetId;
-
-            const div = document.createElement('div');
-            div.className = 'tree-node';
-            if (isOnPath) div.classList.add('in-path');
-            if (isTarget) div.classList.add('active');
-            div.dataset.id = entry.id;
-
-            const prefix = buildTreePrefix(flatNode);
-            const prefixSpan = document.createElement('span');
-            prefixSpan.className = 'tree-prefix';
-            prefixSpan.textContent = prefix;
-
-            const marker = document.createElement('span');
-            marker.className = 'tree-marker';
-            marker.textContent = isOnPath ? '•' : ' ';
-
-            const content = document.createElement('span');
-            content.className = 'tree-content';
-            content.innerHTML = getTreeNodeDisplayHtml(entry, flatNode.node.label);
-
-            div.appendChild(prefixSpan);
-            div.appendChild(marker);
-            div.appendChild(content);
-            // Navigate to the newest leaf through this node, but scroll to the clicked node
-            div.addEventListener('click', () => {
-              if (window.getSelection().toString()) return;
-              const leafId = findNewestLeaf(entry.id);
-              navigateTo(leafId, 'target', entry.id);
-            });
-
-            container.appendChild(div);
-          }
-
+          renderFullTree(container, filtered, activePathIds, currentTargetId);
           treeRendered = true;
         } else {
-          // Just update markers and classes
-          const nodes = container.querySelectorAll('.tree-node');
-          for (const node of nodes) {
-            const id = node.dataset.id;
-            const isOnPath = activePathIds.has(id);
-            const isTarget = id === currentTargetId;
-
-            node.classList.toggle('in-path', isOnPath);
-            node.classList.toggle('active', isTarget);
-
-            const marker = node.querySelector('.tree-marker');
-            if (marker) {
-              marker.textContent = isOnPath ? '•' : ' ';
-            }
-          }
+          updateTreeMarkers(container, activePathIds, currentTargetId);
         }
 
         document.getElementById('tree-status').textContent = `${filtered.length} / ${flatNodes.length} entries`;
 
-        // Scroll active node into view after layout
         setTimeout(() => {
           const activeNode = container.querySelector('.tree-node.active');
-          if (activeNode) {
-            activeNode.scrollIntoView({ block: 'nearest' });
-          }
+          if (activeNode) activeNode.scrollIntoView({ block: 'nearest' });
         }, 0);
       }
 
@@ -905,6 +844,7 @@
         const result = findToolResult(call.id);
         const isError = result?.isError || false;
         const statusClass = result ? (isError ? 'error' : 'success') : 'pending';
+        const invalidArg = '<span class="tool-error">[invalid arg]</span>';
 
         const getResultText = () => {
           if (!result) return '';
@@ -912,13 +852,9 @@
           return textBlocks.map(c => c.text).join('\n');
         };
 
-        const getResultImages = () => {
-          if (!result) return [];
-          return result.content.filter(c => c.type === 'image');
-        };
-
         const renderResultImages = () => {
-          const images = getResultImages();
+          if (!result) return '';
+          const images = result.content.filter(c => c.type === 'image');
           if (images.length === 0) return '';
           return '<div class="tool-images">' +
             images.map(img => `<img src="data:${escapeHtml(img.mimeType || 'image/png')};base64,${escapeHtml(img.data || '')}" class="tool-image" />`).join('') +
@@ -930,135 +866,139 @@
         const args = call.arguments || {};
         const name = call.name;
 
-        const invalidArg = '<span class="tool-error">[invalid arg]</span>';
-
-        switch (name) {
-          case 'bash': {
-            const command = str(args.command);
-            const cmdDisplay = command === null ? invalidArg : escapeHtml(command || '...');
-            html += `<div class="tool-command">$ ${cmdDisplay}</div>`;
-            if (result) {
-              const output = getResultText().trim();
-              if (output) html += formatExpandableOutput(output, 5);
-            }
-            break;
-          }
-          case 'read': {
-            const filePath = str(args.file_path ?? args.path);
-            const offset = args.offset;
-            const limit = args.limit;
-
-            let pathHtml = filePath === null ? invalidArg : escapeHtml(shortenPath(filePath || ''));
-            if (filePath !== null && (offset !== undefined || limit !== undefined)) {
-              const startLine = offset ?? 1;
-              const endLine = limit !== undefined ? startLine + limit - 1 : '';
-              pathHtml += `<span class="line-numbers">:${startLine}${endLine ? '-' + endLine : ''}</span>`;
-            }
-
-            html += `<div class="tool-header"><span class="tool-name">read</span> <span class="tool-path">${pathHtml}</span></div>`;
-            if (result) {
-              html += renderResultImages();
-              const output = getResultText();
-              const lang = filePath ? getLanguageFromPath(filePath) : null;
-              if (output) html += formatExpandableOutput(output, 10, lang);
-            }
-            break;
-          }
-          case 'write': {
-            const filePath = str(args.file_path ?? args.path);
-            const content = str(args.content);
-
-            html += `<div class="tool-header"><span class="tool-name">write</span> <span class="tool-path">${filePath === null ? invalidArg : escapeHtml(shortenPath(filePath || ''))}</span>`;
-            if (content !== null && content) {
-              const lines = content.split('\n');
-              if (lines.length > 10) html += ` <span class="line-count">(${lines.length} lines)</span>`;
-            }
-            html += '</div>';
-
-            if (content === null) {
-              html += `<div class="tool-error">[invalid content arg - expected string]</div>`;
-            } else if (content) {
-              const lang = filePath ? getLanguageFromPath(filePath) : null;
-              html += formatExpandableOutput(content, 10, lang);
-            }
-            if (result) {
-              const output = getResultText().trim();
-              if (output) html += `<div class="tool-output"><div>${escapeHtml(output)}</div></div>`;
-            }
-            break;
-          }
-          case 'edit': {
-            const filePath = str(args.file_path ?? args.path);
-            html += `<div class="tool-header"><span class="tool-name">edit</span> <span class="tool-path">${filePath === null ? invalidArg : escapeHtml(shortenPath(filePath || ''))}</span></div>`;
-
-            if (result?.details?.diff) {
-              const diffLines = result.details.diff.split('\n');
-              html += '<div class="tool-diff">';
-              for (const line of diffLines) {
-                const cls = line.match(/^\+/) ? 'diff-added' : line.match(/^-/) ? 'diff-removed' : 'diff-context';
-                html += `<div class="${cls}">${escapeHtml(replaceTabs(line))}</div>`;
-              }
-              html += '</div>';
-            } else if (result) {
-              const output = getResultText().trim();
-              if (output) html += `<div class="tool-output"><pre>${escapeHtml(output)}</pre></div>`;
-            }
-            break;
-          }
-          case 'ls': {
-            const dirPath = str(args.path);
-            const limit = args.limit;
-
-            let pathHtml = dirPath === null ? invalidArg : escapeHtml(shortenPath(dirPath || '.'));
-            if (limit !== undefined) {
-              pathHtml += ` <span class="line-count">(limit ${escapeHtml(String(limit))})</span>`;
-            }
-
-            html += `<div class="tool-header"><span class="tool-name">ls</span> <span class="tool-path">${pathHtml}</span></div>`;
-            if (result) {
-              const output = getResultText().trim();
-              if (output) html += formatExpandableOutput(output, 20);
-            }
-            break;
-          }
-          default: {
-            // Check for pre-rendered custom tool HTML
-            const rendered = renderedTools?.[call.id];
-            if (rendered?.callHtml || rendered?.resultHtmlCollapsed || rendered?.resultHtmlExpanded) {
-              // Custom tool with pre-rendered HTML from TUI renderer
-              if (rendered.callHtml) {
-                html += `<div class="tool-header ansi-rendered">${rendered.callHtml}</div>`;
-              } else {
-                html += `<div class="tool-header"><span class="tool-name">${escapeHtml(name)}</span></div>`;
-              }
-
-              if (rendered.resultHtmlCollapsed && rendered.resultHtmlExpanded && rendered.resultHtmlCollapsed !== rendered.resultHtmlExpanded) {
-                // Both collapsed and expanded differ - render expandable section
-                html += `<div class="tool-output expandable ansi-rendered" onclick="if(window.getSelection().toString())return;this.classList.toggle('expanded')">
-                  <div class="output-preview">${rendered.resultHtmlCollapsed}</div>
-                  <div class="output-full">${rendered.resultHtmlExpanded}</div>
-                </div>`;
-              } else if (rendered.resultHtmlExpanded) {
-                // Only expanded exists (or collapsed is identical) - show directly
-                html += `<div class="tool-output ansi-rendered">${rendered.resultHtmlExpanded}</div>`;
-              } else if (result) {
-                // No pre-rendered result HTML - fallback to JSON
-                const output = getResultText();
-                if (output) html += formatExpandableOutput(output, 10);
-              }
-            } else {
-              // Fallback to JSON display (existing behavior)
-              html += `<div class="tool-header"><span class="tool-name">${escapeHtml(name)}</span></div>`;
-              html += `<div class="tool-output"><pre>${escapeHtml(JSON.stringify(args, null, 2))}</pre></div>`;
-              if (result) {
-                const output = getResultText();
-                if (output) html += formatExpandableOutput(output, 10);
-              }
-            }
-          }
+        const caseRenderer = TOOL_CASE_RENDERERS[name];
+        if (caseRenderer) {
+          html += caseRenderer(args, result, getResultText, renderResultImages, invalidArg);
+        } else {
+          html += renderDefaultTool(name, args, result, getResultText, call.id);
         }
 
         html += '</div>';
+        return html;
+      }
+
+      const TOOL_CASE_RENDERERS = {
+        bash(args, result, getResultText, _renderResultImages, invalidArg) {
+          const command = str(args.command);
+          const cmdDisplay = command === null ? invalidArg : escapeHtml(command || '...');
+          let html = `<div class="tool-command">$ ${cmdDisplay}</div>`;
+          if (result) {
+            const output = getResultText().trim();
+            if (output) html += formatExpandableOutput(output, 5);
+          }
+          return html;
+        },
+        read(args, result, getResultText, renderResultImages, invalidArg) {
+          const filePath = str(args.file_path ?? args.path);
+          const offset = args.offset;
+          const limit = args.limit;
+
+          let pathHtml = filePath === null ? invalidArg : escapeHtml(shortenPath(filePath || ''));
+          if (filePath !== null && (offset !== undefined || limit !== undefined)) {
+            const startLine = offset ?? 1;
+            const endLine = limit !== undefined ? startLine + limit - 1 : '';
+            pathHtml += `<span class="line-numbers">:${startLine}${endLine ? '-' + endLine : ''}</span>`;
+          }
+
+          let html = `<div class="tool-header"><span class="tool-name">read</span> <span class="tool-path">${pathHtml}</span></div>`;
+          if (result) {
+            html += renderResultImages();
+            const output = getResultText();
+            const lang = filePath ? getLanguageFromPath(filePath) : null;
+            if (output) html += formatExpandableOutput(output, 10, lang);
+          }
+          return html;
+        },
+        write(args, result, getResultText, _renderResultImages, invalidArg) {
+          const filePath = str(args.file_path ?? args.path);
+          const content = str(args.content);
+
+          let html = `<div class="tool-header"><span class="tool-name">write</span> <span class="tool-path">${filePath === null ? invalidArg : escapeHtml(shortenPath(filePath || ''))}</span>`;
+          if (content !== null && content) {
+            const lines = content.split('\n');
+            if (lines.length > 10) html += ` <span class="line-count">(${lines.length} lines)</span>`;
+          }
+          html += '</div>';
+
+          if (content === null) {
+            html += `<div class="tool-error">[invalid content arg - expected string]</div>`;
+          } else if (content) {
+            const lang = filePath ? getLanguageFromPath(filePath) : null;
+            html += formatExpandableOutput(content, 10, lang);
+          }
+          if (result) {
+            const output = getResultText().trim();
+            if (output) html += `<div class="tool-output"><div>${escapeHtml(output)}</div></div>`;
+          }
+          return html;
+        },
+        edit(args, result, getResultText, _renderResultImages, invalidArg) {
+          const filePath = str(args.file_path ?? args.path);
+          let html = `<div class="tool-header"><span class="tool-name">edit</span> <span class="tool-path">${filePath === null ? invalidArg : escapeHtml(shortenPath(filePath || ''))}</span></div>`;
+
+          if (result?.details?.diff) {
+            const diffLines = result.details.diff.split('\n');
+            html += '<div class="tool-diff">';
+            for (const line of diffLines) {
+              const cls = line.match(/^\+/) ? 'diff-added' : line.match(/^-/) ? 'diff-removed' : 'diff-context';
+              html += `<div class="${cls}">${escapeHtml(replaceTabs(line))}</div>`;
+            }
+            html += '</div>';
+          } else if (result) {
+            const output = getResultText().trim();
+            if (output) html += `<div class="tool-output"><pre>${escapeHtml(output)}</pre></div>`;
+          }
+          return html;
+        },
+        ls(args, result, getResultText, _renderResultImages, invalidArg) {
+          const dirPath = str(args.path);
+          const limit = args.limit;
+
+          let pathHtml = dirPath === null ? invalidArg : escapeHtml(shortenPath(dirPath || '.'));
+          if (limit !== undefined) {
+            pathHtml += ` <span class="line-count">(limit ${escapeHtml(String(limit))})</span>`;
+          }
+
+          let html = `<div class="tool-header"><span class="tool-name">ls</span> <span class="tool-path">${pathHtml}</span></div>`;
+          if (result) {
+            const output = getResultText().trim();
+            if (output) html += formatExpandableOutput(output, 20);
+          }
+          return html;
+        },
+      };
+
+      function renderDefaultTool(name, args, result, getResultText, callId) {
+        const rendered = renderedTools?.[callId];
+        let html = '';
+
+        if (rendered?.callHtml || rendered?.resultHtmlCollapsed || rendered?.resultHtmlExpanded) {
+          if (rendered.callHtml) {
+            html += `<div class="tool-header ansi-rendered">${rendered.callHtml}</div>`;
+          } else {
+            html += `<div class="tool-header"><span class="tool-name">${escapeHtml(name)}</span></div>`;
+          }
+
+          if (rendered.resultHtmlCollapsed && rendered.resultHtmlExpanded && rendered.resultHtmlCollapsed !== rendered.resultHtmlExpanded) {
+            html += `<div class="tool-output expandable ansi-rendered" onclick="if(window.getSelection().toString())return;this.classList.toggle('expanded')">
+              <div class="output-preview">${rendered.resultHtmlCollapsed}</div>
+              <div class="output-full">${rendered.resultHtmlExpanded}</div>
+            </div>`;
+          } else if (rendered.resultHtmlExpanded) {
+            html += `<div class="tool-output ansi-rendered">${rendered.resultHtmlExpanded}</div>`;
+          } else if (result) {
+            const output = getResultText();
+            if (output) html += formatExpandableOutput(output, 10);
+          }
+        } else {
+          html += `<div class="tool-header"><span class="tool-name">${escapeHtml(name)}</span></div>`;
+          html += `<div class="tool-output"><pre>${escapeHtml(JSON.stringify(args, null, 2))}</pre></div>`;
+          if (result) {
+            const output = getResultText();
+            if (output) html += formatExpandableOutput(output, 10);
+          }
+        }
+
         return html;
       }
 
@@ -1085,7 +1025,7 @@
         a.download = `${header?.id || 'session'}.jsonl`;
         document.body.appendChild(a);
         a.click();
-        document.body.removeChild(a);
+        document.a.remove();
         URL.revokeObjectURL(url);
       }
 
@@ -1142,7 +1082,7 @@
             document.body.appendChild(textarea);
             textarea.select();
             success = document.execCommand('copy');
-            document.body.removeChild(textarea);
+            document.textarea.remove();
           } catch (err) {
             console.error('Failed to copy:', err);
           }
@@ -1178,142 +1118,144 @@
         const copyBtnHtml = renderCopyLinkButton(entry.id);
 
         if (entry.type === 'message') {
-          const msg = entry.message;
-
-          if (msg.role === 'user') {
-            const content = msg.content;
-            const text = typeof content === 'string' ? content :
-              content.filter(c => c.type === 'text').map(c => c.text).join('\n');
-            const skillBlock = parseSkillBlock(text);
-
-            if (skillBlock) {
-              // Collect images from content array
-              const images = Array.isArray(content) ? content.filter(c => c.type === 'image') : [];
-              const hasUserContent = skillBlock.userMessage || images.length > 0;
-              let html = `<div class="skill-user-entry" id="${entryDomId}">${copyBtnHtml}${tsHtml}`;
-
-              // Skill invocation (collapsed by default, click to expand)
-              html += `<div class="skill-invocation" onclick="if(window.getSelection().toString())return;this.classList.toggle('expanded')">
-                <div class="skill-invocation-label">[skill] ${escapeHtml(skillBlock.name)}</div>
-                <div class="skill-invocation-collapsed">${escapeHtml(skillBlock.name)} (click to expand)</div>
-                <div class="skill-invocation-content markdown-content">${safeMarkedParse(skillBlock.content)}</div>
-              </div>`;
-
-              // User message (separate block if present)
-              if (hasUserContent) {
-                html += '<div class="user-message">';
-                if (images.length > 0) {
-                  html += '<div class="message-images">';
-                  for (const img of images) {
-                    html += `<img src="data:${escapeHtml(img.mimeType || 'image/png')};base64,${escapeHtml(img.data || '')}" class="message-image" />`;
-                  }
-                  html += '</div>';
-                }
-                if (skillBlock.userMessage) {
-                  html += `<div class="markdown-content">${safeMarkedParse(skillBlock.userMessage)}</div>`;
-                }
-                html += '</div>';
-              }
-
-              html += '</div>';
-              return html;
-            }
-
-            // No skill block - normal user message
-            let html = `<div class="user-message" id="${entryDomId}">${copyBtnHtml}${tsHtml}`;
-
-            if (Array.isArray(content)) {
-              const images = content.filter(c => c.type === 'image');
-              if (images.length > 0) {
-                html += '<div class="message-images">';
-                for (const img of images) {
-                  html += `<img src="data:${escapeHtml(img.mimeType || 'image/png')};base64,${escapeHtml(img.data || '')}" class="message-image" />`;
-                }
-                html += '</div>';
-              }
-            }
-
-            if (text.trim()) {
-              html += `<div class="markdown-content">${safeMarkedParse(text)}</div>`;
-            }
-            html += '</div>';
-            return html;
-          }
-
-          if (msg.role === 'assistant') {
-            let html = `<div class="assistant-message" id="${entryDomId}">${copyBtnHtml}${tsHtml}`;
-
-            for (const block of msg.content) {
-              if (block.type === 'text' && block.text.trim()) {
-                html += `<div class="assistant-text markdown-content">${safeMarkedParse(block.text)}</div>`;
-              } else if (block.type === 'thinking' && block.thinking.trim()) {
-                html += `<div class="thinking-block">
-                  <div class="thinking-text">${escapeHtml(block.thinking)}</div>
-                  <div class="thinking-collapsed">Thinking ...</div>
-                </div>`;
-              }
-            }
-
-            for (const block of msg.content) {
-              if (block.type === 'toolCall') {
-                html += renderToolCall(block);
-              }
-            }
-
-            if (msg.stopReason === 'aborted') {
-              html += '<div class="error-text">Aborted</div>';
-            } else if (msg.stopReason === 'error') {
-              html += `<div class="error-text">Error: ${escapeHtml(msg.errorMessage || 'Unknown error')}</div>`;
-            }
-
-            html += '</div>';
-            return html;
-          }
-
-          if (msg.role === 'bashExecution') {
-            const isError = msg.cancelled || (msg.exitCode !== 0 && msg.exitCode !== null);
-            let html = `<div class="tool-execution ${isError ? 'error' : 'success'}" id="${entryDomId}">${tsHtml}`;
-            html += `<div class="tool-command">$ ${escapeHtml(msg.command)}</div>`;
-            if (msg.output) html += formatExpandableOutput(msg.output, 10);
-            if (msg.cancelled) {
-              html += '<div style="color: var(--warning)">(cancelled)</div>';
-            } else if (msg.exitCode !== 0 && msg.exitCode !== null) {
-              html += `<div style="color: var(--error)">(exit ${msg.exitCode})</div>`;
-            }
-            html += '</div>';
-            return html;
-          }
-
-          if (msg.role === 'toolResult') return '';
+          return renderMessageEntry(entry.message, entryDomId, copyBtnHtml, tsHtml);
         }
-
         if (entry.type === 'model_change') {
           return `<div class="model-change" id="${entryDomId}">${tsHtml}Switched to model: <span class="model-name">${escapeHtml(entry.provider)}/${escapeHtml(entry.modelId)}</span></div>`;
         }
-
         if (entry.type === 'compaction') {
-          return `<div class="compaction" id="${entryDomId}" onclick="if(window.getSelection().toString())return;this.classList.toggle('expanded')">
-            <div class="compaction-label">[compaction]</div>
-            <div class="compaction-collapsed">Compacted from ${entry.tokensBefore.toLocaleString()} tokens</div>
-            <div class="compaction-content"><strong>Compacted from ${entry.tokensBefore.toLocaleString()} tokens</strong>\n\n${escapeHtml(entry.summary)}</div>
-          </div>`;
+          return renderCompactionEntry(entry, entryDomId, tsHtml);
         }
-
         if (entry.type === 'branch_summary') {
           return `<div class="branch-summary" id="${entryDomId}">${tsHtml}
             <div class="branch-summary-header">Branch Summary</div>
             <div class="markdown-content">${safeMarkedParse(entry.summary)}</div>
           </div>`;
         }
-
         if (entry.type === 'custom_message' && entry.display) {
           return `<div class="hook-message" id="${entryDomId}">${tsHtml}
             <div class="hook-type">[${escapeHtml(entry.customType)}]</div>
             <div class="markdown-content">${safeMarkedParse(typeof entry.content === 'string' ? entry.content : JSON.stringify(entry.content))}</div>
           </div>`;
         }
-
         return '';
+      }
+
+      function renderCompactionEntry(entry, entryDomId, tsHtml) {
+        return `<div class="compaction" id="${entryDomId}" onclick="if(window.getSelection().toString())return;this.classList.toggle('expanded')">
+            <div class="compaction-label">[compaction]</div>
+            <div class="compaction-collapsed">Compacted from ${entry.tokensBefore.toLocaleString()} tokens</div>
+            <div class="compaction-content"><strong>Compacted from ${entry.tokensBefore.toLocaleString()} tokens</strong>\n\n${escapeHtml(entry.summary)}</div>
+          </div>`;
+      }
+
+      function renderMessageEntry(msg, entryDomId, copyBtnHtml, tsHtml) {
+        if (msg.role === 'user') return renderUserMessage(msg, entryDomId, copyBtnHtml, tsHtml);
+        if (msg.role === 'assistant') return renderAssistantMessage(msg, entryDomId, copyBtnHtml, tsHtml);
+        if (msg.role === 'bashExecution') return renderBashExecutionMessage(msg, entryDomId, tsHtml);
+        if (msg.role === 'toolResult') return '';
+        return '';
+      }
+
+      function renderUserMessage(msg, entryDomId, copyBtnHtml, tsHtml) {
+        const content = msg.content;
+        const text = typeof content === 'string' ? content :
+          content.filter(c => c.type === 'text').map(c => c.text).join('\n');
+        const skillBlock = parseSkillBlock(text);
+
+        if (skillBlock) {
+          return renderSkillUserMessage(skillBlock, content, entryDomId, copyBtnHtml, tsHtml);
+        }
+
+        let html = `<div class="user-message" id="${entryDomId}">${copyBtnHtml}${tsHtml}`;
+        html += renderContentImages(content);
+        if (text.trim()) html += `<div class="markdown-content">${safeMarkedParse(text)}</div>`;
+        html += '</div>';
+        return html;
+      }
+
+      function renderContentImages(content) {
+        if (!Array.isArray(content)) return '';
+        const images = content.filter(c => c.type === 'image');
+        if (images.length === 0) return '';
+        let html = '<div class="message-images">';
+        for (const img of images) {
+          html += `<img src="data:${escapeHtml(img.mimeType || 'image/png')};base64,${escapeHtml(img.data || '')}" class="message-image" />`;
+        }
+        html += '</div>';
+        return html;
+      }
+
+      function renderSkillUserMessage(skillBlock, content, entryDomId, copyBtnHtml, tsHtml) {
+        const images = Array.isArray(content) ? content.filter(c => c.type === 'image') : [];
+        const hasUserContent = skillBlock.userMessage || images.length > 0;
+        let html = `<div class="skill-user-entry" id="${entryDomId}">${copyBtnHtml}${tsHtml}`;
+
+        html += `<div class="skill-invocation" onclick="if(window.getSelection().toString())return;this.classList.toggle('expanded')">
+          <div class="skill-invocation-label">[skill] ${escapeHtml(skillBlock.name)}</div>
+          <div class="skill-invocation-collapsed">${escapeHtml(skillBlock.name)} (click to expand)</div>
+          <div class="skill-invocation-content markdown-content">${safeMarkedParse(skillBlock.content)}</div>
+        </div>`;
+
+        if (hasUserContent) {
+          html += '<div class="user-message">';
+          if (images.length > 0) {
+            html += '<div class="message-images">';
+            for (const img of images) {
+              html += `<img src="data:${escapeHtml(img.mimeType || 'image/png')};base64,${escapeHtml(img.data || '')}" class="message-image" />`;
+            }
+            html += '</div>';
+          }
+          if (skillBlock.userMessage) {
+            html += `<div class="markdown-content">${safeMarkedParse(skillBlock.userMessage)}</div>`;
+          }
+          html += '</div>';
+        }
+
+        html += '</div>';
+        return html;
+      }
+
+      function renderAssistantMessage(msg, entryDomId, copyBtnHtml, tsHtml) {
+        let html = `<div class="assistant-message" id="${entryDomId}">${copyBtnHtml}${tsHtml}`;
+
+        for (const block of msg.content) {
+          if (block.type === 'text' && block.text.trim()) {
+            html += `<div class="assistant-text markdown-content">${safeMarkedParse(block.text)}</div>`;
+          } else if (block.type === 'thinking' && block.thinking.trim()) {
+            html += `<div class="thinking-block">
+              <div class="thinking-text">${escapeHtml(block.thinking)}</div>
+              <div class="thinking-collapsed">Thinking ...</div>
+            </div>`;
+          }
+        }
+
+        for (const block of msg.content) {
+          if (block.type === 'toolCall') html += renderToolCall(block);
+        }
+
+        if (msg.stopReason === 'aborted') {
+          html += '<div class="error-text">Aborted</div>';
+        } else if (msg.stopReason === 'error') {
+          html += `<div class="error-text">Error: ${escapeHtml(msg.errorMessage || 'Unknown error')}</div>`;
+        }
+
+        html += '</div>';
+        return html;
+      }
+
+      function renderBashExecutionMessage(msg, entryDomId, tsHtml) {
+        const isError = msg.cancelled || (msg.exitCode !== 0 && msg.exitCode !== null);
+        let html = `<div class="tool-execution ${isError ? 'error' : 'success'}" id="${entryDomId}">${tsHtml}`;
+        html += `<div class="tool-command">$ ${escapeHtml(msg.command)}</div>`;
+        if (msg.output) html += formatExpandableOutput(msg.output, 10);
+        if (msg.cancelled) {
+          html += '<div style="color: var(--warning)">(cancelled)</div>';
+        } else if (msg.exitCode !== 0 && msg.exitCode !== null) {
+          html += `<div style="color: var(--error)">(exit ${msg.exitCode})</div>`;
+        }
+        html += '</div>';
+        return html;
       }
 
       // ============================================================
@@ -1333,19 +1275,7 @@
             if (msg.role === 'user') userMessages++;
             if (msg.role === 'assistant') {
               assistantMessages++;
-              if (msg.model) models.add(msg.provider ? `${msg.provider}/${msg.model}` : msg.model);
-              if (msg.usage) {
-                tokens.input += msg.usage.input || 0;
-                tokens.output += msg.usage.output || 0;
-                tokens.cacheRead += msg.usage.cacheRead || 0;
-                tokens.cacheWrite += msg.usage.cacheWrite || 0;
-                if (msg.usage.cost) {
-                  cost.input += msg.usage.cost.input || 0;
-                  cost.output += msg.usage.cost.output || 0;
-                  cost.cacheRead += msg.usage.cost.cacheRead || 0;
-                  cost.cacheWrite += msg.usage.cost.cacheWrite || 0;
-                }
-              }
+              accumulateAssistantStats(msg, tokens, cost, models);
               toolCalls += msg.content.filter(c => c.type === 'toolCall').length;
             }
             if (msg.role === 'toolResult') toolResults++;
@@ -1361,14 +1291,29 @@
         return { userMessages, assistantMessages, toolResults, customMessages, compactions, branchSummaries, toolCalls, tokens, cost, models: Array.from(models) };
       }
 
+      function accumulateAssistantStats(msg, tokens, cost, models) {
+        if (msg.model) models.add(msg.provider ? `${msg.provider}/${msg.model}` : msg.model);
+        if (!msg.usage) return;
+        tokens.input += msg.usage.input || 0;
+        tokens.output += msg.usage.output || 0;
+        tokens.cacheRead += msg.usage.cacheRead || 0;
+        tokens.cacheWrite += msg.usage.cacheWrite || 0;
+        if (msg.usage.cost) {
+          cost.input += msg.usage.cost.input || 0;
+          cost.output += msg.usage.cost.output || 0;
+          cost.cacheRead += msg.usage.cost.cacheRead || 0;
+          cost.cacheWrite += msg.usage.cost.cacheWrite || 0;
+        }
+      }
+
       const globalStats = computeStats(entries);
 
       function renderHeader() {
         const totalCost = globalStats.cost.input + globalStats.cost.output + globalStats.cost.cacheRead + globalStats.cost.cacheWrite;
 
         const tokenParts = [];
-        if (globalStats.tokens.input) tokenParts.push(`↑${formatTokens(globalStats.tokens.input)}`);
-        if (globalStats.tokens.output) tokenParts.push(`↓${formatTokens(globalStats.tokens.output)}`);
+        if (globalStats.tokens.input) tokenParts.push(`\u2191${formatTokens(globalStats.tokens.input)}`);
+        if (globalStats.tokens.output) tokenParts.push(`\u2193${formatTokens(globalStats.tokens.output)}`);
         if (globalStats.tokens.cacheRead) tokenParts.push(`R${formatTokens(globalStats.tokens.cacheRead)}`);
         if (globalStats.tokens.cacheWrite) tokenParts.push(`W${formatTokens(globalStats.tokens.cacheWrite)}`);
 
@@ -1388,7 +1333,7 @@
               <div class="help-actions">
                 <button type="button" class="header-toggle-btn" data-action="toggle-thinking" title="Toggle thinking (T)">Toggle thinking</button>
                 <button type="button" class="header-toggle-btn" data-action="toggle-tools" title="Toggle tools (O)">Toggle tools</button>
-                <button type="button" class="download-json-btn" onclick="downloadSessionJson()" title="Download session as JSONL">↓ JSONL</button>
+                <button type="button" class="download-json-btn" onclick="downloadSessionJson()" title="Download session as JSONL">\u2193 JSONL</button>
               </div>
             </div>
             <div class="header-info">
@@ -1401,56 +1346,60 @@
             </div>
           </div>`;
 
-        // Render system prompt (user's base prompt, applies to all providers)
-        if (systemPrompt) {
-          const lines = systemPrompt.split('\n');
-          const previewLines = 10;
-          if (lines.length > previewLines) {
-            const preview = lines.slice(0, previewLines).join('\n');
-            const remaining = lines.length - previewLines;
-            html += `<div class="system-prompt expandable" onclick="if(window.getSelection().toString())return;this.classList.toggle('expanded')">
+        html += renderSystemPromptSection();
+        html += renderToolsSection();
+
+        return html;
+      }
+
+      function renderSystemPromptSection() {
+        if (!systemPrompt) return '';
+        const lines = systemPrompt.split('\n');
+        const previewLines = 10;
+        if (lines.length > previewLines) {
+          const preview = lines.slice(0, previewLines).join('\n');
+          const remaining = lines.length - previewLines;
+          return `<div class="system-prompt expandable" onclick="if(window.getSelection().toString())return;this.classList.toggle('expanded')">
               <div class="system-prompt-header">System Prompt</div>
               <div class="system-prompt-preview">${escapeHtml(preview)}</div>
               <div class="system-prompt-expand-hint">... (${remaining} more lines, click to expand)</div>
               <div class="system-prompt-full">${escapeHtml(systemPrompt)}</div>
             </div>`;
-          } else {
-            html += `<div class="system-prompt">
+        }
+        return `<div class="system-prompt">
               <div class="system-prompt-header">System Prompt</div>
               <div class="system-prompt-full" style="display: block">${escapeHtml(systemPrompt)}</div>
             </div>`;
-          }
-        }
+      }
 
-        if (tools && tools.length > 0) {
-          html += `<div class="tools-list">
+      function renderToolsSection() {
+        if (!tools?.length) return '';
+        return `<div class="tools-list">
             <div class="tools-header">Available Tools</div>
             <div class="tools-content">
-              ${tools.map(t => {
-                const hasParams = t.parameters && typeof t.parameters === 'object' && t.parameters.properties && Object.keys(t.parameters.properties).length > 0;
-                if (!hasParams) {
-                  return `<div class="tool-item"><span class="tool-item-name">${escapeHtml(t.name)}</span> - <span class="tool-item-desc">${escapeHtml(t.description)}</span></div>`;
-                }
-                const params = t.parameters;
-                const properties = params.properties;
-                const required = params.required || [];
-                let paramsHtml = '';
-                for (const [name, prop] of Object.entries(properties)) {
-                  const isRequired = required.includes(name);
-                  const typeStr = prop.type || 'any';
-                  const reqLabel = isRequired ? '<span class="tool-param-required">required</span>' : '<span class="tool-param-optional">optional</span>';
-                  paramsHtml += `<div class="tool-param"><span class="tool-param-name">${escapeHtml(name)}</span> <span class="tool-param-type">${escapeHtml(typeStr)}</span> ${reqLabel}`;
-                  if (prop.description) {
-                    paramsHtml += `<div class="tool-param-desc">${escapeHtml(prop.description)}</div>`;
-                  }
-                  paramsHtml += `</div>`;
-                }
-                return `<div class="tool-item" onclick="if(window.getSelection().toString())return;this.classList.toggle('params-expanded')"><span class="tool-item-name">${escapeHtml(t.name)}</span> - <span class="tool-item-desc">${escapeHtml(t.description)}</span> <span class="tool-params-hint"></span><div class="tool-params-content">${paramsHtml}</div></div>`;
-              }).join('')}
+              ${tools.map(renderToolListItem).join('')}
             </div>
           </div>`;
-        }
+      }
 
+      function renderToolListItem(t) {
+        const hasParams = t.parameters && typeof t.parameters === 'object' && t.parameters.properties && Object.keys(t.parameters.properties).length > 0;
+        if (!hasParams) {
+          return `<div class="tool-item"><span class="tool-item-name">${escapeHtml(t.name)}</span> - <span class="tool-item-desc">${escapeHtml(t.description)}</span></div>`;
+        }
+        return `<div class="tool-item" onclick="if(window.getSelection().toString())return;this.classList.toggle('params-expanded')"><span class="tool-item-name">${escapeHtml(t.name)}</span> - <span class="tool-item-desc">${escapeHtml(t.description)}</span> <span class="tool-params-hint"></span><div class="tool-params-content">${renderToolParams(t.parameters)}</div></div>`;
+      }
+
+      function renderToolParams(params) {
+        const properties = params.properties;
+        const required = params.required || [];
+        let html = '';
+        for (const [name, prop] of Object.entries(properties)) {
+          const reqLabel = required.includes(name) ? '<span class="tool-param-required">required</span>' : '<span class="tool-param-optional">optional</span>';
+          html += `<div class="tool-param"><span class="tool-param-name">${escapeHtml(name)}</span> <span class="tool-param-type">${escapeHtml(prop.type || 'any')}</span> ${reqLabel}`;
+          if (prop.description) html += `<div class="tool-param-desc">${escapeHtml(prop.description)}</div>`;
+          html += `</div>`;
+        }
         return html;
       }
 

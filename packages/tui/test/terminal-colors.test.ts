@@ -5,8 +5,8 @@ import { type Component, parseOsc11BackgroundColor, type Terminal, TUI } from ".
 class TestTerminal implements Terminal {
 	private inputHandler?: (data: string) => void;
 	private resizeHandler?: () => void;
-	private readonly columnCount: number;
-	private readonly rowCount: number;
+	private columnCount: number;
+	private rowCount: number;
 	readonly writes: string[] = [];
 
 	constructor(columnCount = 80, rowCount = 24) {

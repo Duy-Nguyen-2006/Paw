@@ -131,7 +131,6 @@ export function matchSession(session: SessionInfo, parsed: ParsedSearchQuery): M
 
 	let totalScore = 0;
 	let normalizedText: string | null = null;
-
 	for (const token of parsed.tokens) {
 		if (token.kind === "phrase") {
 			if (normalizedText === null) {

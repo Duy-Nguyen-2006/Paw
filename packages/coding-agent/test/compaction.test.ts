@@ -1,8 +1,8 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage, Usage } from "@earendil-works/pi-ai";
 import { getModel } from "@earendil-works/pi-ai";
-import { readFileSync } from "fs";
-import { join } from "path";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
 	type CompactionSettings,
@@ -68,7 +68,6 @@ function createAssistantMessage(text: string, usage?: Usage): AssistantMessage {
 
 let entryCounter = 0;
 let lastId: string | null = null;
-
 function resetEntryCounter() {
 	entryCounter = 0;
 	lastId = null;

@@ -330,125 +330,130 @@ export class DefaultResourceLoader implements ResourceLoader {
 		return this.loadCurrentExtensionSet({ includeInlineFactories: true });
 	}
 
-	async reload(options?: ResourceLoaderReloadOptions): Promise<void> {
-		let preTrustExtensions: LoadExtensionsResult | undefined;
-		if (options?.resolveProjectTrust) {
-			preTrustExtensions = await this.loadProjectTrustExtensions();
-			const projectTrusted = await options.resolveProjectTrust({ extensionsResult: preTrustExtensions });
-			this.settingsManager.setProjectTrusted(projectTrusted);
-		}
-
-		// reload() preserves SettingsManager.projectTrusted and reloads settings for that trust state.
-		await this.settingsManager.reload();
-		const resolvedPaths = await this.packageManager.resolve();
-		const cliExtensionPaths = await this.packageManager.resolveExtensionSources(this.additionalExtensionPaths, {
-			temporary: true,
-		});
-		const metadataByPath = new Map<string, PathMetadata>();
-
+	private resetExtensionSourceInfoMaps(): void {
 		this.extensionSkillSourceInfos = new Map();
 		this.extensionPromptSourceInfos = new Map();
 		this.extensionThemeSourceInfos = new Map();
+	}
 
-		// Helper to extract enabled paths and store metadata
-		const getEnabledResources = (resources: ResolvedResource[]): ResolvedResource[] => {
-			for (const r of resources) {
-				if (!metadataByPath.has(r.path)) {
-					metadataByPath.set(r.path, r.metadata);
-				}
-			}
-			return resources.filter((r) => r.enabled);
-		};
-
-		const getEnabledPaths = (resources: ResolvedResource[]): string[] =>
-			getEnabledResources(resources).map((r) => r.path);
-		const enabledExtensions = getEnabledPaths(resolvedPaths.extensions);
-		const enabledSkillResources = getEnabledResources(resolvedPaths.skills);
-		const enabledPrompts = getEnabledPaths(resolvedPaths.prompts);
-		const enabledThemes = getEnabledPaths(resolvedPaths.themes);
-
-		const enabledSkills = enabledSkillResources.map((resource) => this.mapSkillPath(resource, metadataByPath));
-
-		// Add CLI paths metadata
-		for (const r of cliExtensionPaths.extensions) {
-			if (!metadataByPath.has(r.path)) {
-				metadataByPath.set(r.path, { source: "cli", scope: "temporary", origin: "top-level" });
+	private storeResourceMetadata(metadataByPath: Map<string, PathMetadata>, resources: ResolvedResource[]): void {
+		for (const resource of resources) {
+			if (!metadataByPath.has(resource.path)) {
+				metadataByPath.set(resource.path, resource.metadata);
 			}
 		}
-		for (const r of cliExtensionPaths.skills) {
-			if (!metadataByPath.has(r.path)) {
-				metadataByPath.set(r.path, { source: "cli", scope: "temporary", origin: "top-level" });
+	}
+
+	private getEnabledResources(
+		metadataByPath: Map<string, PathMetadata>,
+		resources: ResolvedResource[],
+	): ResolvedResource[] {
+		this.storeResourceMetadata(metadataByPath, resources);
+		return resources.filter((resource) => resource.enabled);
+	}
+
+	private getEnabledPaths(metadataByPath: Map<string, PathMetadata>, resources: ResolvedResource[]): string[] {
+		return this.getEnabledResources(metadataByPath, resources).map((resource) => resource.path);
+	}
+
+	private addCliMetadata(metadataByPath: Map<string, PathMetadata>, resources: ResolvedResource[]): void {
+		for (const resource of resources) {
+			if (!metadataByPath.has(resource.path)) {
+				metadataByPath.set(resource.path, { source: "cli", scope: "temporary", origin: "top-level" });
 			}
 		}
+	}
 
-		const cliEnabledExtensions = getEnabledPaths(cliExtensionPaths.extensions);
-		const cliEnabledSkills = getEnabledPaths(cliExtensionPaths.skills);
-		const cliEnabledPrompts = getEnabledPaths(cliExtensionPaths.prompts);
-		const cliEnabledThemes = getEnabledPaths(cliExtensionPaths.themes);
+	private validateLocalPaths(paths: string[], diagnostics: ResourceDiagnostic[], message: string): void {
+		for (const path of paths) {
+			if (!isLocalPath(path)) continue;
+			const resolved = this.resolveResourcePath(path);
+			if (!existsSync(resolved) && !diagnostics.some((diagnostic) => diagnostic.path === resolved)) {
+				diagnostics.push({ type: "error", message, path: resolved });
+			}
+		}
+	}
 
+	private async reloadExtensions(
+		metadataByPath: Map<string, PathMetadata>,
+		resolvedPaths: Awaited<ReturnType<DefaultPackageManager["resolve"]>>,
+		cliExtensionPaths: Awaited<ReturnType<DefaultPackageManager["resolveExtensionSources"]>>,
+		preTrustExtensions: LoadExtensionsResult | undefined,
+	): Promise<void> {
+		const enabledExtensions = this.getEnabledPaths(metadataByPath, resolvedPaths.extensions);
+		this.addCliMetadata(metadataByPath, cliExtensionPaths.extensions);
+		const cliEnabledExtensions = this.getEnabledPaths(metadataByPath, cliExtensionPaths.extensions);
 		const extensionPaths = this.noExtensions
 			? cliEnabledExtensions
 			: this.mergePaths(cliEnabledExtensions, enabledExtensions);
 
 		const extensionsResult = await this.loadFinalExtensionSet(extensionPaths, preTrustExtensions);
-		for (const p of this.additionalExtensionPaths) {
-			if (isLocalPath(p)) {
-				const resolved = this.resolveResourcePath(p);
-				if (!existsSync(resolved)) {
-					extensionsResult.errors.push({ path: resolved, error: `Extension path does not exist: ${resolved}` });
-				}
+		for (const path of this.additionalExtensionPaths) {
+			if (!isLocalPath(path)) continue;
+			const resolved = this.resolveResourcePath(path);
+			if (!existsSync(resolved)) {
+				extensionsResult.errors.push({ path: resolved, error: `Extension path does not exist: ${resolved}` });
 			}
 		}
 		this.extensionsResult = this.extensionsOverride ? this.extensionsOverride(extensionsResult) : extensionsResult;
 		this.applyExtensionSourceInfo(this.extensionsResult.extensions, metadataByPath);
+	}
 
+	private reloadSkills(
+		metadataByPath: Map<string, PathMetadata>,
+		resolvedPaths: Awaited<ReturnType<DefaultPackageManager["resolve"]>>,
+		cliExtensionPaths: Awaited<ReturnType<DefaultPackageManager["resolveExtensionSources"]>>,
+	): void {
+		const enabledSkillResources = this.getEnabledResources(metadataByPath, resolvedPaths.skills);
+		const enabledSkills = enabledSkillResources.map((resource) => this.mapSkillPath(resource, metadataByPath));
+		this.addCliMetadata(metadataByPath, cliExtensionPaths.skills);
+		const cliEnabledSkills = this.getEnabledPaths(metadataByPath, cliExtensionPaths.skills);
 		const skillPaths = this.noSkills
 			? this.mergePaths(cliEnabledSkills, this.additionalSkillPaths)
 			: this.mergePaths([...cliEnabledSkills, ...enabledSkills], this.additionalSkillPaths);
 
 		this.lastSkillPaths = skillPaths;
 		this.updateSkillsFromPaths(skillPaths, metadataByPath);
-		for (const p of this.additionalSkillPaths) {
-			if (isLocalPath(p)) {
-				const resolved = this.resolveResourcePath(p);
-				if (!existsSync(resolved) && !this.skillDiagnostics.some((d) => d.path === resolved)) {
-					this.skillDiagnostics.push({ type: "error", message: "Skill path does not exist", path: resolved });
-				}
-			}
-		}
+		this.validateLocalPaths(this.additionalSkillPaths, this.skillDiagnostics, "Skill path does not exist");
+	}
 
+	private reloadPrompts(
+		metadataByPath: Map<string, PathMetadata>,
+		resolvedPaths: Awaited<ReturnType<DefaultPackageManager["resolve"]>>,
+		cliExtensionPaths: Awaited<ReturnType<DefaultPackageManager["resolveExtensionSources"]>>,
+	): void {
+		const enabledPrompts = this.getEnabledPaths(metadataByPath, resolvedPaths.prompts);
+		const cliEnabledPrompts = this.getEnabledPaths(metadataByPath, cliExtensionPaths.prompts);
 		const promptPaths = this.noPromptTemplates
 			? this.mergePaths(cliEnabledPrompts, this.additionalPromptTemplatePaths)
 			: this.mergePaths([...cliEnabledPrompts, ...enabledPrompts], this.additionalPromptTemplatePaths);
 
 		this.lastPromptPaths = promptPaths;
 		this.updatePromptsFromPaths(promptPaths, metadataByPath);
-		for (const p of this.additionalPromptTemplatePaths) {
-			if (isLocalPath(p)) {
-				const resolved = this.resolveResourcePath(p);
-				if (!existsSync(resolved) && !this.promptDiagnostics.some((d) => d.path === resolved)) {
-					this.promptDiagnostics.push({
-						type: "error",
-						message: "Prompt template path does not exist",
-						path: resolved,
-					});
-				}
-			}
-		}
+		this.validateLocalPaths(
+			this.additionalPromptTemplatePaths,
+			this.promptDiagnostics,
+			"Prompt template path does not exist",
+		);
+	}
 
+	private reloadThemes(
+		metadataByPath: Map<string, PathMetadata>,
+		resolvedPaths: Awaited<ReturnType<DefaultPackageManager["resolve"]>>,
+		cliExtensionPaths: Awaited<ReturnType<DefaultPackageManager["resolveExtensionSources"]>>,
+	): void {
+		const enabledThemes = this.getEnabledPaths(metadataByPath, resolvedPaths.themes);
+		const cliEnabledThemes = this.getEnabledPaths(metadataByPath, cliExtensionPaths.themes);
 		const themePaths = this.noThemes
 			? this.mergePaths(cliEnabledThemes, this.additionalThemePaths)
 			: this.mergePaths([...cliEnabledThemes, ...enabledThemes], this.additionalThemePaths);
 
 		this.lastThemePaths = themePaths;
 		this.updateThemesFromPaths(themePaths, metadataByPath);
-		for (const p of this.additionalThemePaths) {
-			const resolved = this.resolveResourcePath(p);
-			if (!existsSync(resolved) && !this.themeDiagnostics.some((d) => d.path === resolved)) {
-				this.themeDiagnostics.push({ type: "error", message: "Theme path does not exist", path: resolved });
-			}
-		}
+		this.validateLocalPaths(this.additionalThemePaths, this.themeDiagnostics, "Theme path does not exist");
+	}
 
+	private reloadAgentsFilesAndPrompts(): void {
 		const agentsFiles = {
 			agentsFiles: this.noContextFiles
 				? []
@@ -470,11 +475,34 @@ export class DefaultResourceLoader implements ResourceLoader {
 			this.appendSystemPromptSource ??
 			(this.discoverAppendSystemPromptFile() ? [this.discoverAppendSystemPromptFile()!] : []);
 		const baseAppend = appendSources
-			.map((s) => resolvePromptInput(s, "append system prompt"))
-			.filter((s): s is string => s !== undefined);
+			.map((source) => resolvePromptInput(source, "append system prompt"))
+			.filter((source): source is string => source !== undefined);
 		this.appendSystemPrompt = this.appendSystemPromptOverride
 			? this.appendSystemPromptOverride(baseAppend)
 			: baseAppend;
+	}
+
+	async reload(options?: ResourceLoaderReloadOptions): Promise<void> {
+		let preTrustExtensions: LoadExtensionsResult | undefined;
+		if (options?.resolveProjectTrust) {
+			preTrustExtensions = await this.loadProjectTrustExtensions();
+			const projectTrusted = await options.resolveProjectTrust({ extensionsResult: preTrustExtensions });
+			this.settingsManager.setProjectTrusted(projectTrusted);
+		}
+
+		await this.settingsManager.reload();
+		const resolvedPaths = await this.packageManager.resolve();
+		const cliExtensionPaths = await this.packageManager.resolveExtensionSources(this.additionalExtensionPaths, {
+			temporary: true,
+		});
+		const metadataByPath = new Map<string, PathMetadata>();
+		this.resetExtensionSourceInfoMaps();
+
+		await this.reloadExtensions(metadataByPath, resolvedPaths, cliExtensionPaths, preTrustExtensions);
+		this.reloadSkills(metadataByPath, resolvedPaths, cliExtensionPaths);
+		this.reloadPrompts(metadataByPath, resolvedPaths, cliExtensionPaths);
+		this.reloadThemes(metadataByPath, resolvedPaths, cliExtensionPaths);
+		this.reloadAgentsFilesAndPrompts();
 	}
 
 	private async loadCurrentExtensionSet(options: { includeInlineFactories: boolean }): Promise<LoadExtensionsResult> {
@@ -683,6 +711,29 @@ export class DefaultResourceLoader implements ResourceLoader {
 		}
 	}
 
+	private pathMatchesPrefix(normalizedResourcePath: string, normalizedSourcePath: string): boolean {
+		return (
+			normalizedResourcePath === normalizedSourcePath ||
+			normalizedResourcePath.startsWith(`${normalizedSourcePath}${sep}`)
+		);
+	}
+
+	private findSourceInfoInMap(
+		resourcePath: string,
+		normalizedResourcePath: string,
+		sourceInfos: Map<string, SourceInfo | PathMetadata>,
+		useMetadata: boolean,
+	): SourceInfo | undefined {
+		for (const [sourcePath, value] of sourceInfos.entries()) {
+			const normalizedSourcePath = resolve(sourcePath);
+			if (!this.pathMatchesPrefix(normalizedResourcePath, normalizedSourcePath)) {
+				continue;
+			}
+			return useMetadata ? createSourceInfo(resourcePath, value) : { ...(value as SourceInfo), path: resourcePath };
+		}
+		return undefined;
+	}
+
 	private findSourceInfoForPath(
 		resourcePath: string,
 		extraSourceInfos?: Map<string, SourceInfo>,
@@ -698,15 +749,8 @@ export class DefaultResourceLoader implements ResourceLoader {
 
 		const normalizedResourcePath = resolve(resourcePath);
 		if (extraSourceInfos) {
-			for (const [sourcePath, sourceInfo] of extraSourceInfos.entries()) {
-				const normalizedSourcePath = resolve(sourcePath);
-				if (
-					normalizedResourcePath === normalizedSourcePath ||
-					normalizedResourcePath.startsWith(`${normalizedSourcePath}${sep}`)
-				) {
-					return { ...sourceInfo, path: resourcePath };
-				}
-			}
+			const fromExtra = this.findSourceInfoInMap(resourcePath, normalizedResourcePath, extraSourceInfos, false);
+			if (fromExtra) return fromExtra;
 		}
 
 		if (metadataByPath) {
@@ -714,16 +758,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 			if (exact) {
 				return createSourceInfo(resourcePath, exact);
 			}
-
-			for (const [sourcePath, metadata] of metadataByPath.entries()) {
-				const normalizedSourcePath = resolve(sourcePath);
-				if (
-					normalizedResourcePath === normalizedSourcePath ||
-					normalizedResourcePath.startsWith(`${normalizedSourcePath}${sep}`)
-				) {
-					return createSourceInfo(resourcePath, metadata);
-				}
-			}
+			return this.findSourceInfoInMap(resourcePath, normalizedResourcePath, metadataByPath, true);
 		}
 
 		return undefined;
@@ -793,6 +828,36 @@ export class DefaultResourceLoader implements ResourceLoader {
 		return resolvePath(p, this.cwd, { trim: true });
 	}
 
+	private loadDefaultThemeDirs(themes: Theme[], diagnostics: ResourceDiagnostic[]): void {
+		const defaultDirs = [join(this.agentDir, "themes"), join(this.cwd, CONFIG_DIR_NAME, "themes")];
+		for (const dir of defaultDirs) {
+			this.loadThemesFromDir(dir, themes, diagnostics);
+		}
+	}
+
+	private loadThemeFromResolvedPath(resolved: string, themes: Theme[], diagnostics: ResourceDiagnostic[]): void {
+		if (!existsSync(resolved)) {
+			diagnostics.push({ type: "warning", message: "theme path does not exist", path: resolved });
+			return;
+		}
+
+		try {
+			const stats = statSync(resolved);
+			if (stats.isDirectory()) {
+				this.loadThemesFromDir(resolved, themes, diagnostics);
+				return;
+			}
+			if (stats.isFile() && resolved.endsWith(".json")) {
+				this.loadThemeFromFile(resolved, themes, diagnostics);
+				return;
+			}
+			diagnostics.push({ type: "warning", message: "theme path is not a json file", path: resolved });
+		} catch (error) {
+			const message = error instanceof Error ? error.message : "failed to read theme path";
+			diagnostics.push({ type: "warning", message, path: resolved });
+		}
+	}
+
 	private loadThemes(
 		paths: string[],
 		includeDefaults: boolean = true,
@@ -803,33 +868,11 @@ export class DefaultResourceLoader implements ResourceLoader {
 		const themes: Theme[] = [];
 		const diagnostics: ResourceDiagnostic[] = [];
 		if (includeDefaults) {
-			const defaultDirs = [join(this.agentDir, "themes"), join(this.cwd, CONFIG_DIR_NAME, "themes")];
-
-			for (const dir of defaultDirs) {
-				this.loadThemesFromDir(dir, themes, diagnostics);
-			}
+			this.loadDefaultThemeDirs(themes, diagnostics);
 		}
 
-		for (const p of paths) {
-			const resolved = this.resolveResourcePath(p);
-			if (!existsSync(resolved)) {
-				diagnostics.push({ type: "warning", message: "theme path does not exist", path: resolved });
-				continue;
-			}
-
-			try {
-				const stats = statSync(resolved);
-				if (stats.isDirectory()) {
-					this.loadThemesFromDir(resolved, themes, diagnostics);
-				} else if (stats.isFile() && resolved.endsWith(".json")) {
-					this.loadThemeFromFile(resolved, themes, diagnostics);
-				} else {
-					diagnostics.push({ type: "warning", message: "theme path is not a json file", path: resolved });
-				}
-			} catch (error) {
-				const message = error instanceof Error ? error.message : "failed to read theme path";
-				diagnostics.push({ type: "warning", message, path: resolved });
-			}
+		for (const path of paths) {
+			this.loadThemeFromResolvedPath(this.resolveResourcePath(path), themes, diagnostics);
 		}
 
 		return { themes, diagnostics };

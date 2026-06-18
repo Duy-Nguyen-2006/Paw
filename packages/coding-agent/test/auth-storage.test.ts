@@ -31,7 +31,7 @@ describe("AuthStorage", () => {
 	}
 
 	function toShPath(value: string): string {
-		return value.replace(/\\/g, "/").replace(/"/g, '\\"');
+		return value.replaceAll("\\", "/").replace(/"/g, '\\"');
 	}
 
 	describe("API key resolution", () => {
@@ -313,7 +313,7 @@ describe("AuthStorage", () => {
 				await authStorage.getApiKey("anthropic");
 
 				// Command should have only run once
-				const count = parseInt(readFileSync(counterFile, "utf-8").trim(), 10);
+				const count = Number.parseInt(readFileSync(counterFile, "utf-8").trim(), 10);
 				expect(count).toBe(1);
 			});
 
@@ -335,7 +335,7 @@ describe("AuthStorage", () => {
 				await storage2.getApiKey("anthropic");
 
 				// Command should still have only run once
-				const count = parseInt(readFileSync(counterFile, "utf-8").trim(), 10);
+				const count = Number.parseInt(readFileSync(counterFile, "utf-8").trim(), 10);
 				expect(count).toBe(1);
 			});
 
@@ -357,7 +357,7 @@ describe("AuthStorage", () => {
 				await authStorage.getApiKey("anthropic");
 
 				// Command should have run twice
-				const count = parseInt(readFileSync(counterFile, "utf-8").trim(), 10);
+				const count = Number.parseInt(readFileSync(counterFile, "utf-8").trim(), 10);
 				expect(count).toBe(2);
 			});
 
@@ -396,7 +396,7 @@ describe("AuthStorage", () => {
 				expect(key2).toBeUndefined();
 
 				// Command should have only run once despite failures
-				const count = parseInt(readFileSync(counterFile, "utf-8").trim(), 10);
+				const count = Number.parseInt(readFileSync(counterFile, "utf-8").trim(), 10);
 				expect(count).toBe(1);
 			});
 

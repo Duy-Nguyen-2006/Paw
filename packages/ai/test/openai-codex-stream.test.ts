@@ -1002,7 +1002,7 @@ describe("openai-codex streaming", () => {
 		vi.stubGlobal("fetch", fetchMock);
 
 		class MockWebSocket {
-			private listeners = new Map<string, Set<(event: unknown) => void>>();
+			private readonly listeners = new Map<string, Set<(event: unknown) => void>>();
 
 			constructor(_url: string, protocols?: string | string[] | { headers?: Record<string, string> }) {
 				if (protocols && typeof protocols === "object" && !Array.isArray(protocols)) {
@@ -1133,7 +1133,7 @@ describe("openai-codex streaming", () => {
 		vi.stubGlobal("fetch", fetchMock);
 
 		class MockWebSocket {
-			private listeners = new Map<string, Set<(event: unknown) => void>>();
+			private readonly listeners = new Map<string, Set<(event: unknown) => void>>();
 
 			addEventListener(type: string, listener: (event: unknown) => void): void {
 				let listeners = this.listeners.get(type);
@@ -1223,7 +1223,7 @@ describe("openai-codex streaming", () => {
 		class MockWebSocket {
 			static OPEN = 1;
 			readyState = MockWebSocket.OPEN;
-			private listeners = new Map<string, Set<(event: unknown) => void>>();
+			private readonly listeners = new Map<string, Set<(event: unknown) => void>>();
 
 			constructor(_url: string, _protocols?: string | string[] | { headers?: Record<string, string> }) {
 				queueMicrotask(() => this.dispatch("open", {}));
@@ -1307,7 +1307,7 @@ describe("openai-codex streaming", () => {
 		class MockWebSocket {
 			static OPEN = 1;
 			readyState = MockWebSocket.OPEN;
-			private listeners = new Map<string, Set<(event: unknown) => void>>();
+			private readonly listeners = new Map<string, Set<(event: unknown) => void>>();
 
 			constructor(_url: string, _protocols?: string | string[] | { headers?: Record<string, string> }) {
 				queueMicrotask(() => this.dispatch("open", {}));
@@ -1393,7 +1393,7 @@ describe("openai-codex streaming", () => {
 		class MockWebSocket {
 			static OPEN = 1;
 			readyState = MockWebSocket.OPEN;
-			private listeners = new Map<string, Set<(event: unknown) => void>>();
+			private readonly listeners = new Map<string, Set<(event: unknown) => void>>();
 
 			constructor(_url: string, _protocols?: string | string[] | { headers?: Record<string, string> }) {
 				queueMicrotask(() => this.dispatch("open", {}));

@@ -7,7 +7,7 @@ import { executeBashWithOperations } from "../src/core/bash-executor.ts";
 import { createBashTool, createLocalBashOperations } from "../src/core/tools/bash.ts";
 
 function toBashSingleQuotedArg(value: string): string {
-	return `'${value.replace(/\\/g, "/").replace(/'/g, `'"'"'`)}'`;
+	return `'${value.replaceAll("\\", "/").replace(/'/g, `'"'"'`)}'`;
 }
 
 function createInheritedStdioCommand(pidFile: string): string {

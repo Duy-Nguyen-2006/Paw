@@ -50,7 +50,7 @@ function shouldProxyHostname(hostname: string, port: number): boolean {
 			return true;
 		}
 
-		const parsedProxy = proxy.match(/^(.+):(\d+)$/);
+		const parsedProxy = /^(.+):(\d+)$/.exec(proxy);
 		let proxyHostname = parsedProxy ? parsedProxy[1] : proxy;
 		const proxyPort = parsedProxy ? Number.parseInt(parsedProxy[2]!, 10) : 0;
 		if (proxyPort && proxyPort !== port) {

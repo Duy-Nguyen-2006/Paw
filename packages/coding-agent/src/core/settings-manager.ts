@@ -1,11 +1,14 @@
+import { randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import type { Transport } from "@earendil-works/pi-ai";
-import { randomUUID } from "crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
-import { dirname, join } from "path";
 import lockfile from "proper-lockfile";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.ts";
 import { normalizePath, resolvePath } from "../utils/paths.ts";
 import { DEFAULT_HTTP_IDLE_TIMEOUT_MS, parseHttpIdleTimeoutMs } from "./http-dispatcher.ts";
+
+export type DoubleEscapeAction = "fork" | "tree" | "none";
+export type TreeFilterMode = "default" | "no-tools" | "user-only" | "labeled-only" | "all";
 
 export interface CompactionSettings {
 	enabled?: boolean; // default: true
@@ -108,8 +111,8 @@ export interface Settings {
 	terminal?: TerminalSettings;
 	images?: ImageSettings;
 	enabledModels?: string[]; // Model patterns for cycling (same format as --models CLI flag)
-	doubleEscapeAction?: "fork" | "tree" | "none"; // Action for double-escape with empty editor (default: "tree")
-	treeFilterMode?: "default" | "no-tools" | "user-only" | "labeled-only" | "all"; // Default filter when opening /tree
+	doubleEscapeAction?: DoubleEscapeAction; // Action for double-escape with empty editor (default: "tree")
+	treeFilterMode?: TreeFilterMode; // Default filter when opening /tree
 	thinkingBudgets?: ThinkingBudgetsSettings; // Custom token budgets for thinking levels
 	editorPaddingX?: number; // Horizontal padding for input editor (default: 0)
 	autocompleteMaxVisible?: number; // Max visible items in autocomplete dropdown (default: 5)
@@ -152,13 +155,80 @@ function deepMergeSettings(base: Settings, overrides: Settings): Settings {
 	return result;
 }
 
+function migrateQueueModeToSteeringMode(settings: Record<string, unknown>): void {
+	if ("queueMode" in settings && !("steeringMode" in settings)) {
+		settings.steeringMode = settings.queueMode;
+		delete settings.queueMode;
+	}
+}
+
+function migrateWebsocketsToTransport(settings: Record<string, unknown>): void {
+	if (!("transport" in settings) && typeof settings.websockets === "boolean") {
+		settings.transport = settings.websockets ? "websocket" : "sse";
+		delete settings.websockets;
+	}
+}
+
+function migrateSkillsObjectFormat(settings: Record<string, unknown>): void {
+	if (
+		!("skills" in settings) ||
+		typeof settings.skills !== "object" ||
+		settings.skills === null ||
+		Array.isArray(settings.skills)
+	) {
+		return;
+	}
+
+	const skillsSettings = settings.skills as {
+		enableSkillCommands?: boolean;
+		customDirectories?: unknown;
+	};
+	if (skillsSettings.enableSkillCommands !== undefined && settings.enableSkillCommands === undefined) {
+		settings.enableSkillCommands = skillsSettings.enableSkillCommands;
+	}
+	if (Array.isArray(skillsSettings.customDirectories) && skillsSettings.customDirectories.length > 0) {
+		settings.skills = skillsSettings.customDirectories;
+	} else {
+		delete settings.skills;
+	}
+}
+
+function migrateRetryMaxDelayMs(settings: Record<string, unknown>): void {
+	if (
+		!("retry" in settings) ||
+		typeof settings.retry !== "object" ||
+		settings.retry === null ||
+		Array.isArray(settings.retry)
+	) {
+		return;
+	}
+
+	const retrySettings = settings.retry as Record<string, unknown>;
+	const providerSettings =
+		typeof retrySettings.provider === "object" && retrySettings.provider !== null
+			? (retrySettings.provider as Record<string, unknown>)
+			: undefined;
+	if (
+		typeof retrySettings.maxDelayMs === "number" &&
+		(providerSettings?.maxRetryDelayMs === undefined || providerSettings?.maxRetryDelayMs === null)
+	) {
+		retrySettings.provider = {
+			...providerSettings,
+			maxRetryDelayMs: retrySettings.maxDelayMs,
+		};
+	}
+	delete retrySettings.maxDelayMs;
+}
+
 function parseTimeoutSetting(value: unknown, settingName: string): number | undefined {
 	const timeoutMs = parseHttpIdleTimeoutMs(value);
 	if (timeoutMs !== undefined) {
 		return timeoutMs;
 	}
 	if (value !== undefined) {
-		throw new Error(`Invalid ${settingName} setting: ${String(value)}`);
+		throw new Error(
+			`Invalid ${settingName} setting: ${typeof value === "object" ? JSON.stringify(value) : String(value)}`,
+		);
 	}
 	return undefined;
 }
@@ -234,9 +304,7 @@ export class FileSettingsStorage implements SettingsStorage {
 				if (!existsSync(dir)) {
 					mkdirSync(dir, { recursive: true });
 				}
-				if (!release) {
-					release = this.acquireLockSyncWithRetry(path);
-				}
+				release ??= this.acquireLockSyncWithRetry(path);
 				writeFileSync(path, next, "utf-8");
 			}
 		} finally {
@@ -270,10 +338,10 @@ export class SettingsManager {
 	private projectSettings: Settings;
 	private settings: Settings;
 	private projectTrusted: boolean;
-	private modifiedFields = new Set<keyof Settings>(); // Track global fields modified during session
-	private modifiedNestedFields = new Map<keyof Settings, Set<string>>(); // Track global nested field modifications
-	private modifiedProjectFields = new Set<keyof Settings>(); // Track project fields modified during session
-	private modifiedProjectNestedFields = new Map<keyof Settings, Set<string>>(); // Track project nested field modifications
+	private readonly modifiedFields = new Set<keyof Settings>(); // Track global fields modified during session
+	private readonly modifiedNestedFields = new Map<keyof Settings, Set<string>>(); // Track global nested field modifications
+	private readonly modifiedProjectFields = new Set<keyof Settings>(); // Track project fields modified during session
+	private readonly modifiedProjectNestedFields = new Map<keyof Settings, Set<string>>(); // Track project nested field modifications
 	private globalSettingsLoadError: Error | null = null; // Track if global settings file had parse errors
 	private projectSettingsLoadError: Error | null = null; // Track if project settings file had parse errors
 	private writeQueue: Promise<void> = Promise.resolve();
@@ -372,64 +440,11 @@ export class SettingsManager {
 
 	/** Migrate old settings format to new format */
 	private static migrateSettings(settings: Record<string, unknown>): Settings {
-		// Migrate queueMode -> steeringMode
-		if ("queueMode" in settings && !("steeringMode" in settings)) {
-			settings.steeringMode = settings.queueMode;
-			delete settings.queueMode;
-		}
-
-		// Migrate legacy websockets boolean -> transport enum
-		if (!("transport" in settings) && typeof settings.websockets === "boolean") {
-			settings.transport = settings.websockets ? "websocket" : "sse";
-			delete settings.websockets;
-		}
-
-		// Migrate old skills object format to new array format
-		if (
-			"skills" in settings &&
-			typeof settings.skills === "object" &&
-			settings.skills !== null &&
-			!Array.isArray(settings.skills)
-		) {
-			const skillsSettings = settings.skills as {
-				enableSkillCommands?: boolean;
-				customDirectories?: unknown;
-			};
-			if (skillsSettings.enableSkillCommands !== undefined && settings.enableSkillCommands === undefined) {
-				settings.enableSkillCommands = skillsSettings.enableSkillCommands;
-			}
-			if (Array.isArray(skillsSettings.customDirectories) && skillsSettings.customDirectories.length > 0) {
-				settings.skills = skillsSettings.customDirectories;
-			} else {
-				delete settings.skills;
-			}
-		}
-
-		// Migrate retry.maxDelayMs -> retry.provider.maxRetryDelayMs
-		if (
-			"retry" in settings &&
-			typeof settings.retry === "object" &&
-			settings.retry !== null &&
-			!Array.isArray(settings.retry)
-		) {
-			const retrySettings = settings.retry as Record<string, unknown>;
-			const providerSettings =
-				typeof retrySettings.provider === "object" && retrySettings.provider !== null
-					? (retrySettings.provider as Record<string, unknown>)
-					: undefined;
-			if (
-				typeof retrySettings.maxDelayMs === "number" &&
-				(providerSettings?.maxRetryDelayMs === undefined || providerSettings?.maxRetryDelayMs === null)
-			) {
-				retrySettings.provider = {
-					...(providerSettings ?? {}),
-					maxRetryDelayMs: retrySettings.maxDelayMs,
-				};
-			}
-			delete retrySettings.maxDelayMs;
-		}
-
-		return settings as Settings;
+		migrateQueueModeToSteeringMode(settings);
+		migrateWebsocketsToTransport(settings);
+		migrateSkillsObjectFormat(settings);
+		migrateRetryMaxDelayMs(settings);
+		return settings;
 	}
 
 	getGlobalSettings(): Settings {
@@ -472,12 +487,12 @@ export class SettingsManager {
 	async reload(): Promise<void> {
 		await this.writeQueue;
 		const globalLoad = SettingsManager.tryLoadFromStorage(this.storage, "global");
-		if (!globalLoad.error) {
-			this.globalSettings = globalLoad.settings;
-			this.globalSettingsLoadError = null;
-		} else {
+		if (globalLoad.error) {
 			this.globalSettingsLoadError = globalLoad.error;
 			this.recordError("global", globalLoad.error);
+		} else {
+			this.globalSettings = globalLoad.settings;
+			this.globalSettingsLoadError = null;
 		}
 
 		this.modifiedFields.clear();
@@ -486,12 +501,12 @@ export class SettingsManager {
 		this.modifiedProjectNestedFields.clear();
 
 		const projectLoad = SettingsManager.tryLoadFromStorage(this.storage, "project", this.projectTrusted);
-		if (!projectLoad.error) {
-			this.projectSettings = projectLoad.settings;
-			this.projectSettingsLoadError = null;
-		} else {
+		if (projectLoad.error) {
 			this.projectSettingsLoadError = projectLoad.error;
 			this.recordError("project", projectLoad.error);
+		} else {
+			this.projectSettings = projectLoad.settings;
+			this.projectSettingsLoadError = null;
 		}
 
 		this.settings = deepMergeSettings(this.globalSettings, this.projectSettings);
@@ -748,9 +763,7 @@ export class SettingsManager {
 	}
 
 	setCompactionEnabled(enabled: boolean): void {
-		if (!this.globalSettings.compaction) {
-			this.globalSettings.compaction = {};
-		}
+		this.globalSettings.compaction ??= {};
 		this.globalSettings.compaction.enabled = enabled;
 		this.markModified("compaction", "enabled");
 		this.save();
@@ -788,9 +801,7 @@ export class SettingsManager {
 	}
 
 	setRetryEnabled(enabled: boolean): void {
-		if (!this.globalSettings.retry) {
-			this.globalSettings.retry = {};
-		}
+		this.globalSettings.retry ??= {};
 		this.globalSettings.retry.enabled = enabled;
 		this.markModified("retry", "enabled");
 		this.save();
@@ -1028,9 +1039,7 @@ export class SettingsManager {
 	}
 
 	setShowImages(show: boolean): void {
-		if (!this.globalSettings.terminal) {
-			this.globalSettings.terminal = {};
-		}
+		this.globalSettings.terminal ??= {};
 		this.globalSettings.terminal.showImages = show;
 		this.markModified("terminal", "showImages");
 		this.save();
@@ -1045,9 +1054,7 @@ export class SettingsManager {
 	}
 
 	setImageWidthCells(width: number): void {
-		if (!this.globalSettings.terminal) {
-			this.globalSettings.terminal = {};
-		}
+		this.globalSettings.terminal ??= {};
 		this.globalSettings.terminal.imageWidthCells = Math.max(1, Math.floor(width));
 		this.markModified("terminal", "imageWidthCells");
 		this.save();
@@ -1062,9 +1069,7 @@ export class SettingsManager {
 	}
 
 	setClearOnShrink(enabled: boolean): void {
-		if (!this.globalSettings.terminal) {
-			this.globalSettings.terminal = {};
-		}
+		this.globalSettings.terminal ??= {};
 		this.globalSettings.terminal.clearOnShrink = enabled;
 		this.markModified("terminal", "clearOnShrink");
 		this.save();
@@ -1075,9 +1080,7 @@ export class SettingsManager {
 	}
 
 	setShowTerminalProgress(enabled: boolean): void {
-		if (!this.globalSettings.terminal) {
-			this.globalSettings.terminal = {};
-		}
+		this.globalSettings.terminal ??= {};
 		this.globalSettings.terminal.showTerminalProgress = enabled;
 		this.markModified("terminal", "showTerminalProgress");
 		this.save();
@@ -1088,9 +1091,7 @@ export class SettingsManager {
 	}
 
 	setImageAutoResize(enabled: boolean): void {
-		if (!this.globalSettings.images) {
-			this.globalSettings.images = {};
-		}
+		this.globalSettings.images ??= {};
 		this.globalSettings.images.autoResize = enabled;
 		this.markModified("images", "autoResize");
 		this.save();
@@ -1101,9 +1102,7 @@ export class SettingsManager {
 	}
 
 	setBlockImages(blocked: boolean): void {
-		if (!this.globalSettings.images) {
-			this.globalSettings.images = {};
-		}
+		this.globalSettings.images ??= {};
 		this.globalSettings.images.blockImages = blocked;
 		this.markModified("images", "blockImages");
 		this.save();
@@ -1176,7 +1175,7 @@ export class SettingsManager {
 	}
 
 	getWarnings(): WarningSettings {
-		return { ...(this.settings.warnings ?? {}) };
+		return { ...this.settings.warnings };
 	}
 
 	setWarnings(warnings: WarningSettings): void {

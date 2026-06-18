@@ -108,9 +108,9 @@ class SpaceInvadersComponent {
 	private state: GameState;
 	private keys: KeyState = { left: false, right: false, fire: false };
 	private interval: ReturnType<typeof setInterval> | null = null;
-	private onClose: () => void;
-	private onSave: (state: GameState | null) => void;
-	private tui: { requestRender: () => void };
+	private readonly onClose: () => void;
+	private readonly onSave: (state: GameState | null) => void;
+	private readonly tui: { requestRender: () => void };
 	private cachedLines: string[] = [];
 	private cachedWidth = 0;
 	private version = 0;

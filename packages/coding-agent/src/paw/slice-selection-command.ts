@@ -91,7 +91,7 @@ export type PawSelectSliceParsedArgs =
 	| { kind: "ok"; sessionId: string };
 
 export function parsePawSelectSliceArgs(args: string[]): PawSelectSliceParsedArgs {
-	if (args.some((arg) => arg === "--help" || arg === "-h")) {
+	if (args.includes("--help") || args.includes("-h")) {
 		return { kind: "help" };
 	}
 

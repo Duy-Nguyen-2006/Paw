@@ -3,7 +3,7 @@
  * Used by auth-storage.ts and model-registry.ts.
  */
 
-import { execSync, spawnSync } from "child_process";
+import { execSync, spawnSync } from "node:child_process";
 import { getShellConfig } from "../utils/shell.ts";
 
 // Cache for shell command results (persists for process lifetime)
@@ -17,12 +17,27 @@ type ConfigValueReference = { type: "command"; config: string } | { type: "templ
 
 function appendLiteral(parts: TemplatePart[], value: string): void {
 	if (!value) return;
-	const previousPart = parts[parts.length - 1];
+	const previousPart = parts.at(-1);
 	if (previousPart?.type === "literal") {
 		previousPart.value += value;
 		return;
 	}
 	parts.push({ type: "literal", value });
+}
+
+function parseBracedTemplatePart(
+	config: string,
+	dollarIndex: number,
+): { parts: TemplatePart[] | null; nextIndex: number } {
+	const endIndex = config.indexOf("}", dollarIndex + 2);
+	if (endIndex < 0) {
+		return { parts: [{ type: "literal", value: "$" }], nextIndex: dollarIndex + 1 };
+	}
+	const name = config.slice(dollarIndex + 2, endIndex);
+	const parts: TemplatePart[] = ENV_VAR_NAME_RE.test(name)
+		? [{ type: "env", name }]
+		: [{ type: "literal", value: config.slice(dollarIndex, endIndex + 1) }];
+	return { parts, nextIndex: endIndex + 1 };
 }
 
 function parseConfigValueTemplate(config: string): TemplatePart[] {
@@ -46,20 +61,17 @@ function parseConfigValueTemplate(config: string): TemplatePart[] {
 		}
 
 		if (nextChar === "{") {
-			const endIndex = config.indexOf("}", dollarIndex + 2);
-			if (endIndex < 0) {
-				appendLiteral(parts, "$");
-				index = dollarIndex + 1;
-				continue;
+			const result = parseBracedTemplatePart(config, dollarIndex);
+			if (result.parts) {
+				for (const part of result.parts) {
+					if (part.type === "literal") {
+						appendLiteral(parts, part.value);
+					} else {
+						parts.push(part);
+					}
+				}
 			}
-
-			const name = config.slice(dollarIndex + 2, endIndex);
-			if (ENV_VAR_NAME_RE.test(name)) {
-				parts.push({ type: "env", name });
-			} else {
-				appendLiteral(parts, config.slice(dollarIndex, endIndex + 1));
-			}
-			index = endIndex + 1;
+			index = result.nextIndex;
 			continue;
 		}
 

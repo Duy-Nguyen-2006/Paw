@@ -68,7 +68,7 @@ function startsWith(buffer: Uint8Array, bytes: number[]): boolean {
 function startsWithAscii(buffer: Uint8Array, offset: number, text: string): boolean {
 	if (buffer.length < offset + text.length) return false;
 	for (let index = 0; index < text.length; index++) {
-		if (buffer[offset + index] !== text.charCodeAt(index)) return false;
+		if (buffer[offset + index] !== text.codePointAt(index)!) return false;
 	}
 	return true;
 }

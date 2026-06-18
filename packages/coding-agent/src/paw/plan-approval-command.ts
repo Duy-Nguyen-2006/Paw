@@ -96,7 +96,7 @@ export type PawApprovePlanParsedArgs =
 	| { kind: "ok"; sessionId: string; sliceValues: string[] };
 
 export function parsePawApprovePlanArgs(args: string[]): PawApprovePlanParsedArgs {
-	if (args.some((arg) => arg === "--help" || arg === "-h")) {
+	if (args.includes("--help") || args.includes("-h")) {
 		return { kind: "help" };
 	}
 
@@ -112,31 +112,15 @@ export function parsePawApprovePlanArgs(args: string[]): PawApprovePlanParsedArg
 	const sliceValues: string[] = [];
 	for (let index = 1; index < args.length; ) {
 		const arg = args[index];
-		if (arg === "--slice") {
-			if (index + 1 >= args.length) {
-				return { kind: "error", message: 'Missing value for "paw approve-plan" option: --slice' };
-			}
-			const value = args[index + 1];
-			const sliceId = value.split(":", 1)[0]?.trim() ?? "";
-			if (value.trim().length === 0) {
-				return { kind: "error", message: 'Option --slice for "paw approve-plan" must be a non-empty string.' };
-			}
-			if (sliceId.length === 0) {
-				return {
-					kind: "error",
-					message: 'Option --slice for "paw approve-plan" must include a non-empty slice id.',
-				};
-			}
-			sliceValues.push(value);
-			index += 2;
-			continue;
-		}
 
-		if (arg.startsWith("-")) {
+		if (arg !== "--slice") {
 			return { kind: "error", message: `Unknown option for "paw approve-plan": ${arg}` };
 		}
 
-		return { kind: "error", message: `Unknown option for "paw approve-plan": ${arg}` };
+		const error = validateSliceOption(args, index);
+		if (error) return { kind: "error", message: error };
+		sliceValues.push(args[index + 1]);
+		index += 2;
 	}
 
 	if (sliceValues.length === 0) {
@@ -144,6 +128,21 @@ export function parsePawApprovePlanArgs(args: string[]): PawApprovePlanParsedArg
 	}
 
 	return { kind: "ok", sessionId, sliceValues };
+}
+
+function validateSliceOption(args: string[], index: number): string | null {
+	if (index + 1 >= args.length) {
+		return 'Missing value for "paw approve-plan" option: --slice';
+	}
+	const value = args[index + 1];
+	if (value.trim().length === 0) {
+		return 'Option --slice for "paw approve-plan" must be a non-empty string.';
+	}
+	const sliceId = value.split(":", 1)[0]?.trim() ?? "";
+	if (sliceId.length === 0) {
+		return 'Option --slice for "paw approve-plan" must include a non-empty slice id.';
+	}
+	return null;
 }
 
 export function buildPawPlannerSlicesFromCliSliceValues(sliceValues: readonly string[]): PawPlannerSlice[] {

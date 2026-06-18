@@ -1,6 +1,6 @@
-import { type ExecFileException, execFile, spawnSync } from "child_process";
-import { existsSync, type FSWatcher, readFileSync, type Stats, statSync, unwatchFile, watchFile } from "fs";
-import { dirname, join, resolve } from "path";
+import { type ExecFileException, execFile, spawnSync } from "node:child_process";
+import { existsSync, type FSWatcher, readFileSync, type Stats, statSync, unwatchFile, watchFile } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { closeWatcher, FS_WATCH_RETRY_DELAY_MS, watchWithErrorHandler } from "../utils/fs-watch.ts";
 
 type GitPaths = {
@@ -100,7 +100,7 @@ export class FooterDataProvider {
 	private cwd: string;
 	private static readonly WATCH_DEBOUNCE_MS = 500;
 
-	private extensionStatuses = new Map<string, string>();
+	private readonly extensionStatuses = new Map<string, string>();
 	private cachedBranch: string | null | undefined = undefined;
 	private gitPaths: GitPaths | null | undefined = undefined;
 	private headWatcher: FSWatcher | null = null;
@@ -109,7 +109,7 @@ export class FooterDataProvider {
 	private reftableWatcher: FSWatcher | null = null;
 	private reftableTablesListWatcher: FSWatcher | null = null;
 	private reftableTablesListPath: string | null = null;
-	private branchChangeCallbacks = new Set<() => void>();
+	private readonly branchChangeCallbacks = new Set<() => void>();
 	private availableProviderCount = 0;
 	private refreshTimer: ReturnType<typeof setTimeout> | null = null;
 	private gitWatcherRetryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -310,9 +310,6 @@ export class FooterDataProvider {
 
 		const pollGitHead = shouldPollGitHead(this.gitPaths.repoDir);
 
-		// Watch the directory containing HEAD, not HEAD itself.
-		// Git uses atomic writes (write temp, rename over HEAD), which changes the inode.
-		// fs.watch on a file stops working after the inode changes.
 		this.headWatcher = watchWithErrorHandler(
 			dirname(this.gitPaths.headPath),
 			(_eventType, filename) => {
@@ -323,61 +320,60 @@ export class FooterDataProvider {
 			() => this.handleGitWatcherError(),
 		);
 		if (pollGitHead) {
-			this.headWatchFilePath = this.gitPaths.headPath;
-			this.headWatchFileListener = (current, previous) => {
-				if (
-					current.mtimeMs !== previous.mtimeMs ||
-					current.ctimeMs !== previous.ctimeMs ||
-					current.size !== previous.size
-				) {
-					this.scheduleRefresh();
-				}
-			};
-			watchFile(this.headWatchFilePath, { interval: 1000 }, this.headWatchFileListener);
+			this.setupPollingHeadWatcher();
 		}
 		if (!this.headWatcher && !pollGitHead) {
 			return;
 		}
 
-		// In reftable repos, branch switches update files in the reftable directory
-		// instead of HEAD. Watch it separately so the footer picks up those changes.
-		const reftableDir = join(this.gitPaths.commonGitDir, "reftable");
-		if (existsSync(reftableDir)) {
-			this.reftableWatcher = watchWithErrorHandler(
-				reftableDir,
-				() => {
-					this.scheduleRefresh();
-				},
-				() => this.handleGitWatcherError(),
-			);
-			if (!this.reftableWatcher) {
-				return;
-			}
+		this.setupReftableWatcher();
+	}
 
-			const tablesListPath = join(reftableDir, "tables.list");
-			if (existsSync(tablesListPath)) {
-				this.reftableTablesListPath = tablesListPath;
-				this.reftableTablesListWatcher = watchWithErrorHandler(
-					tablesListPath,
-					() => {
-						this.scheduleRefresh();
-					},
-					() => this.handleGitWatcherError(),
-				);
-				if (!this.reftableTablesListWatcher) {
-					return;
-				}
-				watchFile(tablesListPath, { interval: 250 }, (current, previous) => {
-					if (
-						current.mtimeMs !== previous.mtimeMs ||
-						current.ctimeMs !== previous.ctimeMs ||
-						current.size !== previous.size
-					) {
-						this.scheduleRefresh();
-					}
-				});
+	private setupPollingHeadWatcher(): void {
+		this.headWatchFilePath = this.gitPaths!.headPath;
+		this.headWatchFileListener = (current, previous) => {
+			if (
+				current.mtimeMs !== previous.mtimeMs ||
+				current.ctimeMs !== previous.ctimeMs ||
+				current.size !== previous.size
+			) {
+				this.scheduleRefresh();
 			}
-		}
+		};
+		watchFile(this.headWatchFilePath, { interval: 1000 }, this.headWatchFileListener);
+	}
+
+	private setupReftableWatcher(): void {
+		const reftableDir = join(this.gitPaths!.commonGitDir, "reftable");
+		if (!existsSync(reftableDir)) return;
+
+		this.reftableWatcher = watchWithErrorHandler(
+			reftableDir,
+			() => this.scheduleRefresh(),
+			() => this.handleGitWatcherError(),
+		);
+		if (!this.reftableWatcher) return;
+
+		const tablesListPath = join(reftableDir, "tables.list");
+		if (!existsSync(tablesListPath)) return;
+
+		this.reftableTablesListPath = tablesListPath;
+		this.reftableTablesListWatcher = watchWithErrorHandler(
+			tablesListPath,
+			() => this.scheduleRefresh(),
+			() => this.handleGitWatcherError(),
+		);
+		if (!this.reftableTablesListWatcher) return;
+
+		watchFile(tablesListPath, { interval: 250 }, (current, previous) => {
+			if (
+				current.mtimeMs !== previous.mtimeMs ||
+				current.ctimeMs !== previous.ctimeMs ||
+				current.size !== previous.size
+			) {
+				this.scheduleRefresh();
+			}
+		});
 	}
 }
 

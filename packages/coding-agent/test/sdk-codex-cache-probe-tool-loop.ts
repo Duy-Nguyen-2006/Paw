@@ -325,7 +325,6 @@ async function main(): Promise<void> {
 	const records: SubrequestRecord[] = [];
 	const turnElapsedMs: number[] = [];
 	let previousCacheRead: number | null = null;
-
 	console.log(`provider openai-codex, model gpt-5.5`);
 	console.log(`session ${session.sessionFile}`);
 	console.log(`turns ${args.turns}, transport ${args.transport}, reasoning low, maxTokens ${args.maxTokens}`);

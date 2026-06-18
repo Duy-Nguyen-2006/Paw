@@ -37,7 +37,7 @@ const LONG_SYSTEM_PROMPT = `You are a helpful assistant. Be concise in your resp
 
 Here is some additional context that makes this system prompt long enough to trigger caching:
 
-${Array(50)
+${new Array(50)
 	.fill(
 		"Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris.",
 	)

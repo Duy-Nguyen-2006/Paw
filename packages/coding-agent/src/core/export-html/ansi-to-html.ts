@@ -214,7 +214,7 @@ export function ansiToHtml(text: string): string {
 
 		// Parse SGR parameters
 		const paramStr = match[1];
-		const params = paramStr ? paramStr.split(";").map((p) => parseInt(p, 10) || 0) : [0];
+		const params = paramStr ? paramStr.split(";").map((p) => Number.parseInt(p, 10) || 0) : [0];
 
 		// Close existing span if we have one
 		if (inSpan) {

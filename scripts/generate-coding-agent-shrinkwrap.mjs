@@ -229,29 +229,8 @@ function validateShrinkwrap(shrinkwrap, internalNames) {
 
 	for (const [lockPath, entry] of Object.entries(shrinkwrap.packages)) {
 		const packageName = packageNameFromLockPath(lockPath);
-		if (packageName) {
-			includedPackageNames.add(packageName);
-		}
-		if (entry.link) {
-			errors.push(`${lockPath} is a link entry`);
-		}
-		if (typeof entry.resolved === "string" && /^(file:|link:|workspace:|\.\.?\/|\/)/.test(entry.resolved)) {
-			errors.push(`${lockPath} has a local resolved value: ${entry.resolved}`);
-		}
-		if (entry.hasInstallScript) {
-			if (!packageName || !entry.version) {
-				errors.push(`${lockPath || "root"} has install scripts but no package name/version`);
-			} else {
-				const packageId = `${packageName}@${entry.version}`;
-				if (allowedInstallScriptPackages.has(packageId)) {
-					seenAllowedInstallScriptPackages.add(packageId);
-				} else {
-					errors.push(
-						`${lockPath} has install scripts (${packageId}). Review it and add it to allowedInstallScriptPackages if intentional.`,
-					);
-				}
-			}
-		}
+		if (packageName) includedPackageNames.add(packageName);
+		validatePackageEntry(lockPath, entry, packageName, seenAllowedInstallScriptPackages, errors);
 	}
 
 	for (const packageId of allowedInstallScriptPackages.keys()) {
@@ -266,25 +245,46 @@ function validateShrinkwrap(shrinkwrap, internalNames) {
 		}
 	}
 
-	for (const [lockPath, entry] of Object.entries(shrinkwrap.packages)) {
-		for (const dependencyName of Object.keys(packageDependencies(entry))) {
-			const dependencyIncluded = [...includedPaths].some(
-				(candidate) => candidate === `node_modules/${dependencyName}` || candidate.endsWith(`/node_modules/${dependencyName}`),
-			);
-			if (!dependencyIncluded) {
-				errors.push(`${lockPath || "root"} dependency ${dependencyName} is missing`);
-			}
-		}
-	}
-
-	const platformPackageCount = Object.values(shrinkwrap.packages).filter((entry) => entry.os || entry.cpu || entry.libc).length;
-	if (platformPackageCount === 0) {
-		errors.push("no platform-specific optional dependency entries found");
-	}
+	validateDependencies(shrinkwrap.packages, includedPaths, errors);
+	validatePlatformPackages(shrinkwrap.packages, errors);
 
 	if (errors.length > 0) {
 		throw new Error(`Generated shrinkwrap failed validation:\n${errors.map((error) => `  - ${error}`).join("\n")}`);
 	}
+}
+
+function validatePackageEntry(lockPath, entry, packageName, seenAllowed, errors) {
+	if (entry.link) errors.push(`${lockPath} is a link entry`);
+	if (typeof entry.resolved === "string" && /^(file:|link:|workspace:|\.\.?\/|\/)/.test(entry.resolved)) {
+		errors.push(`${lockPath} has a local resolved value: ${entry.resolved}`);
+	}
+	if (!entry.hasInstallScript) return;
+	if (!packageName || !entry.version) {
+		errors.push(`${lockPath || "root"} has install scripts but no package name/version`);
+		return;
+	}
+	const packageId = `${packageName}@${entry.version}`;
+	if (allowedInstallScriptPackages.has(packageId)) {
+		seenAllowed.add(packageId);
+	} else {
+		errors.push(`${lockPath} has install scripts (${packageId}). Review it and add it to allowedInstallScriptPackages if intentional.`);
+	}
+}
+
+function validateDependencies(packages, includedPaths, errors) {
+	for (const [lockPath, entry] of Object.entries(packages)) {
+		for (const dep of Object.keys(packageDependencies(entry))) {
+			const found = [...includedPaths].some(
+				(candidate) => candidate === `node_modules/${dep}` || candidate.endsWith(`/node_modules/${dep}`),
+			);
+			if (!found) errors.push(`${lockPath || "root"} dependency ${dep} is missing`);
+		}
+	}
+}
+
+function validatePlatformPackages(packages, errors) {
+	const platformCount = Object.values(packages).filter((entry) => entry.os || entry.cpu || entry.libc).length;
+	if (platformCount === 0) errors.push("no platform-specific optional dependency entries found");
 }
 
 function generateShrinkwrap() {

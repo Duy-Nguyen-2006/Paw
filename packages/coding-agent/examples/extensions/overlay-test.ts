@@ -35,15 +35,15 @@ class OverlayTestComponent implements Focusable {
 	focused = false;
 
 	private selected = 0;
-	private items = [
+	private readonly items = [
 		{ label: "Search", hasInput: true, text: "", cursor: 0 },
 		{ label: "Run", hasInput: true, text: "", cursor: 0 },
 		{ label: "Settings", hasInput: false, text: "", cursor: 0 },
 		{ label: "Cancel", hasInput: false, text: "", cursor: 0 },
 	];
 
-	private theme: Theme;
-	private done: (result: { action: string; query?: string } | undefined) => void;
+	private readonly theme: Theme;
+	private readonly done: (result: { action: string; query?: string } | undefined) => void;
 
 	constructor(theme: Theme, done: (result: { action: string; query?: string } | undefined) => void) {
 		this.theme = theme;

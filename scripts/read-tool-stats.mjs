@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 
-import { createReadStream } from "node:fs";
-import { promises as fs } from "node:fs";
+import { promises as fs }, { createReadStream } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
@@ -27,29 +26,42 @@ function parseArgs(argv) {
 		bucket: "week",
 	};
 
+	const BOOLEAN_FLAGS = new Map([
+		["--help", "help"], ["-h", "help"], ["--json", "json"], ["--text", "text"],
+		["--include-records", "includeRecords"], ["--all-sessions", "allSessions"],
+	]);
+	const VALUE_FLAGS = new Map([
+		["--model", "modelFilter"], ["--sessions-dir", "sessionsDir"],
+		["--since", "since"], ["--auto-since-path", "autoSincePath"],
+	]);
+
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i];
-		if (arg === "--help" || arg === "-h") options.help = true;
-		else if (arg === "--json") options.json = true;
-		else if (arg === "--text") options.text = true;
-		else if (arg === "--include-records") options.includeRecords = true;
-		else if (arg === "--model") options.modelFilter = argv[++i];
-		else if (arg === "--top") {
-			const value = Number.parseInt(argv[++i] ?? "", 10);
-			if (!Number.isFinite(value) || value <= 0) throw new Error("--top must be a positive integer");
-			options.top = value;
-		} else if (arg === "--sessions-dir") options.sessionsDir = argv[++i];
-		else if (arg === "--all-sessions") options.allSessions = true;
-		else if (arg === "--since") options.since = argv[++i];
-		else if (arg === "--auto-since-path") options.autoSincePath = argv[++i];
-		else if (arg === "--bucket") {
-			const value = argv[++i];
-			if (value !== "day" && value !== "week") throw new Error("--bucket must be day or week");
-			options.bucket = value;
-		} else throw new Error(`Unknown argument: ${arg}`);
+		if (BOOLEAN_FLAGS.has(arg)) {
+			options[BOOLEAN_FLAGS.get(arg)] = true;
+		} else if (VALUE_FLAGS.has(arg)) {
+			options[VALUE_FLAGS.get(arg)] = argv[++i];
+		} else if (arg === "--top") {
+			options.top = parsePositiveInt(argv[++i], "--top");
+		} else if (arg === "--bucket") {
+			options.bucket = parseBucketValue(argv[++i]);
+		} else {
+			throw new Error(`Unknown argument: ${arg}`);
+		}
 	}
 
 	return options;
+}
+
+function parsePositiveInt(raw, name) {
+	const value = Number.parseInt(raw ?? "", 10);
+	if (!Number.isFinite(value) || value <= 0) throw new Error(`${name} must be a positive integer`);
+	return value;
+}
+
+function parseBucketValue(raw) {
+	if (raw !== "day" && raw !== "week") throw new Error("--bucket must be day or week");
+	return raw;
 }
 
 function printHelp() {
@@ -356,64 +368,20 @@ function printHumanReport(summary) {
 	console.log(`  full:    ${formatInt(counts.full).padStart(8)}  ${formatPercent(counts.full, counts.totalReadCalls).padStart(6)}  ${bar(counts.full, counts.totalReadCalls)}`);
 	console.log(`  partial: ${formatInt(counts.partial).padStart(8)}  ${formatPercent(counts.partial, counts.totalReadCalls).padStart(6)}  ${bar(counts.partial, counts.totalReadCalls)}`);
 
-	console.log(`\nBy ${filters.bucket}`);
-	for (const group of timeStats) {
-		console.log(
-			`  ${group.key} reads=${formatInt(group.reads).padStart(5)} full=${formatPercent(group.full, group.reads).padStart(6)} partial=${formatPercent(group.partial, group.reads).padStart(6)} ${bar(group.partial, group.reads)}`
-		);
-	}
+	printTimeBucketTable(`By ${filters.bucket}`, timeStats, (g) =>
+		`reads=${formatInt(g.reads).padStart(5)} full=${formatPercent(g.full, g.reads).padStart(6)} partial=${formatPercent(g.partial, g.reads).padStart(6)} ${bar(g.partial, g.reads)}`,
+	);
 
-	console.log("\nBy time of day");
-	for (const group of timeOfDayStats) {
-		console.log(
-			`  ${group.key} reads=${formatInt(group.reads).padStart(5)} full=${formatPercent(group.full, group.reads).padStart(6)} partial=${formatPercent(group.partial, group.reads).padStart(6)} ${bar(group.partial, group.reads)}`
-		);
-	}
+	printTimeBucketTable("By time of day", timeOfDayStats, (g) =>
+		`reads=${formatInt(g.reads).padStart(5)} full=${formatPercent(g.full, g.reads).padStart(6)} partial=${formatPercent(g.partial, g.reads).padStart(6)} ${bar(g.partial, g.reads)}`,
+	);
 
-	console.log("\nBy time of day, session-normalized");
-	for (const group of normalizedTimeOfDayStats) {
-		console.log(
-			`  ${group.key} sessions=${formatInt(group.sessions).padStart(4)} reads/session=${formatRate(group.readsPerSession).padStart(5)} full/session=${formatRate(group.fullPerSession).padStart(5)} partial/session=${formatRate(group.partialPerSession).padStart(5)} medianSessionPartial=${group.medianSessionPartialRate === null ? "n/a" : formatPercent(group.medianSessionPartialRate, 1).padStart(6)} ${bar(group.medianSessionPartialRate ?? 0, 1)}`
-		);
-	}
-
-	console.log(`\nBy ${filters.bucket}, session-normalized`);
-	for (const group of normalizedTimeStats) {
-		console.log(
-			`  ${group.key} sessions=${formatInt(group.sessions).padStart(4)} reads/session=${formatRate(group.readsPerSession).padStart(5)} full/session=${formatRate(group.fullPerSession).padStart(5)} partial/session=${formatRate(group.partialPerSession).padStart(5)} medianSessionPartial=${group.medianSessionPartialRate === null ? "n/a" : formatPercent(group.medianSessionPartialRate, 1).padStart(6)} ${bar(group.medianSessionPartialRate ?? 0, 1)}`
-		);
-	}
+	printNormalizedTable("By time of day, session-normalized", normalizedTimeOfDayStats);
+	printNormalizedTable(`By ${filters.bucket}, session-normalized`, normalizedTimeStats);
 
 	console.log(`\nBy provider/model, then by ${filters.bucket}`);
 	for (const group of timeStatsByProvider) {
-		console.log(`\n${group.providerModel}`);
-		console.log(`  total reads=${formatInt(group.reads)} assistantMessages=${formatInt(group.assistantMessages)}`);
-		console.log(`  total full    ${formatInt(group.full).padStart(8)} ${formatPercent(group.full, group.reads).padStart(6)} ${bar(group.full, group.reads)}`);
-		console.log(`  total partial ${formatInt(group.partial).padStart(8)} ${formatPercent(group.partial, group.reads).padStart(6)} ${bar(group.partial, group.reads)}`);
-		console.log(`  By ${filters.bucket}`);
-		for (const bucket of group.timeStats) {
-			console.log(
-				`    ${bucket.key} reads=${formatInt(bucket.reads).padStart(5)} full=${formatPercent(bucket.full, bucket.reads).padStart(6)} partial=${formatPercent(bucket.partial, bucket.reads).padStart(6)} ${bar(bucket.partial, bucket.reads)}`
-			);
-		}
-		console.log(`  By ${filters.bucket}, session-normalized`);
-		for (const bucket of group.normalizedTimeStats) {
-			console.log(
-				`    ${bucket.key} sessions=${formatInt(bucket.sessions).padStart(4)} reads/session=${formatRate(bucket.readsPerSession).padStart(5)} full/session=${formatRate(bucket.fullPerSession).padStart(5)} partial/session=${formatRate(bucket.partialPerSession).padStart(5)} medianSessionPartial=${bucket.medianSessionPartialRate === null ? "n/a" : formatPercent(bucket.medianSessionPartialRate, 1).padStart(6)} ${bar(bucket.medianSessionPartialRate ?? 0, 1)}`
-			);
-		}
-		console.log("  By time of day");
-		for (const bucket of group.timeOfDayStats) {
-			console.log(
-				`    ${bucket.key} reads=${formatInt(bucket.reads).padStart(5)} full=${formatPercent(bucket.full, bucket.reads).padStart(6)} partial=${formatPercent(bucket.partial, bucket.reads).padStart(6)} ${bar(bucket.partial, bucket.reads)}`
-			);
-		}
-		console.log("  By time of day, session-normalized");
-		for (const bucket of group.normalizedTimeOfDayStats) {
-			console.log(
-				`    ${bucket.key} sessions=${formatInt(bucket.sessions).padStart(4)} reads/session=${formatRate(bucket.readsPerSession).padStart(5)} full/session=${formatRate(bucket.fullPerSession).padStart(5)} partial/session=${formatRate(bucket.partialPerSession).padStart(5)} medianSessionPartial=${bucket.medianSessionPartialRate === null ? "n/a" : formatPercent(bucket.medianSessionPartialRate, 1).padStart(6)} ${bar(bucket.medianSessionPartialRate ?? 0, 1)}`
-			);
-		}
+		printProviderGroup(group, filters.bucket);
 	}
 
 	if (scan.malformedLines > 0) {
@@ -422,54 +390,105 @@ function printHumanReport(summary) {
 	}
 }
 
+function printTimeBucketTable(title, groups, formatRow) {
+	console.log(`\n${title}`);
+	for (const group of groups) {
+		console.log(`  ${group.key} ${formatRow(group)}`);
+	}
+}
+
+function printNormalizedTable(title, groups) {
+	console.log(`\n${title}`);
+	for (const group of groups) {
+		const partial = group.medianSessionPartialRate === null ? "n/a" : formatPercent(group.medianSessionPartialRate, 1).padStart(6);
+		console.log(
+			`  ${group.key} sessions=${formatInt(group.sessions).padStart(4)} reads/session=${formatRate(group.readsPerSession).padStart(5)} full/session=${formatRate(group.fullPerSession).padStart(5)} partial/session=${formatRate(group.partialPerSession).padStart(5)} medianSessionPartial=${partial} ${bar(group.medianSessionPartialRate ?? 0, 1)}`
+		);
+	}
+}
+
+function printProviderGroup(group, bucket) {
+	console.log(`\n${group.providerModel}`);
+	console.log(`  total reads=${formatInt(group.reads)} assistantMessages=${formatInt(group.assistantMessages)}`);
+	console.log(`  total full    ${formatInt(group.full).padStart(8)} ${formatPercent(group.full, group.reads).padStart(6)} ${bar(group.full, group.reads)}`);
+	console.log(`  total partial ${formatInt(group.partial).padStart(8)} ${formatPercent(group.partial, group.reads).padStart(6)} ${bar(group.partial, group.reads)}`);
+	printTimeBucketTable(`By ${bucket}`, group.timeStats, (b) =>
+		`reads=${formatInt(b.reads).padStart(5)} full=${formatPercent(b.full, b.reads).padStart(6)} partial=${formatPercent(b.partial, b.reads).padStart(6)} ${bar(b.partial, b.reads)}`,
+	);
+	printNormalizedTable(`By ${bucket}, session-normalized`, group.normalizedTimeStats);
+	printTimeBucketTable("By time of day", group.timeOfDayStats, (b) =>
+		`reads=${formatInt(b.reads).padStart(5)} full=${formatPercent(b.full, b.reads).padStart(6)} partial=${formatPercent(b.partial, b.reads).padStart(6)} ${bar(b.partial, b.reads)}`,
+	);
+	printNormalizedTable("By time of day, session-normalized", group.normalizedTimeOfDayStats);
+}
+
 async function scanSessions(sessionsDir, since) {
 	const records = [];
-	const meta = { sessionsDir, sessionFilesScanned: 0, sessionFilesIncluded: 0, sessionFilesSkippedOlderThanSince: 0, sessionFilesWithReadCalls: 0, since, malformedLines: 0 };
+	const meta = createReadScanMeta(sessionsDir, since);
 
 	for await (const sessionFile of walkJsonlFiles(sessionsDir)) {
 		meta.sessionFilesScanned++;
 		const sessionTimestampMs = parseSessionFileTimestamp(sessionFile);
-		if (since && sessionTimestampMs !== null && sessionTimestampMs < since.ms) {
+		if (isSessionFileTooOld(since, sessionTimestampMs)) {
 			meta.sessionFilesSkippedOlderThanSince++;
 			continue;
 		}
 		meta.sessionFilesIncluded++;
-		let fileHadReadCall = false;
-		const input = createReadStream(sessionFile, { encoding: "utf8" });
-		const rl = createInterface({ input, crlfDelay: Infinity });
-
-		for await (const line of rl) {
-			if (!line.trim()) continue;
-			let entry;
-			try {
-				entry = JSON.parse(line);
-			} catch {
-				meta.malformedLines++;
-				continue;
-			}
-			if (entry?.type !== "message" || !entry.message) continue;
-			const message = entry.message;
-			if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
-			for (const block of message.content) {
-				if (block?.type !== "toolCall" || block.name !== "read") continue;
-				fileHadReadCall = true;
-				records.push({
-					sessionFile,
-					assistantEntryId: entry.id,
-					toolCallId: typeof block.id === "string" ? block.id : "",
-					timestamp: entry.timestamp,
-					timestampMs: Date.parse(entry.timestamp) || sessionTimestampMs || 0,
-					api: typeof message.api === "string" ? message.api : null,
-					provider: typeof message.provider === "string" ? message.provider : "[unknown]",
-					model: typeof message.model === "string" ? message.model : "[unknown]",
-					providerModel: `${typeof message.provider === "string" ? message.provider : "[unknown]"}/${typeof message.model === "string" ? message.model : "[unknown]"}`,
-					...classifyRead(block.arguments),
-				});
-			}
-		}
-		if (fileHadReadCall) meta.sessionFilesWithReadCalls++;
+		const hadReadCall = await scanOneSessionForReads(sessionFile, sessionTimestampMs, records, meta);
+		if (hadReadCall) meta.sessionFilesWithReadCalls++;
 	}
 	return { records, meta };
+}
+
+function createReadScanMeta(sessionsDir, since) {
+	return { sessionsDir, sessionFilesScanned: 0, sessionFilesIncluded: 0, sessionFilesSkippedOlderThanSince: 0, sessionFilesWithReadCalls: 0, since, malformedLines: 0 };
+}
+
+function isSessionFileTooOld(since, sessionTimestampMs) {
+	return since && sessionTimestampMs !== null && sessionTimestampMs < since.ms;
+}
+
+async function scanOneSessionForReads(sessionFile, sessionTimestampMs, records, meta) {
+	let fileHadReadCall = false;
+	const input = createReadStream(sessionFile, { encoding: "utf8" });
+	const rl = createInterface({ input, crlfDelay: Infinity });
+
+	for await (const line of rl) {
+		if (!line.trim()) continue;
+		let entry;
+		try {
+			entry = JSON.parse(line);
+		} catch {
+			meta.malformedLines++;
+			continue;
+		}
+		if (entry?.type !== "message" || !entry.message) continue;
+		const message = entry.message;
+		if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
+		for (const block of message.content) {
+			if (block?.type !== "toolCall" || block.name !== "read") continue;
+			fileHadReadCall = true;
+			records.push(buildReadRecord(sessionFile, entry, message, block, sessionTimestampMs));
+		}
+	}
+	return fileHadReadCall;
+}
+
+function buildReadRecord(sessionFile, entry, message, block, sessionTimestampMs) {
+	const provider = typeof message.provider === "string" ? message.provider : "[unknown]";
+	const model = typeof message.model === "string" ? message.model : "[unknown]";
+	return {
+		sessionFile,
+		assistantEntryId: entry.id,
+		toolCallId: typeof block.id === "string" ? block.id : "",
+		timestamp: entry.timestamp,
+		timestampMs: Date.parse(entry.timestamp) || sessionTimestampMs || 0,
+		api: typeof message.api === "string" ? message.api : null,
+		provider,
+		model,
+		providerModel: `${provider}/${model}`,
+		...classifyRead(block.arguments),
+	};
 }
 
 function applyFilters(records, options) {

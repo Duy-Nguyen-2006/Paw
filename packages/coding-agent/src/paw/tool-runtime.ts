@@ -159,6 +159,40 @@ export function evaluatePawToolRuntimeRequest(input: PawToolRuntimeInput): PawTo
 	};
 }
 
+async function runInjectedExecutor(
+	input: PawToolRuntimeExecuteInput,
+	preflight: PawToolRuntimePreflightDecision & { status: "allow" },
+): Promise<PawToolExecutorResult | PawToolRuntimeBlockedDecision> {
+	if (input.executor === undefined) {
+		return blocked(
+			input.plan.request,
+			"EXECUTOR_REQUIRED",
+			"Paw tool execution requires an explicitly injected executor; the default runtime path is non-mutating.",
+			"Provide a safe executor from a caller that owns sandboxed command execution.",
+			[{ path: "/executor", message: "Missing injected executor." }],
+		);
+	}
+
+	try {
+		return await input.executor({
+			plan: input.plan,
+			approvedRequest: input.plan.request,
+			...(preflight.sandboxPrimitive === undefined ? {} : { sandboxPrimitive: preflight.sandboxPrimitive }),
+			degraded: preflight.degraded,
+		});
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		return blocked(
+			input.plan.request,
+			"EXECUTOR_FAILED",
+			"Injected Paw tool executor threw before reporting an execution result.",
+			"Inspect executor output and retry only after resolving the failure.",
+			[{ path: "/executor", message }],
+			{ executed: true, filesChanged: false, stderr: message },
+		);
+	}
+}
+
 export async function executePawToolRuntimePlan(
 	input: PawToolRuntimeExecuteInput,
 ): Promise<PawToolRuntimeExecutionResult> {
@@ -191,35 +225,11 @@ export async function executePawToolRuntimePlan(
 		);
 	}
 
-	if (input.executor === undefined) {
-		return blocked(
-			input.plan.request,
-			"EXECUTOR_REQUIRED",
-			"Paw tool execution requires an explicitly injected executor; the default runtime path is non-mutating.",
-			"Provide a safe executor from a caller that owns sandboxed command execution.",
-			[{ path: "/executor", message: "Missing injected executor." }],
-		);
+	const executorResult = await runInjectedExecutor(input, preflight);
+	if ("executed" in executorResult && executorResult.executed === false) {
+		return executorResult;
 	}
-
-	let result: PawToolExecutorResult;
-	try {
-		result = await input.executor({
-			plan: input.plan,
-			approvedRequest: input.plan.request,
-			...(preflight.sandboxPrimitive === undefined ? {} : { sandboxPrimitive: preflight.sandboxPrimitive }),
-			degraded: preflight.degraded,
-		});
-	} catch (error) {
-		const message = error instanceof Error ? error.message : String(error);
-		return blocked(
-			input.plan.request,
-			"EXECUTOR_FAILED",
-			"Injected Paw tool executor threw before reporting an execution result.",
-			"Inspect executor output and retry only after resolving the failure.",
-			[{ path: "/executor", message }],
-			{ executed: true, filesChanged: false, stderr: message },
-		);
-	}
+	const result = executorResult as PawToolExecutorResult;
 
 	if (result.exitCode !== 0) {
 		return blocked(

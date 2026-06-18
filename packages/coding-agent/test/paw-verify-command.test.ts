@@ -330,6 +330,30 @@ describe("Paw verify command with injected native executor", () => {
 		expect(JSON.parse(await readFile(paths.verificationEvidenceFile, "utf-8"))).toEqual([]);
 		await expect(readPawVerificationEvidence(projectRoot, "session-default")).resolves.toEqual([]);
 	});
+
+	test("releases the lock when native verification throws after acquisition", async () => {
+		const projectRoot = await createTempProject();
+		process.chdir(projectRoot);
+		vi.spyOn(console, "log").mockImplementation(() => {});
+		await expect(handlePawCommand(["paw", "init"])).resolves.toBe(true);
+		await writePawSessionState(projectRoot, createVerifyingState("session-throw"));
+
+		const nativeVerificationExecutor: PawNativeVerificationExecutor = async () => {
+			throw new Error("native verification boom");
+		};
+
+		await expect(
+			createPawVerifyCommandResult(projectRoot, "session-throw", {
+				lockOptions: { nowMs: 8_000, ttlSec: 120 },
+				nativeVerificationExecutor,
+			}),
+		).rejects.toThrow("native verification boom");
+
+		expect(await getPawSessionLockStatus(projectRoot, "session-throw", { nowMs: 8_500 })).toEqual({
+			status: "unlocked",
+		});
+		expect(await readPawSessionState(projectRoot, "session-throw")).toEqual(createVerifyingState("session-throw"));
+	});
 });
 
 describe("parsePawVerifyArgs", () => {

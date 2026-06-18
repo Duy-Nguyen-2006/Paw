@@ -42,7 +42,7 @@ export function createTempDir(): string {
 }
 
 export function getLatestTempDir(): string {
-	return tempDirs[tempDirs.length - 1]!;
+	return tempDirs.at(-1)!;
 }
 
 afterEach(() => {

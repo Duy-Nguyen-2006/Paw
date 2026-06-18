@@ -1,5 +1,5 @@
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
-import { existsSync, readFileSync } from "fs";
 
 export interface ChangelogEntry {
 	major: number;
@@ -108,6 +108,23 @@ export function normalizeChangelogLinks(markdown: string, version: string | Chan
  * Parse changelog entries from CHANGELOG.md
  * Scans for ## lines and collects content until next ## or EOF
  */
+function parseVersionHeader(line: string): { major: number; minor: number; patch: number } | null {
+	const versionMatch = /##\s+\[?(\d+)\.(\d+)\.(\d+)\]?/.exec(line);
+	if (!versionMatch) return null;
+	return {
+		major: Number.parseInt(versionMatch[1], 10),
+		minor: Number.parseInt(versionMatch[2], 10),
+		patch: Number.parseInt(versionMatch[3], 10),
+	};
+}
+
+function buildEntry(version: { major: number; minor: number; patch: number }, lines: string[]): ChangelogEntry {
+	return {
+		...version,
+		content: lines.join("\n").trim(),
+	};
+}
+
 export function parseChangelog(changelogPath: string): ChangelogEntry[] {
 	if (!existsSync(changelogPath)) {
 		return [];
@@ -122,42 +139,19 @@ export function parseChangelog(changelogPath: string): ChangelogEntry[] {
 		let currentVersion: { major: number; minor: number; patch: number } | null = null;
 
 		for (const line of lines) {
-			// Check if this is a version header (## [x.y.z] ...)
 			if (line.startsWith("## ")) {
-				// Save previous entry if exists
 				if (currentVersion && currentLines.length > 0) {
-					entries.push({
-						...currentVersion,
-						content: currentLines.join("\n").trim(),
-					});
+					entries.push(buildEntry(currentVersion, currentLines));
 				}
-
-				// Try to parse version from this line
-				const versionMatch = line.match(/##\s+\[?(\d+)\.(\d+)\.(\d+)\]?/);
-				if (versionMatch) {
-					currentVersion = {
-						major: Number.parseInt(versionMatch[1], 10),
-						minor: Number.parseInt(versionMatch[2], 10),
-						patch: Number.parseInt(versionMatch[3], 10),
-					};
-					currentLines = [line];
-				} else {
-					// Reset if we can't parse version
-					currentVersion = null;
-					currentLines = [];
-				}
+				currentVersion = parseVersionHeader(line);
+				currentLines = currentVersion ? [line] : [];
 			} else if (currentVersion) {
-				// Collect lines for current version
 				currentLines.push(line);
 			}
 		}
 
-		// Save last entry
 		if (currentVersion && currentLines.length > 0) {
-			entries.push({
-				...currentVersion,
-				content: currentLines.join("\n").trim(),
-			});
+			entries.push(buildEntry(currentVersion, currentLines));
 		}
 
 		return entries;

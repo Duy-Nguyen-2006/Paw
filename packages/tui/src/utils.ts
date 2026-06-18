@@ -50,7 +50,7 @@ export const cjkBreakRegex =
 
 function isPrintableAscii(str: string): boolean {
 	for (let i = 0; i < str.length; i++) {
-		const code = str.charCodeAt(i);
+		const code = str.codePointAt(i)!;
 		if (code < 0x20 || code > 0x7e) {
 			return false;
 		}
@@ -181,7 +181,7 @@ function graphemeWidth(segment: string): number {
 
 	// Get base visible codepoint
 	const base = segment.replace(leadingNonPrintingRegex, "");
-	const cp = base.codePointAt(0);
+	const cp = base.codePointAt(0)!;
 	if (cp === undefined) {
 		return 0;
 	}

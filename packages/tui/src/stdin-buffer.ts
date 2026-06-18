@@ -17,7 +17,7 @@
  * MIT License - Copyright (c) 2025 opentui
  */
 
-import { EventEmitter } from "events";
+import { EventEmitter } from "node:events";
 
 const ESC = "\x1b";
 const BRACKETED_PASTE_START = "\x1b[200~";
@@ -96,9 +96,9 @@ function isCompleteCsiSequence(data: string): "complete" | "incomplete" {
 	// CSI sequences end with a byte in the range 0x40-0x7E (@-~)
 	// This includes all letters and several special characters
 	const lastChar = payload[payload.length - 1];
-	const lastCharCode = lastChar.charCodeAt(0);
+	const lastCharCode = lastChar.codePointAt(0)!;
 
-	if (lastCharCode >= 0x40 && lastCharCode <= 0x7e) {
+	if (lastCharCode! >= 0x40 && lastCharCode! <= 0x7e) {
 		// Special handling for SGR mouse sequences
 		// Format: ESC[<B;X;Ym or ESC[<B;X;YM
 		if (payload.startsWith("<")) {
@@ -297,7 +297,7 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 		if (Buffer.isBuffer(data)) {
 			if (data.length === 1 && data[0]! > 127) {
 				const byte = data[0]! - 128;
-				str = `\x1b${String.fromCharCode(byte)}`;
+				str = `\x1b${String.fromCodePoint(byte)}`;
 			} else {
 				str = data.toString();
 			}
@@ -387,7 +387,7 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 	}
 
 	private emitDataSequence(sequence: string): void {
-		const rawCodepoint = sequence.length === 1 ? sequence.codePointAt(0) : undefined;
+		const rawCodepoint = sequence.length === 1 ? sequence.codePointAt(0)! : undefined;
 		if (rawCodepoint !== undefined && rawCodepoint === this.pendingKittyPrintableCodepoint) {
 			this.pendingKittyPrintableCodepoint = undefined;
 			return;

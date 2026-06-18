@@ -1066,7 +1066,7 @@ describe("Editor component", () => {
 				assert.ok(visibleWidth(chunk.text) <= 10);
 			}
 			// "B" ends up on the last line (either alone or with the marker tail)
-			assert.strictEqual(chunks[chunks.length - 1]!.text.includes("B"), true);
+			assert.strictEqual(chunks.at(-1)!.text.includes("B"), true);
 
 			const reconstructed = chunks.map((c) => line.slice(c.startIndex, c.endIndex)).join("");
 			assert.strictEqual(reconstructed, line);
@@ -1143,7 +1143,7 @@ describe("Editor component", () => {
 			}
 
 			// Last chunk should contain "world" (normal wrapping resumes)
-			assert.strictEqual(chunks[chunks.length - 1]!.text, "world");
+			assert.strictEqual(chunks.at(-1)!.text, "world");
 
 			const reconstructed = chunks.map((c) => line.slice(c.startIndex, c.endIndex)).join("");
 			assert.strictEqual(reconstructed, line);

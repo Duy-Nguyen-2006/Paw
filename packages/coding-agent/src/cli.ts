@@ -11,7 +11,7 @@ import { main } from "./main.ts";
 
 process.title = APP_NAME;
 process.env.PI_CODING_AGENT = "true";
-process.emitWarning = (() => {}) as typeof process.emitWarning;
+process.emitWarning = () => {};
 
 // Configure undici's global dispatcher before provider SDKs issue requests.
 // Runtime settings are applied once SettingsManager has loaded global/project settings.

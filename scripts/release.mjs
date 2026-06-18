@@ -148,7 +148,7 @@ console.log("\n=== Release Script ===\n");
 // 1. Check for uncommitted changes
 console.log("Checking for uncommitted changes...");
 const status = run("git status --porcelain", { silent: true });
-if (status && status.trim()) {
+if (status?.trim()) {
 	console.error("Error: Uncommitted changes detected. Commit or stash first.");
 	console.error(status);
 	process.exit(1);

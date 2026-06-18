@@ -686,7 +686,7 @@ function matchesKittySequence(data: string, expectedCodepoint: number, expectedM
 	if (parsed.baseLayoutKey !== undefined && parsed.baseLayoutKey === expectedCodepoint) {
 		const cp = normalizedCodepoint;
 		const isLatinLetter = cp >= 97 && cp <= 122; // a-z
-		const isKnownSymbol = SYMBOL_KEYS.has(String.fromCharCode(cp));
+		const isKnownSymbol = SYMBOL_KEYS.has(String.fromCodePoint(cp));
 		if (!isLatinLetter && !isKnownSymbol) return true;
 	}
 
@@ -748,13 +748,13 @@ function matchesRawBackspace(data: string, expectedModifier: number): boolean {
  */
 function rawCtrlChar(key: string): string | null {
 	const char = key.toLowerCase();
-	const code = char.charCodeAt(0);
+	const code = char.codePointAt(0)!;
 	if ((code >= 97 && code <= 122) || char === "[" || char === "\\" || char === "]" || char === "_") {
-		return String.fromCharCode(code & 0x1f);
+		return String.fromCodePoint(code & 0x1f);
 	}
 	// Handle - as _ (same physical key on US keyboards)
 	if (char === "-") {
-		return String.fromCharCode(31); // Same as Ctrl+_
+		return String.fromCodePoint(31); // Same as Ctrl+_
 	}
 	return null;
 }
@@ -1147,7 +1147,7 @@ export function matchesKey(data: string, keyId: KeyId): boolean {
 
 	// Handle single letter/digit keys and symbols
 	if (key.length === 1 && ((key >= "a" && key <= "z") || isDigitKey(key) || SYMBOL_KEYS.has(key))) {
-		const codepoint = key.charCodeAt(0);
+		const codepoint = key.codePointAt(0)!;
 		const rawCtrl = rawCtrlChar(key);
 		const isLetter = key >= "a" && key <= "z";
 		const isDigit = isDigitKey(key);
@@ -1220,7 +1220,7 @@ function formatParsedKey(codepoint: number, modifier: number, baseLayoutKey?: nu
 	// reporting the wrong key name based on the QWERTY physical position.
 	const isLatinLetter = identityCodepoint >= 97 && identityCodepoint <= 122; // a-z
 	const isDigit = identityCodepoint >= 48 && identityCodepoint <= 57; // 0-9
-	const isKnownSymbol = SYMBOL_KEYS.has(String.fromCharCode(identityCodepoint));
+	const isKnownSymbol = identityCodepoint >= 0 && SYMBOL_KEYS.has(String.fromCodePoint(identityCodepoint));
 	const effectiveCodepoint =
 		isLatinLetter || isDigit || isKnownSymbol ? identityCodepoint : (baseLayoutKey ?? identityCodepoint);
 
@@ -1240,9 +1240,10 @@ function formatParsedKey(codepoint: number, modifier: number, baseLayoutKey?: nu
 	else if (effectiveCodepoint === ARROW_CODEPOINTS.down) keyName = "down";
 	else if (effectiveCodepoint === ARROW_CODEPOINTS.left) keyName = "left";
 	else if (effectiveCodepoint === ARROW_CODEPOINTS.right) keyName = "right";
-	else if (effectiveCodepoint >= 48 && effectiveCodepoint <= 57) keyName = String.fromCharCode(effectiveCodepoint);
-	else if (effectiveCodepoint >= 97 && effectiveCodepoint <= 122) keyName = String.fromCharCode(effectiveCodepoint);
-	else if (SYMBOL_KEYS.has(String.fromCharCode(effectiveCodepoint))) keyName = String.fromCharCode(effectiveCodepoint);
+	else if (effectiveCodepoint >= 48 && effectiveCodepoint <= 57) keyName = String.fromCodePoint(effectiveCodepoint);
+	else if (effectiveCodepoint >= 97 && effectiveCodepoint <= 122) keyName = String.fromCodePoint(effectiveCodepoint);
+	else if (SYMBOL_KEYS.has(String.fromCodePoint(effectiveCodepoint)))
+		keyName = String.fromCodePoint(effectiveCodepoint);
 
 	if (!keyName) return undefined;
 	return formatKeyNameWithModifiers(keyName, modifier);
@@ -1291,14 +1292,14 @@ export function parseKey(data: string): string | undefined {
 	if (data === "\x1b\x7f" || data === "\x1b\b") return "alt+backspace";
 	if (!_kittyProtocolActive && data === "\x1bB") return "alt+left";
 	if (!_kittyProtocolActive && data === "\x1bF") return "alt+right";
-	if (!_kittyProtocolActive && data.length === 2 && data[0] === "\x1b") {
-		const code = data.charCodeAt(1);
+	if (!_kittyProtocolActive && data.length === 2 && data.startsWith("\x1b")) {
+		const code = data.codePointAt(1)!;
 		if (code >= 1 && code <= 26) {
-			return `ctrl+alt+${String.fromCharCode(code + 96)}`;
+			return `ctrl+alt+${String.fromCodePoint(code + 96)}`;
 		}
 		// Legacy alt+letter/digit (ESC followed by the key)
 		if ((code >= 97 && code <= 122) || (code >= 48 && code <= 57)) {
-			return `alt+${String.fromCharCode(code)}`;
+			return `alt+${String.fromCodePoint(code)}`;
 		}
 	}
 	if (data === "\x1b[A") return "up";
@@ -1313,9 +1314,9 @@ export function parseKey(data: string): string | undefined {
 
 	// Raw Ctrl+letter
 	if (data.length === 1) {
-		const code = data.charCodeAt(0);
+		const code = data.codePointAt(0)!;
 		if (code >= 1 && code <= 26) {
-			return `ctrl+${String.fromCharCode(code + 96)}`;
+			return `ctrl+${String.fromCodePoint(code + 96)}`;
 		}
 		if (code >= 32 && code <= 126) {
 			return data;
@@ -1347,7 +1348,7 @@ const KITTY_PRINTABLE_ALLOWED_MODIFIERS = MODIFIERS.shift | LOCK_MASK;
  * @returns The printable character, or undefined if not a printable CSI-u sequence
  */
 export function decodeKittyPrintable(data: string): string | undefined {
-	const match = data.match(KITTY_CSI_U_REGEX);
+	const match = KITTY_CSI_U_REGEX.exec(data);
 	if (!match) return undefined;
 
 	// CSI-u groups: <codepoint>[:<shifted>[:<base>]];<mod>[:<event>]u

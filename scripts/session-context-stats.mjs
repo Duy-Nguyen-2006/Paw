@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 
-import { createReadStream } from "node:fs";
-import { promises as fs } from "node:fs";
+import { promises as fs }, { createReadStream } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
@@ -112,12 +111,20 @@ async function* walkJsonlFiles(dir) {
 async function loadContextWindows() {
 	const windows = new Map();
 	const sources = [];
+
+	await loadModelsGeneratedWindows(windows, sources);
+	await loadModelsConfigWindows(windows, sources);
+
+	return { windows, sources };
+}
+
+async function loadModelsGeneratedWindows(windows, sources) {
 	let text = "";
 	try {
 		text = await fs.readFile(MODELS_GENERATED_PATH, "utf8");
 		sources.push(MODELS_GENERATED_PATH);
 	} catch {
-		// Optional in non-repo usage.
+		return;
 	}
 	const providerRegex = /\n\t"([^"]+)": \{([\s\S]*?\n\t)\},/g;
 	let providerMatch;
@@ -130,27 +137,37 @@ async function loadContextWindows() {
 			windows.set(`${provider}/${modelMatch[1]}`, Number(modelMatch[2]));
 		}
 	}
+}
 
+async function loadModelsConfigWindows(windows, sources) {
+	let config;
 	try {
-		const config = JSON.parse(await fs.readFile(MODELS_CONFIG_PATH, "utf8"));
+		config = JSON.parse(await fs.readFile(MODELS_CONFIG_PATH, "utf8"));
 		sources.push(MODELS_CONFIG_PATH);
-		const providers = config?.providers && typeof config.providers === "object" ? config.providers : {};
-		for (const [providerName, provider] of Object.entries(providers)) {
-			const overrides = provider?.modelOverrides && typeof provider.modelOverrides === "object" ? provider.modelOverrides : {};
-			for (const [modelId, override] of Object.entries(overrides)) {
-				if (typeof override?.contextWindow === "number") windows.set(`${providerName}/${modelId}`, override.contextWindow);
-			}
-			if (Array.isArray(provider?.models)) {
-				for (const model of provider.models) {
-					if (typeof model?.id === "string" && typeof model.contextWindow === "number") windows.set(`${providerName}/${model.id}`, model.contextWindow);
-				}
-			}
-		}
 	} catch {
-		// Optional user config.
+		return;
 	}
+	const providers = config?.providers && typeof config.providers === "object" ? config.providers : {};
+	for (const [providerName, provider] of Object.entries(providers)) {
+		loadProviderModelOverrides(windows, providerName, provider);
+		loadProviderModelList(windows, providerName, provider);
+	}
+}
 
-	return { windows, sources };
+function loadProviderModelOverrides(windows, providerName, provider) {
+	const overrides = provider?.modelOverrides && typeof provider.modelOverrides === "object" ? provider.modelOverrides : {};
+	for (const [modelId, override] of Object.entries(overrides)) {
+		if (typeof override?.contextWindow === "number") windows.set(`${providerName}/${modelId}`, override.contextWindow);
+	}
+}
+
+function loadProviderModelList(windows, providerName, provider) {
+	if (!Array.isArray(provider?.models)) return;
+	for (const model of provider.models) {
+		if (typeof model?.id === "string" && typeof model.contextWindow === "number") {
+			windows.set(`${providerName}/${model.id}`, model.contextWindow);
+		}
+	}
 }
 
 function contextTokens(usage) {
@@ -168,96 +185,176 @@ function contextTokens(usage) {
 async function scanSessions(sessionsDir, sinceMs, contextWindows, cwdFilter) {
 	const windows = contextWindows.windows;
 	const sessions = [];
-	const meta = { sessionsDir, sessionFilesScanned: 0, sessionFilesIncluded: 0, sessionFilesSkippedOlderThanSince: 0, malformedLines: 0 };
+	const meta = createScanMeta(sessionsDir);
 	for await (const sessionFile of walkJsonlFiles(sessionsDir)) {
 		meta.sessionFilesScanned++;
 		const fileTimestampMs = parseSessionFileTimestamp(sessionFile);
-		if (sinceMs !== null && fileTimestampMs !== null && fileTimestampMs < sinceMs) {
+		if (isSessionFileTooOld(sinceMs, fileTimestampMs)) {
 			meta.sessionFilesSkippedOlderThanSince++;
 			continue;
 		}
 		meta.sessionFilesIncluded++;
-		const session = {
-			sessionFile,
-			cwd: null,
-			startMs: fileTimestampMs ?? 0,
-			endMs: fileTimestampMs ?? 0,
-			providerModel: "[unknown]/[unknown]",
-			assistantMessages: 0,
-			userMessages: 0,
-			compactions: 0,
-			seenCompaction: false,
-			maxPromptTokens: null,
-			preFirstCompactionTokens: null,
-			maxContextUsagePercent: null,
-			preFirstCompactionUsagePercent: null,
-			contextWindow: null,
-			bashCommands: [],
-			over80: false,
-			over90: false,
-			over100: false,
-		};
-		const input = createReadStream(sessionFile, { encoding: "utf8" });
-		const rl = createInterface({ input, crlfDelay: Infinity });
-		for await (const line of rl) {
-			if (!line.trim()) continue;
-			let entry;
-			try {
-				entry = JSON.parse(line);
-			} catch {
-				meta.malformedLines++;
-				continue;
-			}
-			if (entry.type === "session" && typeof entry.cwd === "string") session.cwd = entry.cwd;
-			const entryMs = Date.parse(entry.timestamp ?? "");
-			if (Number.isFinite(entryMs)) {
-				if (!session.startMs || entryMs < session.startMs) session.startMs = entryMs;
-				if (!session.endMs || entryMs > session.endMs) session.endMs = entryMs;
-			}
-			if (entry.type === "compaction") {
-				session.compactions++;
-				if (typeof entry.tokensBefore === "number") {
-					session.maxPromptTokens = Math.max(session.maxPromptTokens ?? 0, entry.tokensBefore);
-					if (!session.seenCompaction) session.preFirstCompactionTokens = entry.tokensBefore;
-				}
-				session.seenCompaction = true;
-				continue;
-			}
-			if (entry.type !== "message" || !entry.message) continue;
-			const message = entry.message;
-			if (message.role === "assistant" && Array.isArray(message.content)) {
-				for (const block of message.content) {
-					if (block?.type !== "toolCall" || block.name !== "bash") continue;
-					const command = typeof block.arguments?.command === "string" ? block.arguments.command : "";
-					if (command) session.bashCommands.push(command);
-				}
-			}
-			if (message.role === "user") session.userMessages++;
-			if (message.role !== "assistant") continue;
-			session.assistantMessages++;
-			const provider = typeof message.provider === "string" ? message.provider : "[unknown]";
-			const model = typeof message.model === "string" ? message.model : "[unknown]";
-			session.providerModel = `${provider}/${model}`;
-			const contextWindow = windows.get(session.providerModel) ?? null;
-			if (contextWindow !== null) session.contextWindow = contextWindow;
-			const tokens = contextTokens(message.usage);
-			if (tokens !== null) {
-				session.maxPromptTokens = Math.max(session.maxPromptTokens ?? 0, tokens);
-				if (!session.seenCompaction) session.preFirstCompactionTokens = tokens;
-			}
-		}
-		if (session.maxPromptTokens !== null && session.contextWindow !== null) {
-			session.maxContextUsagePercent = (session.maxPromptTokens / session.contextWindow) * 100;
-			session.over80 = session.maxContextUsagePercent >= 80;
-			session.over90 = session.maxContextUsagePercent >= 90;
-			session.over100 = session.maxContextUsagePercent >= 100;
-		}
-		if (session.preFirstCompactionTokens !== null && session.contextWindow !== null) {
-			session.preFirstCompactionUsagePercent = (session.preFirstCompactionTokens / session.contextWindow) * 100;
-		}
-		if (!cwdFilter || path.resolve(session.cwd ?? "") === cwdFilter) sessions.push(session);
+		const session = await scanOneSession(sessionFile, fileTimestampMs, windows, meta);
+		if (matchesCwdFilter(session, cwdFilter)) sessions.push(session);
 	}
 	return { sessions, meta };
+}
+
+/** Initialize the meta counters that track the scan's progress. */
+function createScanMeta(sessionsDir) {
+	return {
+		sessionsDir,
+		sessionFilesScanned: 0,
+		sessionFilesIncluded: 0,
+		sessionFilesSkippedOlderThanSince: 0,
+		malformedLines: 0,
+	};
+}
+
+/** Return true when the session is older than the cutoff timestamp. */
+function isSessionTooOld(sinceMs, fileTimestampMs) {
+	if (sinceMs === null || fileTimestampMs === null) return false;
+	return fileTimestampMs < sinceMs;
+}
+
+/** True when an absolute session cwd matches the requested cwd filter. */
+function matchesCwdFilter(session, cwdFilter) {
+	if (!cwdFilter) return true;
+	return path.resolve(session.cwd ?? "") === cwdFilter;
+}
+
+function createEmptySessionRecord(sessionFile, fileTimestampMs) {
+	return {
+		sessionFile,
+		cwd: null,
+		startMs: fileTimestampMs ?? 0,
+		endMs: fileTimestampMs ?? 0,
+		providerModel: "[unknown]/[unknown]",
+		assistantMessages: 0,
+		userMessages: 0,
+		compactions: 0,
+		seenCompaction: false,
+		maxPromptTokens: null,
+		preFirstCompactionTokens: null,
+		maxContextUsagePercent: null,
+		preFirstCompactionUsagePercent: null,
+		contextWindow: null,
+		bashCommands: [],
+		over80: false,
+		over90: false,
+		over100: false,
+	};
+}
+
+async function scanOneSession(sessionFile, fileTimestampMs, windows, meta) {
+	const session = createEmptySessionRecord(sessionFile, fileTimestampMs);
+	const input = createReadStream(sessionFile, { encoding: "utf8" });
+	const rl = createInterface({ input, crlfDelay: Infinity });
+	for await (const line of rl) {
+		if (!line.trim()) continue;
+		const entry = parseSessionLine(line, meta);
+		if (entry === null) continue;
+		applySessionEntry(session, entry, windows, meta);
+	}
+	finalizeSessionPercentages(session);
+	return session;
+}
+
+/** Parse one JSONL line, counting malformed entries in `meta`. */
+function parseSessionLine(line, meta) {
+	let entry;
+	try {
+		entry = JSON.parse(line);
+	} catch {
+		meta.malformedLines++;
+		return null;
+	}
+	return entry;
+}
+
+/** Update session counters from a single JSONL entry. */
+function applySessionEntry(session, entry, windows, meta) {
+	if (entry.type === "session" && typeof entry.cwd === "string") session.cwd = entry.cwd;
+	updateSessionTimeRange(session, entry);
+	if (entry.type === "compaction") {
+		applyCompactionEntry(session, entry);
+		return;
+	}
+	if (entry.type !== "message" || !entry.message) return;
+	applyMessageEntry(session, entry.message, windows, meta);
+}
+
+/** Push the entry's timestamp into the session's start/end range. */
+function updateSessionTimeRange(session, entry) {
+	const entryMs = Date.parse(entry.timestamp ?? "");
+	if (!Number.isFinite(entryMs)) return;
+	if (!session.startMs || entryMs < session.startMs) session.startMs = entryMs;
+	if (!session.endMs || entryMs > session.endMs) session.endMs = entryMs;
+}
+
+/** Apply a compaction entry to the session's prompt-token tracking. */
+function applyCompactionEntry(session, entry) {
+	session.compactions++;
+	if (typeof entry.tokensBefore === "number") {
+		session.maxPromptTokens = Math.max(session.maxPromptTokens ?? 0, entry.tokensBefore);
+		if (!session.seenCompaction) session.preFirstCompactionTokens = entry.tokensBefore;
+	}
+	session.seenCompaction = true;
+}
+
+/** Update session counters from a `message` entry. */
+function applyMessageEntry(session, message, windows, _meta) {
+	collectBashCommands(session, message);
+	if (message.role === "user") session.userMessages++;
+	if (message.role !== "assistant") return;
+	session.assistantMessages++;
+	setSessionProviderModel(session, message);
+	applyAssistantContextWindow(session, message, windows);
+	applyAssistantTokenUsage(session, message);
+}
+
+/** Capture every `bash` tool-call command from an assistant message. */
+function collectBashCommands(session, message) {
+	if (message.role !== "assistant" || !Array.isArray(message.content)) return;
+	for (const block of message.content) {
+		if (block?.type !== "toolCall" || block.name !== "bash") continue;
+		const command = typeof block.arguments?.command === "string" ? block.arguments.command : "";
+		if (command) session.bashCommands.push(command);
+	}
+}
+
+/** Record the provider/model and the corresponding context window for the assistant message. */
+function setSessionProviderModel(session, message) {
+	const provider = typeof message.provider === "string" ? message.provider : "[unknown]";
+	const model = typeof message.model === "string" ? message.model : "[unknown]";
+	session.providerModel = `${provider}/${model}`;
+}
+
+/** Look up the model-specific context window, if the message is from a known model. */
+function applyAssistantContextWindow(session, message, windows) {
+	const contextWindow = windows.get(session.providerModel) ?? null;
+	if (contextWindow !== null) session.contextWindow = contextWindow;
+}
+
+/** Track the largest prompt tokens seen before the first compaction. */
+function applyAssistantTokenUsage(session, message) {
+	const tokens = contextTokens(message.usage);
+	if (tokens === null) return;
+	session.maxPromptTokens = Math.max(session.maxPromptTokens ?? 0, tokens);
+	if (!session.seenCompaction) session.preFirstCompactionTokens = tokens;
+}
+
+/** Compute final percentage and threshold flags once a session is fully scanned. */
+function finalizeSessionPercentages(session) {
+	if (session.maxPromptTokens !== null && session.contextWindow !== null) {
+		session.maxContextUsagePercent = (session.maxPromptTokens / session.contextWindow) * 100;
+		session.over80 = session.maxContextUsagePercent >= 80;
+		session.over90 = session.maxContextUsagePercent >= 90;
+		session.over100 = session.maxContextUsagePercent >= 100;
+	}
+	if (session.preFirstCompactionTokens !== null && session.contextWindow !== null) {
+		session.preFirstCompactionUsagePercent = (session.preFirstCompactionTokens / session.contextWindow) * 100;
+	}
 }
 
 function summarizeGroups(sessions, keyFn) {

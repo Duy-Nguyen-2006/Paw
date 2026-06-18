@@ -20,11 +20,11 @@
  *   pi -e ./tool-override.ts
  */
 
+import { constants, readFileSync } from "node:fs";
+import { access, appendFile, readFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import type { TextContent } from "@earendil-works/pi-ai";
 import { type ExtensionAPI, getAgentDir, withFileMutationQueue } from "@earendil-works/pi-coding-agent";
-import { constants, readFileSync } from "fs";
-import { access, appendFile, readFile } from "fs/promises";
-import { join, resolve } from "path";
 import { Type } from "typebox";
 
 const LOG_FILE = join(getAgentDir(), "read-access.log");

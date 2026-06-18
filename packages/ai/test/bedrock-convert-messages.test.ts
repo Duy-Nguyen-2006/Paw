@@ -163,7 +163,7 @@ describe("bedrock convertMessages skips unknown content types", () => {
 
 	it("replaces user content emptied by surrogate sanitization with a placeholder", async () => {
 		const payload = await capturePayload({
-			messages: [{ role: "user", content: String.fromCharCode(0xd83d), timestamp: Date.now() }],
+			messages: [{ role: "user", content: String.fromCodePoint(0xd83d), timestamp: Date.now() }],
 		});
 		expect(payload).toBeDefined();
 		const p = payload as { messages: Array<{ role: string; content: unknown[] }> };
@@ -175,7 +175,7 @@ describe("bedrock convertMessages skips unknown content types", () => {
 		const messages: Message[] = [
 			{
 				role: "assistant",
-				content: [{ type: "text", text: String.fromCharCode(0xd83d) }],
+				content: [{ type: "text", text: String.fromCodePoint(0xd83d) }],
 				api: "bedrock-converse-stream",
 				provider: "amazon-bedrock",
 				model: baseModel.id,

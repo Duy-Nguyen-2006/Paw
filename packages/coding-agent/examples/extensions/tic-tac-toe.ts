@@ -366,9 +366,9 @@ function renderBoardSnapshot(board: Cell[][], maxWidth: number): string[] {
 
 class TicTacToeComponent implements Component {
 	private state: GameState;
-	private onClose: () => void;
-	private onUserPlay: (row: number, col: number) => void;
-	private tui: { requestRender: () => void };
+	private readonly onClose: () => void;
+	private readonly onUserPlay: (row: number, col: number) => void;
+	private readonly tui: { requestRender: () => void };
 	private cachedLines: string[] = [];
 	private cachedWidth = 0;
 	private version = 0;

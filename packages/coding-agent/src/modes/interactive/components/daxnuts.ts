@@ -20,9 +20,9 @@ function parseImage(): number[][][] {
 		const row: number[][] = [];
 		for (let x = 0; x < WIDTH; x++) {
 			const idx = (y * WIDTH + x) * 6;
-			const r = parseInt(DAX_HEX.slice(idx, idx + 2), 16);
-			const g = parseInt(DAX_HEX.slice(idx + 2, idx + 4), 16);
-			const b = parseInt(DAX_HEX.slice(idx + 4, idx + 6), 16);
+			const r = Number.parseInt(DAX_HEX.slice(idx, idx + 2), 16);
+			const g = Number.parseInt(DAX_HEX.slice(idx + 2, idx + 4), 16);
+			const b = Number.parseInt(DAX_HEX.slice(idx + 4, idx + 6), 16);
 			row.push([r, g, b]);
 		}
 		pixels.push(row);
@@ -59,7 +59,7 @@ export class DaxnutsComponent implements Component {
 	private image: string[];
 	private interval: ReturnType<typeof setInterval> | null = null;
 	private tick = 0;
-	private maxTicks = 25; // ~2 seconds at 80ms
+	private readonly maxTicks = 25; // ~2 seconds at 80ms
 	private cachedLines: string[] = [];
 	private cachedWidth = 0;
 	private cachedTick = -1;
@@ -133,22 +133,23 @@ export class DaxnutsComponent implements Component {
 		// Fade in text after image is revealed
 		const textPhase = Math.max(0, this.tick - this.maxTicks * 0.6);
 		if (textPhase > 0 || this.tick >= this.maxTicks) {
-			lines.push(center(t.fg("accent", "Free Kimi K2.5 via OpenCode Zen")));
-			lines.push(center(t.fg("success", '"Powered by daxnuts"')));
-			lines.push(center(t.fg("muted", "— @thdxr")));
+			lines.push(
+				center(t.fg("accent", "Free Kimi K2.5 via OpenCode Zen")),
+				center(t.fg("success", '"Powered by daxnuts"')),
+				center(t.fg("muted", "— @thdxr")),
+			);
 		} else {
-			lines.push("");
-			lines.push("");
-			lines.push("");
+			lines.push("", "", "");
 		}
 
 		lines.push("");
 		if (textPhase > 2 || this.tick >= this.maxTicks) {
-			lines.push(center(t.fg("dim", "Try OpenCode")));
-			lines.push(center(t.fg("mdLink", "https://mistral.ai/news/mistral-vibe-2-0")));
+			lines.push(
+				center(t.fg("dim", "Try OpenCode")),
+				center(t.fg("mdLink", "https://mistral.ai/news/mistral-vibe-2-0")),
+			);
 		} else {
-			lines.push("");
-			lines.push("");
+			lines.push("", "");
 		}
 		lines.push("");
 

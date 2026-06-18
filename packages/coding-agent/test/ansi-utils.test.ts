@@ -95,11 +95,11 @@ describe("stripAnsi", () => {
 	});
 
 	it("strips single-byte ESC sequences without leaking final bytes", () => {
-		for (let code = "g".charCodeAt(0); code <= "m".charCodeAt(0); code++) {
-			expect(stripAnsi(`\x1b${String.fromCharCode(code)}ok`)).toBe("ok");
+		for (let code = "g".codePointAt(0)!; code <= "m".codePointAt(0)!; code++) {
+			expect(stripAnsi(`\x1b${String.fromCodePoint(code)}ok`)).toBe("ok");
 		}
-		for (let code = "r".charCodeAt(0); code <= "t".charCodeAt(0); code++) {
-			expect(stripAnsi(`\x1b${String.fromCharCode(code)}ok`)).toBe("ok");
+		for (let code = "r".codePointAt(0)!; code <= "t".codePointAt(0)!; code++) {
+			expect(stripAnsi(`\x1b${String.fromCodePoint(code)}ok`)).toBe("ok");
 		}
 	});
 

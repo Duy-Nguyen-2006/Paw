@@ -8,7 +8,7 @@ import { DefaultPackageManager, type ProgressEvent, type ResolvedResource } from
 import { SettingsManager } from "../src/core/settings-manager.ts";
 
 function normalizeForMatch(value: string): string {
-	return value.replace(/\\/g, "/");
+	return value.replaceAll("\\", "/");
 }
 
 function pathEndsWith(actualPath: string, suffix: string): boolean {
