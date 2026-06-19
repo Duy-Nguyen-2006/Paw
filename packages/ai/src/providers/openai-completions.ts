@@ -30,12 +30,23 @@ import type {
 	ToolResultMessage,
 } from "../types.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
-import { headersToRecord } from "../utils/headers.ts";
-import { parseStreamingJson } from "../utils/json-parse.ts";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.ts";
-import { isCloudflareProvider, resolveCloudflareBaseUrl } from "./cloudflare.ts";
-import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.ts";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.ts";
+import {
+	assertCompletionStreamFinished,
+	buildCompletionRequestOptions,
+	consumeOpenAICompletionStream,
+	createCompletionStreamProcessor,
+	createCompletionStreamState,
+	createInitialCompletionOutput,
+	createOpenAICompletionsClient,
+	formatCompletionStreamError,
+	notifyCompletionOnResponse,
+	stripCompletionStreamScratchFields,
+	type OpenAICompletionsOptions,
+	type ResolvedOpenAICompletionsCompat,
+	type StreamingBlock,
+} from "./openai-completions-helpers.ts";
 import { buildBaseOptions } from "./simple-options.ts";
 import { transformMessages } from "./transform-messages.ts";
 
@@ -74,19 +85,12 @@ function isImageContentBlock(block: { type: string }): block is ImageContent {
 	return block.type === "image";
 }
 
-export interface OpenAICompletionsOptions extends StreamOptions {
-	toolChoice?: "auto" | "none" | "required" | { type: "function"; function: { name: string } };
-	reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh";
-}
+export type { OpenAICompletionsOptions } from "./openai-completions-helpers.ts";
 
 interface OpenAICompatCacheControl {
 	type: "ephemeral";
 	ttl?: string;
 }
-
-type ResolvedOpenAICompletionsCompat = Omit<Required<OpenAICompletionsCompat>, "cacheControlFormat"> & {
-	cacheControlFormat?: OpenAICompletionsCompat["cacheControlFormat"];
-};
 
 type ChatCompletionInstructionMessageParam = ChatCompletionDeveloperMessageParam | ChatCompletionSystemMessageParam;
 
@@ -116,23 +120,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 	const stream = new AssistantMessageEventStream();
 
 	(async () => {
-		const output: AssistantMessage = {
-			role: "assistant",
-			content: [],
-			api: model.api,
-			provider: model.provider,
-			model: model.id,
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
-			stopReason: "stop",
-			timestamp: Date.now(),
-		};
+		const output = createInitialCompletionOutput(model);
 
 		try {
 			const apiKey = options?.apiKey;
@@ -142,349 +130,51 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 			const compat = getCompat(model);
 			const cacheRetention = resolveCacheRetention(options?.cacheRetention);
 			const cacheSessionId = cacheRetention === "none" ? undefined : options?.sessionId;
-			const client = createClient(model, context, apiKey, options?.headers, cacheSessionId, compat);
+			const client = createOpenAICompletionsClient(
+				model,
+				context,
+				apiKey,
+				options?.headers,
+				cacheSessionId,
+				compat,
+			);
 			let params = buildParams(model, context, options, compat, cacheRetention);
 			const nextParams = await options?.onPayload?.(params, model);
 			if (nextParams !== undefined) {
 				params = nextParams as OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming;
 			}
-			const requestOptions = {
-				...(options?.signal ? { signal: options.signal } : {}),
-				...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
-				maxRetries: options?.maxRetries ?? 0,
-			};
+			const requestOptions = buildCompletionRequestOptions(options);
 			const { data: openaiStream, response } = await client.chat.completions
 				.create(params, requestOptions)
 				.withResponse();
-			await options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, model);
+			await notifyCompletionOnResponse(options, response, model);
 			stream.push({ type: "start", partial: output });
 
-			interface StreamingToolCallBlock extends ToolCall {
-				partialArgs?: string;
-				streamIndex?: number;
-			}
-			type StreamingBlock = TextContent | ThinkingContent | StreamingToolCallBlock;
-			type StreamingToolCallDelta = NonNullable<ChatCompletionChunk.Choice.Delta["tool_calls"]>[number];
-
-			interface CompletionStreamState {
-				textBlock: TextContent | null;
-				thinkingBlock: ThinkingContent | null;
-				hasFinishReason: boolean;
-				toolCallBlocksByIndex: Map<number, StreamingToolCallBlock>;
-				toolCallBlocksById: Map<string, StreamingToolCallBlock>;
-			}
-			const state: CompletionStreamState = {
-				textBlock: null,
-				thinkingBlock: null,
-				hasFinishReason: false,
-				toolCallBlocksByIndex: new Map(),
-				toolCallBlocksById: new Map(),
-			};
+			const state = createCompletionStreamState();
 			const blocks = output.content as StreamingBlock[];
-			const getContentIndex = (block: StreamingBlock) => blocks.indexOf(block);
+			const { processChunk, finishBlock } = createCompletionStreamProcessor({
+				stream,
+				output,
+				model,
+				state,
+				blocks,
+				parseChunkUsage,
+				mapStopReason,
+			});
 
-			const ensureTextBlock = (): TextContent => {
-				if (!state.textBlock) {
-					state.textBlock = { type: "text", text: "" };
-					blocks.push(state.textBlock);
-					stream.push({ type: "text_start", contentIndex: getContentIndex(state.textBlock), partial: output });
-				}
-				return state.textBlock;
-			};
-
-			const ensureThinkingBlock = (thinkingSignature: string): ThinkingContent => {
-				if (!state.thinkingBlock) {
-					state.thinkingBlock = {
-						type: "thinking",
-						thinking: "",
-						thinkingSignature,
-					};
-					blocks.push(state.thinkingBlock);
-					stream.push({
-						type: "thinking_start",
-						contentIndex: getContentIndex(state.thinkingBlock),
-						partial: output,
-					});
-				}
-				return state.thinkingBlock;
-			};
-
-			const ensureToolCallBlock = (toolCall: StreamingToolCallDelta): StreamingToolCallBlock => {
-				const streamIndex = typeof toolCall.index === "number" ? toolCall.index : undefined;
-				let block = streamIndex !== undefined ? state.toolCallBlocksByIndex.get(streamIndex) : undefined;
-				if (!block && toolCall.id) {
-					block = state.toolCallBlocksById.get(toolCall.id);
-				}
-				if (!block) {
-					block = {
-						type: "toolCall",
-						id: toolCall.id || "",
-						name: toolCall.function?.name || "",
-						arguments: {},
-						partialArgs: "",
-						streamIndex,
-					};
-					if (streamIndex !== undefined) {
-						state.toolCallBlocksByIndex.set(streamIndex, block);
-					}
-					if (toolCall.id) {
-						state.toolCallBlocksById.set(toolCall.id, block);
-					}
-					blocks.push(block);
-					stream.push({
-						type: "toolcall_start",
-						contentIndex: getContentIndex(block),
-						partial: output,
-					});
-				}
-				if (streamIndex !== undefined && block.streamIndex === undefined) {
-					block.streamIndex = streamIndex;
-					state.toolCallBlocksByIndex.set(streamIndex, block);
-				}
-				if (toolCall.id) {
-					state.toolCallBlocksById.set(toolCall.id, block);
-				}
-				return block;
-			};
-
-			/**
-			 * Apply chunk-level metadata (response id, response model, usage, finish reason)
-			 * to the output message.
-			 */
-			const applyChunkMetadata = (chunk: ChatCompletionChunk): void => {
-				// OpenAI documents ChatCompletionChunk.id as the unique chat completion identifier,
-				// and each chunk in a streamed completion carries the same id.
-				output.responseId ||= chunk.id;
-				if (typeof chunk.model === "string" && chunk.model.length > 0 && chunk.model !== model.id) {
-					output.responseModel ||= chunk.model;
-				}
-				if (chunk.usage) {
-					output.usage = parseChunkUsage(chunk.usage, model);
-				}
-			};
-
-			/**
-			 * Apply text content delta to the current text block, creating one if needed.
-			 */
-			const applyTextDelta = (delta: string): void => {
-				const block = ensureTextBlock();
-				block.text += delta;
-				stream.push({
-					type: "text_delta",
-					contentIndex: getContentIndex(block),
-					delta,
-					partial: output,
-				});
-			};
-
-			/**
-			 * Apply reasoning delta to the current thinking block. The reasoning field name
-			 * is provider-specific (reasoning_content for llama.cpp, reasoning for others).
-			 * The first non-empty field wins to avoid duplication.
-			 */
-			const applyReasoningDelta = (choice: ChatCompletionChunk.Choice): void => {
-				// Some endpoints return reasoning in reasoning_content (llama.cpp),
-				// or reasoning (other openai compatible endpoints)
-				// Use the first non-empty reasoning field to avoid duplication
-				// (e.g., chutes.ai returns both reasoning_content and reasoning with same content)
-				const reasoningFields = ["reasoning_content", "reasoning", "reasoning_text"];
-				const deltaFields = choice.delta as Record<string, unknown>;
-				let foundReasoningField: string | null = null;
-				for (const field of reasoningFields) {
-					const value = deltaFields[field];
-					if (typeof value === "string" && value.length > 0) {
-						foundReasoningField = field;
-						break;
-					}
-				}
-
-				if (!foundReasoningField) return;
-
-				const delta = deltaFields[foundReasoningField];
-				if (typeof delta !== "string" || delta.length === 0) return;
-
-				const thinkingSignature =
-					model.provider === "opencode-go" && foundReasoningField === "reasoning"
-						? "reasoning_content"
-						: foundReasoningField;
-				const block = ensureThinkingBlock(thinkingSignature);
-				block.thinking += delta;
-				stream.push({
-					type: "thinking_delta",
-					contentIndex: getContentIndex(block),
-					delta,
-					partial: output,
-				});
-			};
-
-			/**
-			 * Apply streaming tool call deltas to the matching tool call block.
-			 */
-			const applyToolCallDeltas = (toolCalls: NonNullable<ChatCompletionChunk.Choice.Delta["tool_calls"]>): void => {
-				for (const toolCall of toolCalls) {
-					const block = ensureToolCallBlock(toolCall);
-					if (!block.id && toolCall.id) {
-						block.id = toolCall.id;
-						state.toolCallBlocksById.set(toolCall.id, block);
-					}
-					if (!block.name && toolCall.function?.name) {
-						block.name = toolCall.function.name;
-					}
-
-					let delta = "";
-					if (toolCall.function?.arguments) {
-						delta = toolCall.function.arguments;
-						block.partialArgs = (block.partialArgs ?? "") + toolCall.function.arguments;
-						block.arguments = parseStreamingJson(block.partialArgs);
-					}
-					stream.push({
-						type: "toolcall_delta",
-						contentIndex: getContentIndex(block),
-						delta,
-						partial: output,
-					});
-				}
-			};
-
-			/**
-			 * Propagate encrypted reasoning details (e.g., from chutes.ai) onto matching tool calls.
-			 */
-			const applyReasoningDetails = (reasoningDetails: unknown): void => {
-				if (!reasoningDetails || !Array.isArray(reasoningDetails)) return;
-
-				for (const detail of reasoningDetails) {
-					if (detail.type === "reasoning.encrypted" && detail.id && detail.data) {
-						const matchingToolCall = output.content.find((b) => b.type === "toolCall" && b.id === detail.id) as
-							| ToolCall
-							| undefined;
-						if (matchingToolCall) {
-							matchingToolCall.thoughtSignature = JSON.stringify(detail);
-						}
-					}
-				}
-			};
-
-			/**
-			 * Apply the choice delta branch: text, reasoning, tool calls, and reasoning details.
-			 */
-			const applyChoiceDelta = (choice: ChatCompletionChunk.Choice): void => {
-				if (!choice.delta) return;
-
-				if (
-					choice.delta.content !== null &&
-					choice.delta.content !== undefined &&
-					choice.delta.content.length > 0
-				) {
-					applyTextDelta(choice.delta.content);
-				}
-
-				applyReasoningDelta(choice);
-
-				if (choice.delta.tool_calls) {
-					applyToolCallDeltas(choice.delta.tool_calls);
-				}
-
-				const reasoningDetails = (choice.delta as any).reasoning_details;
-				applyReasoningDetails(reasoningDetails);
-			};
-
-			/**
-			 * Process a single chat-completion chunk and update streaming state.
-			 */
-			const processChunk = (chunk: ChatCompletionChunk): void => {
-				applyChunkMetadata(chunk);
-
-				const choice = Array.isArray(chunk.choices) ? chunk.choices[0] : undefined;
-				if (!choice) return;
-
-				// Fallback: some providers (e.g., Moonshot) return usage
-				// in choice.usage instead of the standard chunk.usage
-				if (!chunk.usage && (choice as any).usage) {
-					output.usage = parseChunkUsage((choice as any).usage, model);
-				}
-
-				if (choice.finish_reason) {
-					const finishReasonResult = mapStopReason(choice.finish_reason);
-					output.stopReason = finishReasonResult.stopReason;
-					if (finishReasonResult.errorMessage) {
-						output.errorMessage = finishReasonResult.errorMessage;
-					}
-					state.hasFinishReason = true;
-				}
-
-				applyChoiceDelta(choice);
-			};
-
-			const finishBlock = (block: StreamingBlock) => {
-				const contentIndex = getContentIndex(block);
-				if (contentIndex === -1) {
-					return;
-				}
-				if (block.type === "text") {
-					stream.push({
-						type: "text_end",
-						contentIndex,
-						content: block.text,
-						partial: output,
-					});
-				} else if (block.type === "thinking") {
-					stream.push({
-						type: "thinking_end",
-						contentIndex,
-						content: block.thinking,
-						partial: output,
-					});
-				} else if (block.type === "toolCall") {
-					block.arguments = parseStreamingJson(block.partialArgs);
-					// Finalize in-place and strip the scratch buffers so replay only
-					// carries parsed arguments.
-					delete block.partialArgs;
-					delete block.streamIndex;
-					stream.push({
-						type: "toolcall_end",
-						contentIndex,
-						toolCall: block,
-						partial: output,
-					});
-				}
-			};
-
-			for await (const chunk of openaiStream) {
-				if (!chunk || typeof chunk !== "object") continue;
-				processChunk(chunk as ChatCompletionChunk);
-			}
-
+			await consumeOpenAICompletionStream(openaiStream, processChunk);
 			for (const block of blocks) {
 				finishBlock(block);
 			}
-			if (options?.signal?.aborted) {
-				throw new Error("Request was aborted");
-			}
-
-			if (output.stopReason === "aborted") {
-				throw new Error("Request was aborted");
-			}
-			if (output.stopReason === "error") {
-				throw new Error(output.errorMessage || "Provider returned an error stop reason");
-			}
-			if (!state.hasFinishReason) {
-				throw new Error("Stream ended without finish_reason");
-			}
+			assertCompletionStreamFinished(output, state, options);
 
 			stream.push({ type: "done", reason: output.stopReason, message: output });
 			stream.end();
 		} catch (error) {
-			for (const block of output.content) {
-				delete (block as { index?: number }).index;
-				// Streaming scratch buffers are only used during parsing; never persist them.
-				delete (block as { partialArgs?: string }).partialArgs;
-				delete (block as { streamIndex?: number }).streamIndex;
-			}
-			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-			output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
-			// Some providers via OpenRouter give additional information in this field.
-			const rawMetadata = (error as any)?.error?.metadata?.raw;
-			if (rawMetadata) output.errorMessage += `\n${rawMetadata}`;
+			stripCompletionStreamScratchFields(output);
+			const formatted = formatCompletionStreamError(error, options);
+			output.stopReason = formatted.stopReason;
+			output.errorMessage = formatted.errorMessage;
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
 		}
@@ -514,52 +204,6 @@ export const streamSimpleOpenAICompletions: StreamFunction<"openai-completions",
 		toolChoice,
 	} satisfies OpenAICompletionsOptions);
 };
-
-function createClient(
-	model: Model<"openai-completions">,
-	context: Context,
-	apiKey: string,
-	optionsHeaders?: Record<string, string>,
-	sessionId?: string,
-	compat: ResolvedOpenAICompletionsCompat = getCompat(model),
-) {
-	const headers = { ...model.headers };
-	if (model.provider === "github-copilot") {
-		const hasImages = hasCopilotVisionInput(context.messages);
-		const copilotHeaders = buildCopilotDynamicHeaders({
-			messages: context.messages,
-			hasImages,
-		});
-		Object.assign(headers, copilotHeaders);
-	}
-
-	if (sessionId && compat.sendSessionAffinityHeaders) {
-		headers.session_id = sessionId;
-		headers["x-client-request-id"] = sessionId;
-		headers["x-session-affinity"] = sessionId;
-	}
-
-	// Merge options headers last so they can override defaults
-	if (optionsHeaders) {
-		Object.assign(headers, optionsHeaders);
-	}
-
-	const defaultHeaders =
-		model.provider === "cloudflare-ai-gateway"
-			? {
-					...headers,
-					Authorization: headers.Authorization ?? null,
-					"cf-aig-authorization": `Bearer ${apiKey}`,
-				}
-			: headers;
-
-	return new OpenAI({
-		apiKey,
-		baseURL: isCloudflareProvider(model.provider) ? resolveCloudflareBaseUrl(model) : model.baseUrl,
-		dangerouslyAllowBrowser: true,
-		defaultHeaders,
-	});
-}
 
 function buildParams(
 	model: Model<"openai-completions">,
