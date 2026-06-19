@@ -1,6 +1,6 @@
+import { createHash } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { createHash } from "node:crypto";
 
 export interface PawMemoryEntry {
 	id: string;
@@ -58,7 +58,8 @@ export class PawFileMemoryStore implements PawMemoryStore {
 		const file = await this.load();
 		const id = this.makeId(input.key, input.value);
 		const createdAt = this.now();
-		const expiresAt = input.ttlSec !== undefined ? new Date(createdAt.getTime() + input.ttlSec * 1000).toISOString() : null;
+		const expiresAt =
+			input.ttlSec !== undefined ? new Date(createdAt.getTime() + input.ttlSec * 1000).toISOString() : null;
 		const entry: PawMemoryEntry = {
 			id,
 			key: input.key,
@@ -124,7 +125,10 @@ export class PawFileMemoryStore implements PawMemoryStore {
 	}
 }
 
-export async function createPawFileMemoryStore(repoRoot: string, config: PawMemoryStoreConfig = DEFAULT_PAW_MEMORY_CONFIG): Promise<PawFileMemoryStore> {
+export async function createPawFileMemoryStore(
+	repoRoot: string,
+	config: PawMemoryStoreConfig = DEFAULT_PAW_MEMORY_CONFIG,
+): Promise<PawFileMemoryStore> {
 	const filePath = join(repoRoot, ".paw", "memory.json");
 	return new PawFileMemoryStore({ filePath, config });
 }

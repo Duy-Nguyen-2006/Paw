@@ -20,8 +20,12 @@ export function detectPawProject(repoRoot: string): PawProjectDetection {
 	const packageManager = detectPackageManager(repoRoot, indicators);
 	const language = detectLanguage(repoRoot, indicators);
 	const monorepo = detectMonorepo(repoRoot, indicators);
-	const hasTypeScript = language === "typescript" || existsSync(`${repoRoot}/tsconfig.json`) || existsSync(`${repoRoot}/tsconfig.base.json`);
-	const hasPython = language === "python" || existsSync(`${repoRoot}/pyproject.toml`) || existsSync(`${repoRoot}/requirements.txt`);
+	const hasTypeScript =
+		language === "typescript" ||
+		existsSync(`${repoRoot}/tsconfig.json`) ||
+		existsSync(`${repoRoot}/tsconfig.base.json`);
+	const hasPython =
+		language === "python" || existsSync(`${repoRoot}/pyproject.toml`) || existsSync(`${repoRoot}/requirements.txt`);
 	const hasTestRunner = detectTestRunner(repoRoot, indicators);
 	const hasLockfile = [
 		`${repoRoot}/package-lock.json`,
@@ -71,11 +75,19 @@ function detectLanguage(repoRoot: string, indicators: string[]): PawDetectedLang
 		indicators.push("go.mod present");
 		return "go";
 	}
-	if (existsSync(`${repoRoot}/pyproject.toml`) || existsSync(`${repoRoot}/requirements.txt`) || existsSync(`${repoRoot}/setup.py`)) {
+	if (
+		existsSync(`${repoRoot}/pyproject.toml`) ||
+		existsSync(`${repoRoot}/requirements.txt`) ||
+		existsSync(`${repoRoot}/setup.py`)
+	) {
 		indicators.push("Python project files present");
 		return "python";
 	}
-	if (existsSync(`${repoRoot}/pom.xml`) || existsSync(`${repoRoot}/build.gradle`) || existsSync(`${repoRoot}/build.gradle.kts`)) {
+	if (
+		existsSync(`${repoRoot}/pom.xml`) ||
+		existsSync(`${repoRoot}/build.gradle`) ||
+		existsSync(`${repoRoot}/build.gradle.kts`)
+	) {
 		indicators.push("Java build files present");
 		return "java";
 	}
@@ -105,7 +117,9 @@ function detectMonorepo(repoRoot: string, indicators: string[]): PawDetectedMono
 	}
 	if (existsSync(`${repoRoot}/package.json`)) {
 		try {
-			const pkg = JSON.parse(require("node:fs").readFileSync(`${repoRoot}/package.json`, "utf-8")) as { workspaces?: unknown };
+			const pkg = JSON.parse(require("node:fs").readFileSync(`${repoRoot}/package.json`, "utf-8")) as {
+				workspaces?: unknown;
+			};
 			if (Array.isArray(pkg.workspaces) || (typeof pkg.workspaces === "object" && pkg.workspaces !== null)) {
 				indicators.push("package.json has workspaces field");
 				if (existsSync(`${repoRoot}/yarn.lock`)) return "yarn-workspace";
@@ -127,9 +141,18 @@ function detectTestRunner(repoRoot: string, indicators: string[]): PawProjectDet
 				dependencies?: Record<string, string>;
 			};
 			const all = { ...(pkg.dependencies ?? {}), ...(pkg.devDependencies ?? {}) };
-			if ("vitest" in all) { indicators.push("vitest in dependencies"); return "vitest"; }
-			if ("jest" in all) { indicators.push("jest in dependencies"); return "jest"; }
-			if ("mocha" in all) { indicators.push("mocha in dependencies"); return "mocha"; }
+			if ("vitest" in all) {
+				indicators.push("vitest in dependencies");
+				return "vitest";
+			}
+			if ("jest" in all) {
+				indicators.push("jest in dependencies");
+				return "jest";
+			}
+			if ("mocha" in all) {
+				indicators.push("mocha in dependencies");
+				return "mocha";
+			}
 		} catch {
 			// ignore
 		}
@@ -137,7 +160,10 @@ function detectTestRunner(repoRoot: string, indicators: string[]): PawProjectDet
 	if (existsSync(`${repoRoot}/pyproject.toml`)) {
 		try {
 			const content = require("node:fs").readFileSync(`${repoRoot}/pyproject.toml`, "utf-8");
-			if (/pytest/.test(content)) { indicators.push("pytest in pyproject.toml"); return "pytest"; }
+			if (/pytest/.test(content)) {
+				indicators.push("pytest in pyproject.toml");
+				return "pytest";
+			}
 		} catch {
 			// ignore
 		}
@@ -145,7 +171,10 @@ function detectTestRunner(repoRoot: string, indicators: string[]): PawProjectDet
 	if (existsSync(`${repoRoot}/requirements.txt`)) {
 		try {
 			const content = require("node:fs").readFileSync(`${repoRoot}/requirements.txt`, "utf-8");
-			if (/pytest/.test(content)) { indicators.push("pytest in requirements.txt"); return "pytest"; }
+			if (/pytest/.test(content)) {
+				indicators.push("pytest in requirements.txt");
+				return "pytest";
+			}
 		} catch {
 			// ignore
 		}

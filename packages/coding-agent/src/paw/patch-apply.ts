@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { lstat, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, relative, resolve, sep } from "node:path";
-import { applyPatch, structuredPatch } from "diff";
+import { applyPatch } from "diff";
 import type { PawRuntimeConfig, PawSubAgentOutput, PawValidationIssue } from "./contracts.ts";
 import { evaluatePawEditIdempotency } from "./edit-policy.ts";
 
@@ -239,7 +239,11 @@ type ApplyUnifiedDiffResult = { status: "applied"; content: string } | { status:
 
 const FUZZY_SIMILARITY_THRESHOLD = 0.85;
 
-function applyUnifiedDiff(input: { base: string; unifiedDiff: string; method: "diff" | "fuzzy_diff" }): ApplyUnifiedDiffResult {
+function applyUnifiedDiff(input: {
+	base: string;
+	unifiedDiff: string;
+	method: "diff" | "fuzzy_diff";
+}): ApplyUnifiedDiffResult {
 	const normalized = stripDiffHeaders(input.unifiedDiff);
 	if (normalized === null) {
 		return { status: "blocked", message: "Unified diff is empty after stripping headers." };
@@ -276,20 +280,8 @@ function computeLineSimilarity(a: string, b: string): number {
 	const aLines = a.split("\n");
 	const bLines = b.split("\n");
 	if (aLines.length === 0 && bLines.length === 0) return 1;
-	const patch = structuredPatch("a", "b", a, b, "", "", { context: 0 });
-	let totalHunks = 0;
-	let matched = 0;
-	for (const hunk of patch.hunks) {
-		totalHunks += 1;
-		const sourceLines = hunk.lines.filter((l) => !l.startsWith("+")).map((l) => l.slice(1)).join("\n");
-		const targetLines = hunk.lines.filter((l) => !l.startsWith("-")).map((l) => l.slice(1)).join("\n");
-		if (sourceLines === targetLines) {
-			matched += 1;
-		}
-	}
 	const total = Math.max(aLines.length, bLines.length);
 	if (total === 0) return 1;
 	const identical = total - (aLines.length + bLines.length - 2 * new Set([...aLines, ...bLines]).size);
 	return Math.max(0, identical / total);
 }
-

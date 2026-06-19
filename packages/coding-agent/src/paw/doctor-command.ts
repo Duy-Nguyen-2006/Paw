@@ -193,7 +193,8 @@ function buildPawDoctorFixSuggestions(input: PawDoctorReportInput): PawDoctorFix
 			area: "sandbox",
 			issue: "bubblewrap (bwrap) is not on PATH",
 			command: "sudo apt-get install -y bubblewrap   # or: sudo dnf install -y bubblewrap",
-			manualSteps: "Install bubblewrap via your package manager, or set --no-sandbox-i-understand for trusted runs only.",
+			manualSteps:
+				"Install bubblewrap via your package manager, or set --no-sandbox-i-understand for trusted runs only.",
 			severity: "warn",
 		});
 	}
@@ -202,7 +203,8 @@ function buildPawDoctorFixSuggestions(input: PawDoctorReportInput): PawDoctorFix
 			area: "sandbox",
 			issue: "Landlock kernel support is missing",
 			command: "uname -r   # verify >= 5.13; upgrade kernel or use bwrap-only fallback",
-			manualSteps: "Upgrade to a Linux kernel that exposes /sys/kernel/security/landlock, or rely on the bwrap-only fallback.",
+			manualSteps:
+				"Upgrade to a Linux kernel that exposes /sys/kernel/security/landlock, or rely on the bwrap-only fallback.",
 			severity: "info",
 		});
 	}
@@ -228,7 +230,8 @@ function buildPawDoctorFixSuggestions(input: PawDoctorReportInput): PawDoctorFix
 		suggestions.push({
 			area: "kpi",
 			issue: "PR hard gates are not configured",
-			command: "add kpi.pr_hard_gates [schema_validation, redteam_injection, secret_leak, liveness_resume, budget_timeout_enforcement]",
+			command:
+				"add kpi.pr_hard_gates [schema_validation, redteam_injection, secret_leak, liveness_resume, budget_timeout_enforcement]",
 			manualSteps: "Add PR hard gates to paw-spec/config.yaml under kpi.pr_hard_gates.",
 			severity: "info",
 		});

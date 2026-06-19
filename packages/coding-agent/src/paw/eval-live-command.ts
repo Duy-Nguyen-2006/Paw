@@ -83,7 +83,7 @@ export function parsePawEvalLiveArgs(args: string[]): PawEvalLiveParsedArgs {
 	let workdir: string | undefined;
 	let maxSteps = 6;
 	let handoff: string | undefined;
-	let matrix: string | undefined;
+	let _matrix: string | undefined;
 	let install = false;
 	let keepWorkdir = false;
 	const seenSingleton = new Set<string>();
@@ -128,7 +128,7 @@ export function parsePawEvalLiveArgs(args: string[]): PawEvalLiveParsedArgs {
 		} else if (arg === "--handoff") {
 			handoff = value;
 		} else if (arg === "--matrix") {
-			matrix = value;
+			_matrix = value;
 		}
 		index += 2;
 	}
@@ -180,11 +180,18 @@ export function formatPawEvalLiveCommandResult(result: PawEvalLiveCommandResult)
 		}
 	}
 	const scoreboard = computeEvalLiveScoreboard(result);
-	lines.push(`scoreboard: pass=${scoreboard.pass} unverified=${scoreboard.unverified} fail=${scoreboard.fail} pass_rate=${scoreboard.passRate.toFixed(2)}%`);
+	lines.push(
+		`scoreboard: pass=${scoreboard.pass} unverified=${scoreboard.unverified} fail=${scoreboard.fail} pass_rate=${scoreboard.passRate.toFixed(2)}%`,
+	);
 	return lines.join("\n");
 }
 
-function computeEvalLiveScoreboard(result: PawEvalLiveCommandResult): { pass: number; unverified: number; fail: number; passRate: number } {
+function computeEvalLiveScoreboard(result: PawEvalLiveCommandResult): {
+	pass: number;
+	unverified: number;
+	fail: number;
+	passRate: number;
+} {
 	let pass = 0;
 	let unverified = 0;
 	let fail = 0;

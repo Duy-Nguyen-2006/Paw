@@ -62,7 +62,11 @@ export function evaluatePawCommandAllowlist(input: PawCommandAllowlistInput): Pa
 		if (entry.argPattern === null) {
 			return entry.allowed
 				? { allowed: true, matchedEntry: entry, reason: `Matched ${entry.command} allowlist entry` }
-				: { allowed: false, matchedEntry: entry, reason: `Command ${entry.command} is denied (${entry.riskLevel})` };
+				: {
+						allowed: false,
+						matchedEntry: entry,
+						reason: `Command ${entry.command} is denied (${entry.riskLevel})`,
+					};
 		}
 		const firstArg = input.args[0] ?? "";
 		const regex = new RegExp(entry.argPattern);
@@ -74,10 +78,16 @@ export function evaluatePawCommandAllowlist(input: PawCommandAllowlistInput): Pa
 	}
 	return input.config.blockedByDefault
 		? { allowed: false, matchedEntry: null, reason: `Command ${command} is not in the allowlist` }
-		: { allowed: true, matchedEntry: null, reason: `Command ${command} accepted by default (allowlist not enforced)` };
+		: {
+				allowed: true,
+				matchedEntry: null,
+				reason: `Command ${command} accepted by default (allowlist not enforced)`,
+			};
 }
 
 function normalizeCommandName(command: string): string {
 	const basename = command.split("/").pop() ?? command;
-	return basename === "python3.12" || basename === "python3.11" || basename === "python3.10" || basename === "python3" ? "python3" : basename;
+	return basename === "python3.12" || basename === "python3.11" || basename === "python3.10" || basename === "python3"
+		? "python3"
+		: basename;
 }

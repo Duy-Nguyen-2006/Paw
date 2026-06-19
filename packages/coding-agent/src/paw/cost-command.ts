@@ -1,9 +1,9 @@
 import { readFile } from "node:fs/promises";
 import { APP_NAME } from "../config.ts";
-import { evaluatePawCostLatencyCache, type PawCostLatencyCacheResult } from "./cost-latency-cache.ts";
-import { readPawEventLog, type PawEventLogEntry } from "./event-log.ts";
-import { readPawSessionState } from "./session-store.ts";
 import type { PawTaskClass } from "./contracts.ts";
+import { evaluatePawCostLatencyCache, type PawCostLatencyCacheResult } from "./cost-latency-cache.ts";
+import { type PawEventLogEntry, readPawEventLog } from "./event-log.ts";
+import { readPawSessionState } from "./session-store.ts";
 
 export interface PawCostParsedArgs {
 	sessionId: string;
@@ -98,7 +98,12 @@ export async function createPawCostResult(args: PawCostParsedArgs): Promise<PawC
 	const events: PawEventLogEntry[] = await readPawEventLog(repoRoot, args.sessionId);
 	const costEvents = events.filter((event) => event.event === "cost_recorded");
 	const entries: PawCostEntry[] = costEvents.map((event) => {
-		const data = (event.data ?? {}) as { tokens?: number; usd?: number; providerClass?: "hosted" | "local"; cacheHitRate?: number };
+		const data = (event.data ?? {}) as {
+			tokens?: number;
+			usd?: number;
+			providerClass?: "hosted" | "local";
+			cacheHitRate?: number;
+		};
 		return {
 			sliceId: event.slice_id,
 			tokens: data.tokens ?? 0,
@@ -111,7 +116,8 @@ export async function createPawCostResult(args: PawCostParsedArgs): Promise<PawC
 	const totalUsd = entries.reduce((acc, entry) => acc + entry.usd, 0);
 	const totalTokens = entries.reduce((acc, entry) => acc + entry.tokens, 0);
 	const cacheRates = entries.map((entry) => entry.cacheHitRate).filter((rate): rate is number => rate !== null);
-	const averageCacheHit = cacheRates.length > 0 ? cacheRates.reduce((acc, rate) => acc + rate, 0) / cacheRates.length : undefined;
+	const averageCacheHit =
+		cacheRates.length > 0 ? cacheRates.reduce((acc, rate) => acc + rate, 0) / cacheRates.length : undefined;
 	try {
 		await readPawSessionState(repoRoot, args.sessionId);
 	} catch {
@@ -150,7 +156,9 @@ export function formatPawCostResult(result: PawCostResult): string {
 		lines.push("entries: (none)");
 	} else {
 		for (const entry of result.entries) {
-			lines.push(`  ${entry.timestamp} slice=${entry.sliceId ?? "-"} usd=${entry.usd.toFixed(4)} tokens=${entry.tokens} provider=${entry.providerClass}${entry.cacheHitRate !== null ? ` cache=${entry.cacheHitRate.toFixed(2)}` : ""}`);
+			lines.push(
+				`  ${entry.timestamp} slice=${entry.sliceId ?? "-"} usd=${entry.usd.toFixed(4)} tokens=${entry.tokens} provider=${entry.providerClass}${entry.cacheHitRate !== null ? ` cache=${entry.cacheHitRate.toFixed(2)}` : ""}`,
+			);
 		}
 	}
 	return lines.join("\n");

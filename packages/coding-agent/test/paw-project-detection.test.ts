@@ -1,8 +1,8 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { buildPawVerifyCommand, detectPawProject } from "../src/paw/index.ts";
-import { join } from "node:path";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
 
 describe("detectPawProject", () => {
 	test("detects TypeScript + npm from package.json + tsconfig.json", () => {

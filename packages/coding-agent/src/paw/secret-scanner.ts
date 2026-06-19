@@ -20,7 +20,24 @@ export interface PawSecretScanResult {
 	findings: PawSecretScanFinding[];
 }
 
-const BINARY_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".woff", ".woff2", ".ttf", ".otf", ".zip", ".tar", ".gz", ".pdf", ".mp4", ".mov"]);
+const BINARY_EXTENSIONS = new Set([
+	".png",
+	".jpg",
+	".jpeg",
+	".gif",
+	".webp",
+	".ico",
+	".woff",
+	".woff2",
+	".ttf",
+	".otf",
+	".zip",
+	".tar",
+	".gz",
+	".pdf",
+	".mp4",
+	".mov",
+]);
 
 const ALLOWED_DUMMY_KEYS = new Set([
 	"PAW_PLACEHOLDER_OPENAI_KEY_xxxxxxxxxxxx",
@@ -28,16 +45,7 @@ const ALLOWED_DUMMY_KEYS = new Set([
 	"PAW_PLACEHOLDER_SLACK_TOKEN_xxxxxx",
 ]);
 
-const SKIP_DIRS = new Set([
-	"node_modules",
-	".git",
-	"dist",
-	"build",
-	".next",
-	".venv",
-	"__pycache__",
-	".paw",
-]);
+const SKIP_DIRS = new Set(["node_modules", ".git", "dist", "build", ".next", ".venv", "__pycache__", ".paw"]);
 
 export async function scanPawRepoForSecrets(
 	repoRoot: string,
@@ -95,9 +103,7 @@ export async function scanPawRepoForSecrets(
 						occurrences: countPawSecretOccurrences(content, pattern),
 					});
 				}
-			} catch {
-				continue;
-			}
+			} catch {}
 		}
 	}
 	const blocked = findings.some((finding) => finding.severity === "block");
@@ -113,7 +119,9 @@ async function readdirSafe(path: string): Promise<string[]> {
 	}
 }
 
-async function statSafe(path: string): Promise<{ isDirectory: () => boolean; isFile: () => boolean; size: number } | null> {
+async function statSafe(
+	path: string,
+): Promise<{ isDirectory: () => boolean; isFile: () => boolean; size: number } | null> {
 	const { stat } = await import("node:fs/promises");
 	try {
 		return await stat(path);
@@ -130,7 +138,7 @@ function detectPawSecretPatterns(content: string, config: PawSecretsConfig): Paw
 function countPawSecretOccurrences(content: string, pattern: PawRedactionPattern): number {
 	const regex = secretPatternToRegex(pattern);
 	if (!regex) return 1;
-	const matches = content.match(new RegExp(regex.source, "g" + regex.flags.replace("g", "")));
+	const matches = content.match(new RegExp(regex.source, `g${regex.flags.replace("g", "")}`));
 	return matches ? matches.length : 0;
 }
 

@@ -104,11 +104,7 @@ export async function createPawPlanResult(args: PawPlanParsedArgs): Promise<PawP
 	};
 }
 
-async function loadPawPlanSlices(
-	repoRoot: string,
-	sessionId: string,
-	state: PawSessionState,
-): Promise<PawPlanSlice[]> {
+async function loadPawPlanSlices(repoRoot: string, sessionId: string, state: PawSessionState): Promise<PawPlanSlice[]> {
 	// Attempt to load the slice plan from the session state if present (in-memory only)
 	const planFile = `${repoRoot}/.paw/sessions/${sessionId}/plan.json`;
 	let planSlices: { slice_id: string; title?: string; acceptance?: string }[] = [];
@@ -127,11 +123,12 @@ async function loadPawPlanSlices(
 		...state.completed_slice_ids,
 	];
 	return allSliceIds.map((sliceId) => {
-		const status: PawPlanSlice["status"] = state.current_slice_id === sliceId
-			? "current"
-			: state.completed_slice_ids.includes(sliceId)
-				? "completed"
-				: "pending";
+		const status: PawPlanSlice["status"] =
+			state.current_slice_id === sliceId
+				? "current"
+				: state.completed_slice_ids.includes(sliceId)
+					? "completed"
+					: "pending";
 		return {
 			sliceId,
 			status,

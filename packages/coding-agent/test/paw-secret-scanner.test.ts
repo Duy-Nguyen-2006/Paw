@@ -21,7 +21,11 @@ describe("scanPawRepoForSecrets", () => {
 	test("detects API key file", async () => {
 		const root = await createTempRepo();
 		await mkdir(join(root, "src"), { recursive: true });
-		await writeFile(join(root, "src/config.ts"), `export const api_key = "EXAMPLE_KEY_${"x".repeat(28)}";\n`, "utf-8");
+		await writeFile(
+			join(root, "src/config.ts"),
+			`export const api_key = "EXAMPLE_KEY_${"x".repeat(28)}";\n`,
+			"utf-8",
+		);
 		const config = loadDefaultPawRuntimeConfig(sourceRoot);
 		const result = await scanPawRepoForSecrets(root, config.secrets, { maxFiles: 50 });
 		expect(result.findings.some((f) => f.pattern === "api_keys")).toBe(true);

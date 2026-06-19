@@ -2,7 +2,7 @@ import { createInterface } from "node:readline";
 import { APP_NAME } from "../config.ts";
 import { loadDefaultPawRuntimeConfig } from "./config.ts";
 import { readPawSessionState } from "./session-store.ts";
-import { transitionPawSessionState, type PawSessionState, type PawSessionStateName } from "./state.ts";
+import { type PawSessionState, type PawSessionStateName, transitionPawSessionState } from "./state.ts";
 
 export type PawAction = "approve" | "reject" | "retry" | "explain" | "continue" | "exit";
 
@@ -85,7 +85,11 @@ async function runInteractiveChat(args: PawChatParsedArgs): Promise<void> {
 		sessionId,
 		state,
 		history: [
-			{ role: "system", content: `Paw interactive chat for session ${sessionId}. state=${state.name}`, timestamp: new Date().toISOString() },
+			{
+				role: "system",
+				content: `Paw interactive chat for session ${sessionId}. state=${state.name}`,
+				timestamp: new Date().toISOString(),
+			},
 		],
 	};
 	const readline = args.readline ?? defaultReadline;
@@ -127,7 +131,11 @@ async function handleChatAction(
 ): Promise<string> {
 	switch (action) {
 		case "approve":
-			return await transitionAndReport(chat, chat.state.name === "PLAN_DRAFTED" ? "PLAN_APPROVED" : "SLICE_DONE", json);
+			return await transitionAndReport(
+				chat,
+				chat.state.name === "PLAN_DRAFTED" ? "PLAN_APPROVED" : "SLICE_DONE",
+				json,
+			);
 		case "reject":
 			return `Rejected slice ${chat.state.current_slice_id ?? "(none)"}. Use /retry to continue with explicit reasoning.`;
 		case "retry":
@@ -149,7 +157,8 @@ async function handleChatAction(
 async function transitionAndReport(chat: PawChatSession, target: PawSessionStateName, _json: boolean): Promise<string> {
 	const transition: { to: PawSessionStateName; slice_ids?: string[] } = { to: target };
 	if (target === "PLAN_APPROVED") {
-		transition.slice_ids = chat.state.pending_slice_ids.length > 0 ? [...chat.state.pending_slice_ids] : ["chat-slice-1"];
+		transition.slice_ids =
+			chat.state.pending_slice_ids.length > 0 ? [...chat.state.pending_slice_ids] : ["chat-slice-1"];
 	}
 	const result = transitionPawSessionState(chat.state, transition);
 	if (!result.ok) {

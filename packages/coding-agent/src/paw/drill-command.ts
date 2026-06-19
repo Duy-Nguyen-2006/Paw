@@ -5,7 +5,11 @@ import { join } from "node:path";
 import { APP_NAME } from "../config.ts";
 import { loadDefaultPawRuntimeConfig } from "./config.ts";
 import { resolvePawProjectPaths } from "./persistence.ts";
-import { evaluatePawResilienceDrill, type PawResilienceDrillEvent, type PawResilienceDrillResult } from "./resilience-drill.ts";
+import {
+	evaluatePawResilienceDrill,
+	type PawResilienceDrillEvent,
+	type PawResilienceDrillResult,
+} from "./resilience-drill.ts";
 import { classifyPawRedaction, type PawRedactionPattern } from "./security-policy.ts";
 import {
 	acquirePawSessionLock,
@@ -14,7 +18,12 @@ import {
 	releasePawSessionLock,
 	resolvePawSessionPaths,
 } from "./session-store.ts";
-import { createInitialPawSessionState, transitionPawSessionState, type PawSessionState, type PawSessionStateName } from "./state.ts";
+import {
+	createInitialPawSessionState,
+	type PawSessionState,
+	type PawSessionStateName,
+	transitionPawSessionState,
+} from "./state.ts";
 
 export const PAW_DRILL_NAMES = [
 	"crash-resume",
@@ -39,7 +48,11 @@ export type PawDrillParseResult =
 
 export interface PawDrillCommandInput {
 	configLoader?: () => ReturnType<typeof loadDefaultPawRuntimeConfig>;
-	commandRunner?: (input: { command: string; args: string[]; cwd: string }) => Promise<{ exitCode: number; stdout: string; stderr: string }>;
+	commandRunner?: (input: {
+		command: string;
+		args: string[];
+		cwd: string;
+	}) => Promise<{ exitCode: number; stdout: string; stderr: string }>;
 	clock?: () => number;
 }
 
@@ -93,22 +106,73 @@ const CRASH_RESUME_SEQUENCE: readonly PawSessionStateName[] = [
 	"FINAL_REPORT",
 ];
 
-const SECRET_FIXTURES: readonly { pattern: PawRedactionPattern; value: string; expected: boolean; description: string }[] = [
-	{ pattern: "api_keys", value: 'api_key = "EXAMPLE_KEY_xxxxxxxxxxxxxxxxxxxxxxxx"', expected: true, description: "OpenAI-style API key" },
-	{ pattern: "api_keys", value: 'apikey: "EXAMPLE_KEY_xxxxxxxxxxxxxxxxxxxxxxxx"', expected: true, description: "Generic api_key value" },
-	{ pattern: "tokens", value: 'access_token = "EXAMPLE_TOKEN_xxxxxxxxxxxxxxxxxxxxxxxx"', expected: true, description: "GitHub-style personal token" },
-	{ pattern: "tokens", value: 'refresh_token = "EXAMPLE_REFRESH_TOKEN_xxxxxxxxxxxxxxxxxxxxxxxx"', expected: true, description: "Refresh token" },
-	{ pattern: "private_keys", value: "-----BEGIN EXAMPLE PRIVATE KEY-----\nMIIEowIBAAK...\n-----END EXAMPLE PRIVATE KEY-----", expected: true, description: "Private key header" },
-	{ pattern: "auth_headers", value: "Authorization: Bearer EXAMPLE_BEARER_TOKEN_xxxxxxxxxxxxxx", expected: true, description: "Authorization header" },
-	{ pattern: "cookies", value: "Cookie: session=EXAMPLE_SESSION_VALUE_xxxxxxxxxxxxxxxx", expected: true, description: "Cookie header" },
-	{ pattern: "env_values", value: 'EXAMPLE_DATABASE_URL = "PAW_PLACEHOLDER_CONNECTION_STRING_VALUE"', expected: true, description: "Database URL env value" },
-	{ pattern: "high_entropy", value: "RandomizedHighEntropyExample_F4kS9cN0pQ7bT2wX8mZ3eL1yR6uV5hJ", expected: true, description: "High-entropy token" },
-	{ pattern: "tokens", value: "Authorization: Bearer GITHUB_TOKEN_example_placeholder", expected: false, description: "Plain non-token value" },
+const SECRET_FIXTURES: readonly {
+	pattern: PawRedactionPattern;
+	value: string;
+	expected: boolean;
+	description: string;
+}[] = [
+	{
+		pattern: "api_keys",
+		value: 'api_key = "EXAMPLE_KEY_xxxxxxxxxxxxxxxxxxxxxxxx"',
+		expected: true,
+		description: "OpenAI-style API key",
+	},
+	{
+		pattern: "api_keys",
+		value: 'apikey: "EXAMPLE_KEY_xxxxxxxxxxxxxxxxxxxxxxxx"',
+		expected: true,
+		description: "Generic api_key value",
+	},
+	{
+		pattern: "tokens",
+		value: 'access_token = "EXAMPLE_TOKEN_xxxxxxxxxxxxxxxxxxxxxxxx"',
+		expected: true,
+		description: "GitHub-style personal token",
+	},
+	{
+		pattern: "tokens",
+		value: 'refresh_token = "EXAMPLE_REFRESH_TOKEN_xxxxxxxxxxxxxxxxxxxxxxxx"',
+		expected: true,
+		description: "Refresh token",
+	},
+	{
+		pattern: "private_keys",
+		value: "-----BEGIN EXAMPLE PRIVATE KEY-----\nMIIEowIBAAK...\n-----END EXAMPLE PRIVATE KEY-----",
+		expected: true,
+		description: "Private key header",
+	},
+	{
+		pattern: "auth_headers",
+		value: "Authorization: Bearer EXAMPLE_BEARER_TOKEN_xxxxxxxxxxxxxx",
+		expected: true,
+		description: "Authorization header",
+	},
+	{
+		pattern: "cookies",
+		value: "Cookie: session=EXAMPLE_SESSION_VALUE_xxxxxxxxxxxxxxxx",
+		expected: true,
+		description: "Cookie header",
+	},
+	{
+		pattern: "env_values",
+		value: 'EXAMPLE_DATABASE_URL = "PAW_PLACEHOLDER_CONNECTION_STRING_VALUE"',
+		expected: true,
+		description: "Database URL env value",
+	},
+	{
+		pattern: "high_entropy",
+		value: "RandomizedHighEntropyExample_F4kS9cN0pQ7bT2wX8mZ3eL1yR6uV5hJ",
+		expected: true,
+		description: "High-entropy token",
+	},
+	{
+		pattern: "tokens",
+		value: "Authorization: Bearer GITHUB_TOKEN_example_placeholder",
+		expected: false,
+		description: "Plain non-token value",
+	},
 ];
-
-const PATCH_ROBUSTNESS_FIXTURES: readonly { scenario: string; check: (root: string) => Promise<PawPatchRobustnessCheck> }[] = [];
-
-const REVIEWER_DIFF_FIXTURES: readonly { scenario: string; check: (root: string) => Promise<PawReviewerDiffCheck> }[] = [];
 
 export function parsePawDrillArgs(args: string[]): PawDrillParseResult {
 	if (args.length === 0) {
@@ -302,10 +366,17 @@ function walkToState(state: PawSessionState, target: PawSessionStateName): PawSe
 	return current;
 }
 
-function buildTransition(from: PawSessionStateName, to: PawSessionStateName): {
+function buildTransition(
+	from: PawSessionStateName,
+	to: PawSessionStateName,
+): {
 	to: PawSessionStateName;
 	slice_ids?: string[];
-	blocked_reason?: { code: "TEST_FAILURE" | "BUILD_FAILURE" | "PATCH_APPLY_FAILED"; message: string; suggested_action: string };
+	blocked_reason?: {
+		code: "TEST_FAILURE" | "BUILD_FAILURE" | "PATCH_APPLY_FAILED";
+		message: string;
+		suggested_action: string;
+	};
 } | null {
 	const blockedCodes: Record<string, "TEST_FAILURE" | "BUILD_FAILURE" | "PATCH_APPLY_FAILED"> = {
 		BLOCKED_TEST_FAILURE: "TEST_FAILURE",
@@ -363,7 +434,9 @@ async function createStaleLock(workdir: string, sessionId: string, ttlSec: numbe
 	}
 }
 
-export async function runPawSecretRedactionDrill(input: PawDrillCommandInput = {}): Promise<Extract<PawDrillResult, { name: "secret-redaction" }>> {
+export async function runPawSecretRedactionDrill(
+	input: PawDrillCommandInput = {},
+): Promise<Extract<PawDrillResult, { name: "secret-redaction" }>> {
 	const configLoader = input.configLoader ?? (() => loadDefaultPawRuntimeConfig(process.cwd()));
 	const config = configLoader();
 	const checks: PawSecretRedactionCheck[] = [];
@@ -386,7 +459,8 @@ export async function runPawSecretRedactionDrill(input: PawDrillCommandInput = {
 	}
 	const failed: PawSecretRedactionCheck[] = [];
 	for (const check of checks) {
-		const description = check.detail.split(" redacted as expected")[0]
+		const description = check.detail
+			.split(" redacted as expected")[0]
 			.split(" was NOT redacted")[0]
 			.split(" was redacted")[0]
 			.split(" left untouched as expected")[0];
@@ -404,7 +478,7 @@ export async function runPawSecretRedactionDrill(input: PawDrillCommandInput = {
 	};
 }
 
-async function runProviderFailoverDrill(input: PawDrillCommandInput): Promise<PawDrillResult> {
+async function runProviderFailoverDrill(_input: PawDrillCommandInput): Promise<PawDrillResult> {
 	const events: PawResilienceDrillEvent[] = [
 		{ name: "provider_failure" },
 		{ name: "failover_started" },
@@ -416,7 +490,7 @@ async function runProviderFailoverDrill(input: PawDrillCommandInput): Promise<Pa
 	const drill = evaluatePawResilienceDrill({
 		events,
 		providerName: "primary",
-		sessionId: input.configLoader ? "drill-session" : "drill-session",
+		sessionId: "drill-session",
 	});
 	return {
 		name: "provider-failover",
@@ -426,14 +500,10 @@ async function runProviderFailoverDrill(input: PawDrillCommandInput): Promise<Pa
 	};
 }
 
-async function runPatchRobustnessDrill(input: PawDrillCommandInput): Promise<PawDrillResult> {
+async function runPatchRobustnessDrill(_input: PawDrillCommandInput): Promise<PawDrillResult> {
 	const workdir = await mkdtemp(join(tmpdir(), "paw-patch-drill-"));
 	const checks: PawPatchRobustnessCheck[] = [];
 	try {
-		for (const fixture of PATCH_ROBUSTNESS_FIXTURES) {
-			checks.push(await fixture.check(workdir));
-		}
-		// Always report at least one baseline pass.
 		if (checks.length === 0) {
 			checks.push({ scenario: "baseline", passed: true, detail: "no additional patch fixtures registered" });
 		}
@@ -449,13 +519,10 @@ async function runPatchRobustnessDrill(input: PawDrillCommandInput): Promise<Paw
 	};
 }
 
-async function runReviewerDiffDrill(input: PawDrillCommandInput): Promise<PawDrillResult> {
+async function runReviewerDiffDrill(_input: PawDrillCommandInput): Promise<PawDrillResult> {
 	const workdir = await mkdtemp(join(tmpdir(), "paw-reviewer-drill-"));
 	const checks: PawReviewerDiffCheck[] = [];
 	try {
-		for (const fixture of REVIEWER_DIFF_FIXTURES) {
-			checks.push(await fixture.check(workdir));
-		}
 		if (checks.length === 0) {
 			checks.push({ scenario: "baseline", passed: true, detail: "no additional reviewer diff fixtures registered" });
 		}

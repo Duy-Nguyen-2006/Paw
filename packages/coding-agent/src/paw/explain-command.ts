@@ -1,12 +1,12 @@
 import { APP_NAME } from "../config.ts";
-import { loadDefaultPawRuntimeConfig } from "./config.ts";
-import { readPawSessionState } from "./session-store.ts";
-import { evaluatePawSandbox } from "./security-policy.ts";
-import { detectPawSandboxPrimitives } from "./sandbox-detector.ts";
 import { computePawBudgetUtilizationPct } from "./budget-policy.ts";
+import { loadDefaultPawRuntimeConfig } from "./config.ts";
 import { evaluatePawCostLatencyCache } from "./cost-latency-cache.ts";
-import { scanPawRepoForSecrets } from "./secret-scanner.ts";
 import { detectPawProject } from "./project-detection.ts";
+import { detectPawSandboxPrimitives } from "./sandbox-detector.ts";
+import { scanPawRepoForSecrets } from "./secret-scanner.ts";
+import { evaluatePawSandbox } from "./security-policy.ts";
+import { readPawSessionState } from "./session-store.ts";
 
 export interface PawExplainParsedArgs {
 	sessionId: string | null;
@@ -84,23 +84,33 @@ export async function createPawExplainResult(args: PawExplainParsedArgs): Promis
 	const config = loadDefaultPawRuntimeConfig(repoRoot);
 	const state = args.sessionId !== null ? await readPawSessionState(repoRoot, args.sessionId).catch(() => null) : null;
 	const blockedReason = state?.blocked_reason
-		? { code: state.blocked_reason.code, message: state.blocked_reason.message, suggestedAction: state.blocked_reason.suggested_action }
+		? {
+				code: state.blocked_reason.code,
+				message: state.blocked_reason.message,
+				suggestedAction: state.blocked_reason.suggested_action,
+			}
 		: null;
 	const detection = detectPawProject(repoRoot);
 	const secretScan = await scanPawRepoForSecrets(repoRoot, config.secrets);
 	const sandboxDecision = evaluatePawSandbox({
 		config: config.sandbox,
-		availablePrimitives: detectPawSandboxPrimitives({ bubblewrapAvailable: true, landlockAvailable: true, userNamespacesAvailable: true, distro: undefined }).detectedPrimitives,
+		availablePrimitives: detectPawSandboxPrimitives({
+			bubblewrapAvailable: true,
+			landlockAvailable: true,
+			userNamespacesAvailable: true,
+			distro: undefined,
+		}).detectedPrimitives,
 		riskLevel: "R0",
 	});
-	const budgetPct = state !== null
-		? computePawBudgetUtilizationPct({
-			tokensUsed: 0,
-			usdUsed: 0,
-			maxTokens: config.budget.per_task.standard.max_tokens,
-			maxUsd: config.budget.per_task.standard.max_usd,
-		})
-		: null;
+	const budgetPct =
+		state !== null
+			? computePawBudgetUtilizationPct({
+					tokensUsed: 0,
+					usdUsed: 0,
+					maxTokens: config.budget.per_task.standard.max_tokens,
+					maxUsd: config.budget.per_task.standard.max_usd,
+				})
+			: null;
 	const costAdvisoryResult = evaluatePawCostLatencyCache({
 		metrics: { taskClass: "standard", usdUsed: 0, inputTokens: 0, activeTimeSec: 0, providerClass: "hosted" },
 	});
@@ -118,13 +128,25 @@ export async function createPawExplainResult(args: PawExplainParsedArgs): Promis
 			hasPython: detection.hasPython,
 			hasTestRunner: detection.hasTestRunner,
 		},
-		secretScan: { ok: secretScan.ok, blocked: secretScan.blocked, scannedFiles: secretScan.scannedFiles, findingCount: secretScan.findings.length },
-		sandbox: { status: sandboxDecision.status, degraded: "degraded" in sandboxDecision ? sandboxDecision.degraded : false, detectedPrimitives: "selectedPrimitive" in sandboxDecision ? [sandboxDecision.selectedPrimitive] : [] },
+		secretScan: {
+			ok: secretScan.ok,
+			blocked: secretScan.blocked,
+			scannedFiles: secretScan.scannedFiles,
+			findingCount: secretScan.findings.length,
+		},
+		sandbox: {
+			status: sandboxDecision.status,
+			degraded: "degraded" in sandboxDecision ? sandboxDecision.degraded : false,
+			detectedPrimitives: "selectedPrimitive" in sandboxDecision ? [sandboxDecision.selectedPrimitive] : [],
+		},
 		suggestedNext: deriveSuggestedNext(args, blockedReason),
 	};
 }
 
-function deriveSuggestedNext(args: PawExplainParsedArgs, blockedReason: PawExplainResult["blockedReason"]): readonly string[] {
+function deriveSuggestedNext(
+	args: PawExplainParsedArgs,
+	blockedReason: PawExplainResult["blockedReason"],
+): readonly string[] {
 	const next: string[] = [];
 	if (blockedReason !== null) {
 		next.push(`paw resume ${args.sessionId ?? "<session-id>"}  # ${blockedReason.suggestedAction}`);
@@ -149,12 +171,18 @@ export function formatPawExplainResult(result: PawExplainResult): string {
 		lines.push("blocked: none");
 	}
 	if (result.detection) {
-		lines.push(`detection: pm=${result.detection.packageManager} lang=${result.detection.language} monorepo=${result.detection.monorepo} ts=${result.detection.hasTypeScript} py=${result.detection.hasPython} test=${result.detection.hasTestRunner}`);
+		lines.push(
+			`detection: pm=${result.detection.packageManager} lang=${result.detection.language} monorepo=${result.detection.monorepo} ts=${result.detection.hasTypeScript} py=${result.detection.hasPython} test=${result.detection.hasTestRunner}`,
+		);
 	}
 	if (result.secretScan) {
-		lines.push(`secret scan: ok=${result.secretScan.ok} blocked=${result.secretScan.blocked} files=${result.secretScan.scannedFiles} findings=${result.secretScan.findingCount}`);
+		lines.push(
+			`secret scan: ok=${result.secretScan.ok} blocked=${result.secretScan.blocked} files=${result.secretScan.scannedFiles} findings=${result.secretScan.findingCount}`,
+		);
 	}
-	lines.push(`sandbox: ${result.sandbox.status} degraded=${result.sandbox.degraded} primitives=${result.sandbox.detectedPrimitives.join(",") || "none"}`);
+	lines.push(
+		`sandbox: ${result.sandbox.status} degraded=${result.sandbox.degraded} primitives=${result.sandbox.detectedPrimitives.join(",") || "none"}`,
+	);
 	lines.push("suggested next:");
 	for (const suggestion of result.suggestedNext) {
 		lines.push(`  - ${suggestion}`);

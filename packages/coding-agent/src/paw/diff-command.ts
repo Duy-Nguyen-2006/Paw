@@ -2,8 +2,8 @@ import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { APP_NAME } from "../config.ts";
-import { readPawSliceJournal } from "./slice-journal.ts";
 import { resolvePawSessionPaths } from "./session-store.ts";
+import { readPawSliceJournal } from "./slice-journal.ts";
 
 export type PawDiffScope = "staged" | "working" | "all" | "session";
 
@@ -11,7 +11,11 @@ export interface PawDiffParsedArgs {
 	scope: PawDiffScope;
 	sessionId: string | null;
 	stat: boolean;
-	commandRunner?: (input: { command: string; args: string[]; cwd: string }) => Promise<{ exitCode: number; stdout: string; stderr: string }>;
+	commandRunner?: (input: {
+		command: string;
+		args: string[];
+		cwd: string;
+	}) => Promise<{ exitCode: number; stdout: string; stderr: string }>;
 }
 
 export type PawDiffParseResult =
@@ -151,7 +155,9 @@ export function formatPawDiffResult(result: PawDiffResult): string {
 		lines.push("entries: (none)");
 	} else {
 		for (const entry of result.entries) {
-			lines.push(`  ${entry.change_type.padEnd(7)} ${entry.apply_method.padEnd(10)} ${entry.path}${entry.content_hash ? `  ${entry.content_hash}` : ""}`);
+			lines.push(
+				`  ${entry.change_type.padEnd(7)} ${entry.apply_method.padEnd(10)} ${entry.path}${entry.content_hash ? `  ${entry.content_hash}` : ""}`,
+			);
 		}
 	}
 	return lines.join("\n");

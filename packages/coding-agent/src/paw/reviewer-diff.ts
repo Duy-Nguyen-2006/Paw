@@ -14,7 +14,11 @@ export interface PawReviewerDiffInput {
 	commandRunner?: PawReviewerDiffCommandRunner;
 }
 
-export type PawReviewerDiffCommandRunner = (input: { command: string; args: string[]; cwd: string }) => Promise<{ exitCode: number; stdout: string; stderr: string }>;
+export type PawReviewerDiffCommandRunner = (input: {
+	command: string;
+	args: string[];
+	cwd: string;
+}) => Promise<{ exitCode: number; stdout: string; stderr: string }>;
 
 export interface PawReviewerDiffEntry {
 	path: string;
@@ -36,7 +40,7 @@ export async function readPawReviewerDiff(input: PawReviewerDiffInput): Promise<
 	}
 	const runner = input.commandRunner ?? runLocalReviewerDiffCommand;
 	const cwd = resolve(input.repoRoot);
-	let command = "git";
+	const command = "git";
 	let args: string[];
 	switch (input.scope) {
 		case "staged":
@@ -47,7 +51,6 @@ export async function readPawReviewerDiff(input: PawReviewerDiffInput): Promise<
 			args = ["diff", "HEAD", "--name-status", "--diff-filter=ACMRD"];
 			rationales.push("reviewer diff scope: full diff against HEAD");
 			break;
-		case "working":
 		default:
 			args = ["diff", "--name-status", "--diff-filter=ACMRD"];
 			rationales.push("reviewer diff scope: working tree");
@@ -116,7 +119,8 @@ export interface PawReviewerStructuredReview {
 	issues: PawValidationIssue[];
 }
 
-const SECRET_LIKE = /-----BEGIN [A-Z ]*PRIVATE KEY-----|\bsk-[A-Za-z0-9_-]{12,}\b|\bghp_[A-Za-z0-9_-]{16,}\b|(?:api[_-]?key|apikey|secret[_-]?key)\s*[:=]\s*["']?[A-Za-z0-9._-]{12,}/i;
+const SECRET_LIKE =
+	/-----BEGIN [A-Z ]*PRIVATE KEY-----|\bsk-[A-Za-z0-9_-]{12,}\b|\bghp_[A-Za-z0-9_-]{16,}\b|(?:api[_-]?key|apikey|secret[_-]?key)\s*[:=]\s*["']?[A-Za-z0-9._-]{12,}/i;
 
 export function reviewPawDiffForRules(diff: PawReviewerDiffResult): PawReviewerStructuredReview {
 	const findings: PawReviewerStructuredFinding[] = [];
@@ -126,7 +130,12 @@ export function reviewPawDiffForRules(diff: PawReviewerDiffResult): PawReviewerS
 	}
 	for (const entry of diff.entries) {
 		if (entry.path.includes("node_modules/")) {
-			findings.push({ severity: "block", rule: "scope_creep", detail: "Diff touches node_modules", path: entry.path });
+			findings.push({
+				severity: "block",
+				rule: "scope_creep",
+				detail: "Diff touches node_modules",
+				path: entry.path,
+			});
 			issues.push({ path: `/entries/${entry.path}`, message: "node_modules edit blocked" });
 		}
 		if (entry.path.endsWith(".env") || entry.path.includes("/.env")) {
@@ -134,17 +143,31 @@ export function reviewPawDiffForRules(diff: PawReviewerDiffResult): PawReviewerS
 			issues.push({ path: `/entries/${entry.path}`, message: "Secret path blocked" });
 		}
 		if (diff.rawDiff !== null && SECRET_LIKE.test(diff.rawDiff) && entry.path !== null) {
-			findings.push({ severity: "block", rule: "secret_leak", detail: "Diff appears to contain a secret", path: entry.path });
+			findings.push({
+				severity: "block",
+				rule: "secret_leak",
+				detail: "Diff appears to contain a secret",
+				path: entry.path,
+			});
 		}
 		if (entry.path.includes("dist/") || entry.path.includes("build/")) {
-			findings.push({ severity: "warn", rule: "generated_path", detail: "Diff touches generated build output", path: entry.path });
+			findings.push({
+				severity: "warn",
+				rule: "generated_path",
+				detail: "Diff touches generated build output",
+				path: entry.path,
+			});
 		}
 	}
 	const ok = !findings.some((finding) => finding.severity === "block");
 	return { ok, findings, issues };
 }
 
-function runLocalReviewerDiffCommand(input: { command: string; args: string[]; cwd: string }): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+function runLocalReviewerDiffCommand(input: {
+	command: string;
+	args: string[];
+	cwd: string;
+}): Promise<{ exitCode: number; stdout: string; stderr: string }> {
 	return new Promise((resolvePromise, reject) => {
 		const child = spawn(input.command, input.args, { cwd: input.cwd, shell: process.platform === "win32" });
 		let stdout = "";

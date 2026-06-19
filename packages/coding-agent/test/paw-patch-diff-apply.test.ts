@@ -21,7 +21,7 @@ function makeConfig() {
 	return loadDefaultPawRuntimeConfig(sourceRoot);
 }
 
-function makeWorker(overrides: Parameters<typeof applyPawWorkerOutputPatches>[0]["workerOutput"]) {
+function _makeWorker(overrides: Parameters<typeof applyPawWorkerOutputPatches>[0]["workerOutput"]) {
 	return overrides;
 }
 

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { parsePawDiffArgs, parsePawPlanArgs, parsePawTimelineArgs, parsePawCostArgs } from "../src/paw/index.ts";
+import { parsePawCostArgs, parsePawDiffArgs, parsePawPlanArgs, parsePawTimelineArgs } from "../src/paw/index.ts";
 
 describe("parsePawDiffArgs", () => {
 	test("parses --staged --stat", () => {

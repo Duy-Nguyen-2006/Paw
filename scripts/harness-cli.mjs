@@ -511,7 +511,7 @@ else if (command === "intervention") intervention(args);
 else if (command === "trace") trace(args);
 else if (command === "score-trace") scoreTrace(args);
 else if (command === "score-context") scoreContext(args);
-else if (command === "audit") audit(args);
+else if (command === "audit") audit();
 else if (command === "propose") propose(args);
 else if (command === "query") query(args);
 else die(`Unknown command: ${command}`);

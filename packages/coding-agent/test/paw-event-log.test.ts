@@ -19,9 +19,18 @@ async function createTempRepo(): Promise<string> {
 describe("PawEventLogWriter", () => {
 	test("writes and reads events from session events.jsonl", async () => {
 		const root = await createTempRepo();
-		const writer = new PawEventLogWriter({ repoRoot: root, sessionId: "ses-1", now: () => new Date("2026-06-19T00:00:00.000Z") });
+		const writer = new PawEventLogWriter({
+			repoRoot: root,
+			sessionId: "ses-1",
+			now: () => new Date("2026-06-19T00:00:00.000Z"),
+		});
 		await writer.write({ session_id: "ses-1", slice_id: "sl-1", event: "session_started" });
-		await writer.write({ session_id: "ses-1", slice_id: "sl-1", event: "state_transitioned", data: { to: "INTAKE" } });
+		await writer.write({
+			session_id: "ses-1",
+			slice_id: "sl-1",
+			event: "state_transitioned",
+			data: { to: "INTAKE" },
+		});
 		await writer.flush();
 		const events = await readPawEventLog(root, "ses-1");
 		expect(events).toHaveLength(2);

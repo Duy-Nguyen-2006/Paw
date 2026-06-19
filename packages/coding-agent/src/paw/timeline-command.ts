@@ -1,5 +1,5 @@
 import { APP_NAME } from "../config.ts";
-import { readPawEventLog, type PawEventLogEntry } from "./event-log.ts";
+import { type PawEventLogEntry, readPawEventLog } from "./event-log.ts";
 import { readPawSessionState } from "./session-store.ts";
 
 export interface PawTimelineParsedArgs {
