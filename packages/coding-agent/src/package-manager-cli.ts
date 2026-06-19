@@ -9,12 +9,19 @@ import { DefaultResourceLoader } from "./core/resource-loader.ts";
 import { SettingsManager } from "./core/settings-manager.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./core/trust-manager.ts";
 import {
+	runPackageInstall,
+	runPackageList,
+	runPackageRemove,
+	runPackageUpdate,
+	shouldEnforceProjectTrust,
+	validatePackageCommandOptions,
+} from "./package-manager-cli-handlers.ts";
+import {
 	type PackageCommand,
+	type PackageCommandOptions,
 	parsePackageCommand,
 	parseProjectTrustOverride,
-	updateTargetIncludesExtensions,
 } from "./package-manager-cli-parse.ts";
-import { runSelfUpdateIfNeeded } from "./package-manager-cli-self-update.ts";
 
 export type { PackageCommand } from "./package-manager-cli-parse.ts";
 
@@ -229,45 +236,66 @@ export async function handlePackageCommand(
 		return true;
 	}
 
-	if (options.invalidOption) {
-		console.error(chalk.red(`Unknown option ${options.invalidOption} for "${options.command}".`));
-		console.error(chalk.dim(`Use "${APP_NAME} --help" or "${getPackageCommandUsage(options.command)}".`));
+	const validationFailure = validatePackageCommandOptions(options);
+	if (validationFailure) {
+		reportValidationFailure(options, validationFailure);
 		process.exitCode = 1;
 		return true;
 	}
 
-	if (options.missingOptionValue) {
-		console.error(chalk.red(`Missing value for ${options.missingOptionValue}.`));
-		console.error(chalk.dim(`Usage: ${getPackageCommandUsage(options.command)}`));
+	const { packageManager, selfUpdateNpmCommand } = await setupPackageCommandContext(options, runtimeOptions);
+	if (!packageManager) return true;
+
+	try {
+		const success = await dispatchPackageCommand(packageManager, options, selfUpdateNpmCommand);
+		if (!success) process.exitCode = 1;
+		return true;
+	} catch (error: unknown) {
+		const message = error instanceof Error ? error.message : "Unknown package command error";
+		console.error(chalk.red(`Error: ${message}`));
 		process.exitCode = 1;
 		return true;
 	}
+}
 
-	if (options.invalidArgument) {
-		console.error(chalk.red(`Unexpected argument ${options.invalidArgument}.`));
-		console.error(chalk.dim(`Usage: ${getPackageCommandUsage(options.command)}`));
-		process.exitCode = 1;
-		return true;
+function reportValidationFailure(options: PackageCommandOptions, failure: { kind: string; value: string }): void {
+	const usage = `Usage: ${getPackageCommandUsage(options.command)}`;
+	switch (failure.kind) {
+		case "invalidOption":
+			console.error(chalk.red(`Unknown option ${failure.value} for "${options.command}".`));
+			console.error(chalk.dim(`Use "${APP_NAME} --help" or "${getPackageCommandUsage(options.command)}".`));
+			return;
+		case "missingOptionValue":
+			console.error(chalk.red(`Missing value for ${failure.value}.`));
+			break;
+		case "invalidArgument":
+			console.error(chalk.red(`Unexpected argument ${failure.value}.`));
+			break;
+		case "conflictingOptions":
+			console.error(chalk.red(failure.value));
+			break;
+		case "missingSource":
+			console.error(chalk.red(`Missing ${failure.value} source.`));
+			break;
+		default:
+			console.error(chalk.red(failure.value));
+			break;
 	}
+	console.error(chalk.dim(usage));
+}
 
-	if (options.conflictingOptions) {
-		console.error(chalk.red(options.conflictingOptions));
-		console.error(chalk.dim(`Usage: ${getPackageCommandUsage(options.command)}`));
-		process.exitCode = 1;
-		return true;
-	}
+interface PackageCommandContext {
+	settingsManager: SettingsManager;
+	packageManager: DefaultPackageManager | undefined;
+	selfUpdateNpmCommand: string[] | undefined;
+}
 
-	const source = options.source;
-	if ((options.command === "install" || options.command === "remove") && !source) {
-		console.error(chalk.red(`Missing ${options.command} source.`));
-		console.error(chalk.dim(`Usage: ${getPackageCommandUsage(options.command)}`));
-		process.exitCode = 1;
-		return true;
-	}
-
+async function setupPackageCommandContext(
+	options: PackageCommandOptions,
+	runtimeOptions: PackageCommandRuntimeOptions,
+): Promise<PackageCommandContext> {
 	const cwd = process.cwd();
 	const agentDir = getAgentDir();
-	const writesProjectPackageConfig = (options.command === "install" || options.command === "remove") && options.local;
 	const { settingsManager, projectTrustWarnings } = await createCommandSettingsManager({
 		cwd,
 		agentDir,
@@ -276,95 +304,42 @@ export async function handlePackageCommand(
 		extensionFactories: runtimeOptions.extensionFactories,
 	});
 	reportProjectTrustWarnings(projectTrustWarnings);
-	if (!settingsManager.isProjectTrusted() && writesProjectPackageConfig) {
+	if (shouldEnforceProjectTrust(options, settingsManager.isProjectTrusted())) {
 		console.error(chalk.red("Project is not trusted. Use --approve to modify local package config."));
 		process.exitCode = 1;
-		return true;
+		return { settingsManager, packageManager: undefined, selfUpdateNpmCommand: undefined };
 	}
 	reportSettingsErrors(settingsManager, "package command");
-	const selfUpdateNpmCommand = settingsManager.getGlobalSettings().npmCommand;
 
 	const packageManager = new DefaultPackageManager({ cwd, agentDir, settingsManager });
-
 	packageManager.setProgressCallback((event) => {
 		if (event.type === "start") {
 			process.stdout.write(chalk.dim(`${event.message}\n`));
 		}
 	});
 
-	try {
-		switch (options.command) {
-			case "install":
-				await packageManager.installAndPersist(source!, { local: options.local });
-				console.log(chalk.green(`Installed ${source}`));
-				return true;
+	return {
+		settingsManager,
+		packageManager,
+		selfUpdateNpmCommand: settingsManager.getGlobalSettings().npmCommand,
+	};
+}
 
-			case "remove": {
-				const removed = await packageManager.removeAndPersist(source!, { local: options.local });
-				if (!removed) {
-					console.error(chalk.red(`No matching package found for ${source}`));
-					process.exitCode = 1;
-					return true;
-				}
-				console.log(chalk.green(`Removed ${source}`));
-				return true;
-			}
-
-			case "list": {
-				const configuredPackages = packageManager.listConfiguredPackages();
-				const userPackages = configuredPackages.filter((pkg) => pkg.scope === "user");
-				const projectPackages = configuredPackages.filter((pkg) => pkg.scope === "project");
-
-				if (configuredPackages.length === 0) {
-					console.log(chalk.dim("No packages installed."));
-					return true;
-				}
-
-				const formatPackage = (pkg: (typeof configuredPackages)[number]) => {
-					const display = pkg.filtered ? `${pkg.source} (filtered)` : pkg.source;
-					console.log(`  ${display}`);
-					if (pkg.installedPath) {
-						console.log(chalk.dim(`    ${pkg.installedPath}`));
-					}
-				};
-
-				if (userPackages.length > 0) {
-					console.log(chalk.bold("User packages:"));
-					for (const pkg of userPackages) {
-						formatPackage(pkg);
-					}
-				}
-
-				if (projectPackages.length > 0) {
-					if (userPackages.length > 0) console.log();
-					console.log(chalk.bold("Project packages:"));
-					for (const pkg of projectPackages) {
-						formatPackage(pkg);
-					}
-				}
-
-				return true;
-			}
-
-			case "update": {
-				const target = options.updateTarget ?? { type: "all" };
-				if (updateTargetIncludesExtensions(target)) {
-					const updateSource = target.type === "extensions" ? target.source : undefined;
-					await packageManager.update(updateSource);
-					if (updateSource) {
-						console.log(chalk.green(`Updated ${updateSource}`));
-					} else {
-						console.log(chalk.green("Updated packages"));
-					}
-				}
-				await runSelfUpdateIfNeeded(target, options.force, selfUpdateNpmCommand);
-				return true;
-			}
+async function dispatchPackageCommand(
+	packageManager: DefaultPackageManager,
+	options: PackageCommandOptions,
+	selfUpdateNpmCommand: string[] | undefined,
+): Promise<boolean> {
+	switch (options.command) {
+		case "install":
+			return runPackageInstall(packageManager, options.source as string, options.local);
+		case "remove":
+			return runPackageRemove(packageManager, options.source as string, options.local);
+		case "list":
+			return runPackageList(packageManager);
+		case "update": {
+			const target = options.updateTarget ?? { type: "all" };
+			return runPackageUpdate(packageManager, target, options.force, selfUpdateNpmCommand);
 		}
-	} catch (error: unknown) {
-		const message = error instanceof Error ? error.message : "Unknown package command error";
-		console.error(chalk.red(`Error: ${message}`));
-		process.exitCode = 1;
-		return true;
 	}
 }

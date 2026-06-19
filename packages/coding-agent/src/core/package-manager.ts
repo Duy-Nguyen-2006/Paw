@@ -3,7 +3,6 @@ import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
-import { getPackageManagerProcessEnv } from "./package-manager-env.ts";
 import type { Readable } from "node:stream";
 import { globSync } from "glob";
 import ignore from "ignore";
@@ -14,6 +13,16 @@ import { spawnProcess, spawnProcessSync } from "../utils/child-process.ts";
 import { type GitSource, parseGitUrl } from "../utils/git.ts";
 import { canonicalizePath, isLocalPath, markPathIgnoredByCloudSync, resolvePath } from "../utils/paths.ts";
 import { isStdoutTakenOver } from "./output-guard.ts";
+import {
+	findSkillMarkerInDir,
+	processFilesSubentry,
+	processFlatDirSubentry,
+	processSkillSubentry,
+	readDirEntriesOrNull,
+	type SkillDiscoveryMode,
+} from "./package-manager-collection-helpers.ts";
+import { getPackageManagerProcessEnv } from "./package-manager-env.ts";
+import { addIgnoreRules, toPosixPath } from "./package-manager-paths-helpers.ts";
 import type { PackageSource, SettingsManager } from "./settings-manager.ts";
 
 const NETWORK_TIMEOUT_MS = 10000;
@@ -186,13 +195,7 @@ const FILE_PATTERNS: Record<ResourceType, RegExp> = {
 	themes: /\.json$/,
 };
 
-const IGNORE_FILE_NAMES = [".gitignore", ".ignore", ".fdignore"];
-
 type IgnoreMatcher = ReturnType<typeof ignore>;
-
-function toPosixPath(p: string): string {
-	return p.split(sep).join("/");
-}
 
 function getHomeDir(): string {
 	return process.env.HOME || homedir();
@@ -203,49 +206,6 @@ export function getExtensionTempFolder(agentDir: string): string {
 	mkdirSync(tempFolder, { recursive: true, mode: 0o700 });
 	chmodSync(tempFolder, 0o700);
 	return tempFolder;
-}
-
-function prefixIgnorePattern(line: string, prefix: string): string | null {
-	const trimmed = line.trim();
-	if (!trimmed) return null;
-	if (trimmed.startsWith("#") && !trimmed.startsWith("\\#")) return null;
-
-	let pattern = line;
-	let negated = false;
-
-	if (pattern.startsWith("!")) {
-		negated = true;
-		pattern = pattern.slice(1);
-	} else if (pattern.startsWith("\\!")) {
-		pattern = pattern.slice(1);
-	}
-
-	if (pattern.startsWith("/")) {
-		pattern = pattern.slice(1);
-	}
-
-	const prefixed = prefix ? `${prefix}${pattern}` : pattern;
-	return negated ? `!${prefixed}` : prefixed;
-}
-
-function addIgnoreRules(ig: IgnoreMatcher, dir: string, rootDir: string): void {
-	const relativeDir = relative(rootDir, dir);
-	const prefix = relativeDir ? `${toPosixPath(relativeDir)}/` : "";
-
-	for (const filename of IGNORE_FILE_NAMES) {
-		const ignorePath = join(dir, filename);
-		if (!existsSync(ignorePath)) continue;
-		try {
-			const content = readFileSync(ignorePath, "utf-8");
-			const patterns = content
-				.split(/\r?\n/)
-				.map((line) => prefixIgnorePattern(line, prefix))
-				.filter((line): line is string => Boolean(line));
-			if (patterns.length > 0) {
-				ig.add(patterns);
-			}
-		} catch {}
-	}
 }
 
 function isPattern(s: string): boolean {
@@ -287,44 +247,21 @@ function collectFiles(
 	const ig = ignoreMatcher ?? ignore();
 	addIgnoreRules(ig, dir, root);
 
-	try {
-		const entries = readdirSync(dir, { withFileTypes: true });
-		for (const entry of entries) {
-			if (entry.name.startsWith(".")) continue;
-			if (skipNodeModules && entry.name === "node_modules") continue;
+	const dirEntries = readDirEntriesOrNull(dir);
+	if (!dirEntries) return files;
 
-			const fullPath = join(dir, entry.name);
-			let isDir = entry.isDirectory();
-			let isFile = entry.isFile();
-
-			if (entry.isSymbolicLink()) {
-				try {
-					const stats = statSync(fullPath);
-					isDir = stats.isDirectory();
-					isFile = stats.isFile();
-				} catch {
-					continue;
-				}
-			}
-
-			const relPath = toPosixPath(relative(root, fullPath));
-			const ignorePath = isDir ? `${relPath}/` : relPath;
-			if (ig.ignores(ignorePath)) continue;
-
-			if (isDir) {
-				files.push(...collectFiles(fullPath, filePattern, skipNodeModules, ig, root));
-			} else if (isFile && filePattern.test(entry.name)) {
-				files.push(fullPath);
-			}
+	for (const entry of dirEntries) {
+		const result = processFilesSubentry(entry, dir, root, ig, filePattern, skipNodeModules);
+		if (!result) continue;
+		if ("recurseDir" in result) {
+			files.push(...collectFiles(result.recurseDir, filePattern, skipNodeModules, ig, root));
+			continue;
 		}
-	} catch {
-		// Ignore errors
+		files.push(result.fullPath);
 	}
 
 	return files;
 }
-
-type SkillDiscoveryMode = "pi" | "agents";
 
 function collectSkillEntries(
 	dir: string,
@@ -339,65 +276,54 @@ function collectSkillEntries(
 	const ig = ignoreMatcher ?? ignore();
 	addIgnoreRules(ig, dir, root);
 
-	try {
-		const dirEntries = readdirSync(dir, { withFileTypes: true });
+	const dirEntries = readDirEntriesOrNull(dir);
+	if (!dirEntries) return entries;
 
-		for (const entry of dirEntries) {
-			if (entry.name !== "SKILL.md") {
-				continue;
-			}
+	const skillMarker = findSkillMarkerInDir(dir, dirEntries, root, ig);
+	if (skillMarker) {
+		entries.push(skillMarker);
+		return entries;
+	}
 
-			const fullPath = join(dir, entry.name);
-			let isFile = entry.isFile();
-			if (entry.isSymbolicLink()) {
-				try {
-					isFile = statSync(fullPath).isFile();
-				} catch {
-					continue;
-				}
-			}
-
-			const relPath = toPosixPath(relative(root, fullPath));
-			if (isFile && !ig.ignores(relPath)) {
-				entries.push(fullPath);
-				return entries;
-			}
+	for (const entry of dirEntries) {
+		for (const path of processSkillSubentry(entry, dir, mode, root, ig)) {
+			entries.push(path);
 		}
-
-		for (const entry of dirEntries) {
-			if (entry.name.startsWith(".")) continue;
-			if (entry.name === "node_modules") continue;
-
-			const fullPath = join(dir, entry.name);
-			let isDir = entry.isDirectory();
-			let isFile = entry.isFile();
-
-			if (entry.isSymbolicLink()) {
-				try {
-					const stats = statSync(fullPath);
-					isDir = stats.isDirectory();
-					isFile = stats.isFile();
-				} catch {
-					continue;
-				}
-			}
-
-			const relPath = toPosixPath(relative(root, fullPath));
-			if (mode === "pi" && dir === root && isFile && entry.name.endsWith(".md") && !ig.ignores(relPath)) {
-				entries.push(fullPath);
-				continue;
-			}
-
-			if (!isDir) continue;
-			if (ig.ignores(`${relPath}/`)) continue;
-
-			entries.push(...collectSkillEntries(fullPath, mode, ig, root));
+		if (shouldRecurseIntoSkillSubentry(entry, dir, mode, root, ig)) {
+			entries.push(...collectSkillEntries(join(dir, entry.name), mode, ig, root));
 		}
-	} catch {
-		// Ignore errors
 	}
 
 	return entries;
+}
+
+/**
+ * Determine if a skill sub-entry should be recursed into. Mirrors the
+ * recursion branch of the original loop body without nesting the rest
+ * of the per-entry decisions.
+ */
+function shouldRecurseIntoSkillSubentry(
+	entry: { name: string; isSymbolicLink(): boolean; isDirectory(): boolean; isFile(): boolean },
+	dir: string,
+	_mode: SkillDiscoveryMode,
+	root: string,
+	ig: IgnoreMatcher,
+): boolean {
+	if (entry.name.startsWith(".")) return false;
+	if (entry.name === "node_modules") return false;
+	const fullPath = join(dir, entry.name);
+	let isDir = entry.isDirectory();
+	if (entry.isSymbolicLink()) {
+		try {
+			const stats = statSync(fullPath);
+			isDir = stats.isDirectory();
+		} catch {
+			return false;
+		}
+	}
+	if (!isDir) return false;
+	const relPath = toPosixPath(relative(root, fullPath));
+	return !ig.ignores(`${relPath}/`);
 }
 
 function collectAutoSkillEntries(dir: string, mode: SkillDiscoveryMode): string[] {
@@ -451,31 +377,12 @@ function collectDirEntries(dir: string, accept: (entryName: string, isFile: bool
 	const ig = ignore();
 	addIgnoreRules(ig, dir, dir);
 
-	try {
-		const dirEntries = readdirSync(dir, { withFileTypes: true });
-		for (const entry of dirEntries) {
-			if (entry.name.startsWith(".")) continue;
-			if (entry.name === "node_modules") continue;
+	const dirEntries = readDirEntriesOrNull(dir);
+	if (!dirEntries) return entries;
 
-			const fullPath = join(dir, entry.name);
-			let isFile = entry.isFile();
-			if (entry.isSymbolicLink()) {
-				try {
-					isFile = statSync(fullPath).isFile();
-				} catch {
-					continue;
-				}
-			}
-
-			const relPath = toPosixPath(relative(dir, fullPath));
-			if (ig.ignores(relPath)) continue;
-
-			if (isFile && accept(entry.name, true)) {
-				entries.push(fullPath);
-			}
-		}
-	} catch {
-		// Ignore errors
+	for (const entry of dirEntries) {
+		const accepted = processFlatDirSubentry(entry, dir, ig, accept);
+		if (accepted) entries.push(accepted);
 	}
 
 	return entries;
@@ -2096,44 +2003,69 @@ export class DefaultPackageManager implements PackageManager {
 		metadata: PathMetadata,
 	): boolean {
 		if (filter) {
-			for (const resourceType of RESOURCE_TYPES) {
-				const patterns = filter[resourceType as keyof PackageFilter];
-				const target = this.getTargetMap(accumulator, resourceType);
-				if (patterns !== undefined) {
-					this.applyPackageFilter(packageRoot, patterns, resourceType, target, metadata);
-				} else {
-					this.collectDefaultResources(packageRoot, resourceType, target, metadata);
-				}
-			}
+			this.collectFilteredPackageResources(packageRoot, filter, accumulator, metadata);
 			return true;
 		}
 
 		const manifest = this.readPiManifest(packageRoot);
 		if (manifest) {
-			for (const resourceType of RESOURCE_TYPES) {
-				const entries = manifest[resourceType as keyof PiManifest];
-				this.addManifestEntries(
-					entries,
-					packageRoot,
-					resourceType,
-					this.getTargetMap(accumulator, resourceType),
-					metadata,
-				);
-			}
+			this.collectManifestPackageResources(packageRoot, manifest, accumulator, metadata);
 			return true;
 		}
 
+		return this.collectConventionPackageResources(packageRoot, accumulator, metadata);
+	}
+
+	private collectFilteredPackageResources(
+		packageRoot: string,
+		filter: PackageFilter,
+		accumulator: ResourceAccumulator,
+		metadata: PathMetadata,
+	): void {
+		for (const resourceType of RESOURCE_TYPES) {
+			const patterns = filter[resourceType as keyof PackageFilter];
+			const target = this.getTargetMap(accumulator, resourceType);
+			if (patterns !== undefined) {
+				this.applyPackageFilter(packageRoot, patterns, resourceType, target, metadata);
+			} else {
+				this.collectDefaultResources(packageRoot, resourceType, target, metadata);
+			}
+		}
+	}
+
+	private collectManifestPackageResources(
+		packageRoot: string,
+		manifest: PiManifest,
+		accumulator: ResourceAccumulator,
+		metadata: PathMetadata,
+	): void {
+		for (const resourceType of RESOURCE_TYPES) {
+			const entries = manifest[resourceType as keyof PiManifest];
+			this.addManifestEntries(
+				entries,
+				packageRoot,
+				resourceType,
+				this.getTargetMap(accumulator, resourceType),
+				metadata,
+			);
+		}
+	}
+
+	private collectConventionPackageResources(
+		packageRoot: string,
+		accumulator: ResourceAccumulator,
+		metadata: PathMetadata,
+	): boolean {
 		let hasAnyDir = false;
 		for (const resourceType of RESOURCE_TYPES) {
 			const dir = join(packageRoot, resourceType);
-			if (existsSync(dir)) {
-				// Collect all files from the directory (all enabled by default)
-				const files = collectResourceFiles(dir, resourceType);
-				for (const f of files) {
-					this.addResource(this.getTargetMap(accumulator, resourceType), f, metadata, true);
-				}
-				hasAnyDir = true;
+			if (!existsSync(dir)) continue;
+			const target = this.getTargetMap(accumulator, resourceType);
+			const files = collectResourceFiles(dir, resourceType);
+			for (const f of files) {
+				this.addResource(target, f, metadata, true);
 			}
+			hasAnyDir = true;
 		}
 		return hasAnyDir;
 	}
