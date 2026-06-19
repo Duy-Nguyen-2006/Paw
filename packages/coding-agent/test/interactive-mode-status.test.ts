@@ -387,6 +387,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 				extensionRunner: {
 					getCommandDiagnostics: () => [],
 					getShortcutDiagnostics: () => [],
+					getRegisteredCommands: () => [],
 				},
 				resourceLoader: {
 					getPathMetadata: () => new Map(),
@@ -572,7 +573,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 
 		const output = renderAll(fakeThis.chatContainer);
 		expect(output).toContain("[Skills]");
-		expect(output).toContain("resource-list");
+		expect(output).toContain("/tmp/skill/SKILL.md");
 		expect(output).not.toContain("commit");
 	});
 
@@ -590,7 +591,7 @@ describe("InteractiveMode.showLoadedResources", () => {
 
 		const output = renderAll(fakeThis.chatContainer);
 		expect(output).toContain("[Skills]");
-		expect(output).toContain("resource-list");
+		expect(output).toContain("/tmp/skill/SKILL.md");
 		expect(output).not.toContain("commit");
 	});
 

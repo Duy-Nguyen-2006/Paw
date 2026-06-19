@@ -14,6 +14,7 @@ import type { SettingsManager } from "../../../core/settings-manager.ts";
 import { theme } from "../theme/theme.ts";
 import { DynamicBorder } from "./dynamic-border.ts";
 import { keyHint } from "./keybinding-hints.ts";
+import { computeModelListVisibleRange, formatModelSelectorLine } from "./model-selector-list.ts";
 
 interface ModelItem {
 	provider: string;
@@ -230,35 +231,15 @@ export class ModelSelectorComponent extends Container implements Focusable {
 	private updateList(): void {
 		this.listContainer.clear();
 
-		const maxVisible = 10;
-		const startIndex = Math.max(
-			0,
-			Math.min(this.selectedIndex - Math.floor(maxVisible / 2), this.filteredModels.length - maxVisible),
+		const { startIndex, endIndex } = computeModelListVisibleRange(
+			this.selectedIndex,
+			this.filteredModels.length,
 		);
-		const endIndex = Math.min(startIndex + maxVisible, this.filteredModels.length);
 
-		// Show visible slice of filtered models
 		for (let i = startIndex; i < endIndex; i++) {
 			const item = this.filteredModels[i];
 			if (!item) continue;
-
-			const isSelected = i === this.selectedIndex;
-			const isCurrent = modelsAreEqual(this.currentModel, item.model);
-
-			let line = "";
-			if (isSelected) {
-				const prefix = theme.fg("accent", "→ ");
-				const modelText = `${item.id}`;
-				const providerBadge = theme.fg("muted", `[${item.provider}]`);
-				const checkmark = isCurrent ? theme.fg("success", " ✓") : "";
-				line = `${prefix + theme.fg("accent", modelText)} ${providerBadge}${checkmark}`;
-			} else {
-				const modelText = `  ${item.id}`;
-				const providerBadge = theme.fg("muted", `[${item.provider}]`);
-				const checkmark = isCurrent ? theme.fg("success", " ✓") : "";
-				line = `${modelText} ${providerBadge}${checkmark}`;
-			}
-
+			const line = formatModelSelectorLine(item, i === this.selectedIndex, this.currentModel);
 			this.listContainer.addChild(new Text(line, 0, 0));
 		}
 

@@ -4,6 +4,14 @@ import { createAllToolDefinitions, type ToolName } from "../../../core/tools/ind
 import { getTextOutput as getRenderedTextOutput } from "../../../core/tools/render-utils.ts";
 import { convertToPng } from "../../../utils/image-convert.ts";
 import { theme } from "../theme/theme.ts";
+import {
+	buildToolResultImageAttachments,
+	formatGenericToolExecution,
+	renderToolDefinitionShell,
+	renderToolResultInShell,
+	resolveToolDisplayBgFn,
+	type ToolRendererShellState,
+} from "./tool-execution-render.ts";
 
 export interface ToolExecutionOptions {
 	showImages?: boolean;
@@ -254,71 +262,49 @@ export class ToolExecutionComponent extends Container {
 		return super.render(width);
 	}
 
-	private updateDisplay(): void {
-		const bgFn = this.isPartial
-			? (text: string) => theme.bg("toolPendingBg", text)
-			: this.result?.isError
-				? (text: string) => theme.bg("toolErrorBg", text)
-				: (text: string) => theme.bg("toolSuccessBg", text);
+	private getRendererShellState(): ToolRendererShellState {
+		return {
+			toolName: this.toolName,
+			args: this.args,
+			result: this.result,
+			isPartial: this.isPartial,
+			expanded: this.expanded,
+			showImages: this.showImages,
+			imageWidthCells: this.imageWidthCells,
+			executionStarted: this.executionStarted,
+			argsComplete: this.argsComplete,
+			cwd: this.cwd,
+			toolCallId: this.toolCallId,
+			rendererState: this.rendererState,
+			callRendererComponent: this.callRendererComponent,
+			resultRendererComponent: this.resultRendererComponent,
+			getCallRenderer: () => this.getCallRenderer(),
+			getResultRenderer: () => this.getResultRenderer(),
+			getRenderShell: () => this.getRenderShell(),
+			getRenderContext: (last) => this.getRenderContext(last),
+			createCallFallback: () => this.createCallFallback(),
+			createResultFallback: () => this.createResultFallback(),
+			getTextOutput: () => this.getTextOutput(),
+		};
+	}
 
+	private updateDisplay(): void {
+		const bgFn = resolveToolDisplayBgFn(this.isPartial, this.result);
 		let hasContent = false;
 		this.hideComponent = false;
+
 		if (this.hasRendererDefinition()) {
 			const renderContainer = this.getRenderShell() === "self" ? this.selfRenderContainer : this.contentBox;
-			if (renderContainer instanceof Box) {
-				renderContainer.setBgFn(bgFn);
-			}
-			renderContainer.clear();
-
-			const callRenderer = this.getCallRenderer();
-			if (!callRenderer) {
-				renderContainer.addChild(this.createCallFallback());
-				hasContent = true;
-			} else {
-				try {
-					const component = callRenderer(this.args, theme, this.getRenderContext(this.callRendererComponent));
-					this.callRendererComponent = component;
-					renderContainer.addChild(component);
-					hasContent = true;
-				} catch {
-					this.callRendererComponent = undefined;
-					renderContainer.addChild(this.createCallFallback());
-					hasContent = true;
-				}
-			}
-
+			const shellState = this.getRendererShellState();
+			hasContent = renderToolDefinitionShell(shellState, renderContainer, bgFn);
+			this.callRendererComponent = shellState.callRendererComponent;
 			if (this.result) {
-				const resultRenderer = this.getResultRenderer();
-				if (!resultRenderer) {
-					const component = this.createResultFallback();
-					if (component) {
-						renderContainer.addChild(component);
-						hasContent = true;
-					}
-				} else {
-					try {
-						const component = resultRenderer(
-							{ content: this.result.content as any, details: this.result.details },
-							{ expanded: this.expanded, isPartial: this.isPartial },
-							theme,
-							this.getRenderContext(this.resultRendererComponent),
-						);
-						this.resultRendererComponent = component;
-						renderContainer.addChild(component);
-						hasContent = true;
-					} catch {
-						this.resultRendererComponent = undefined;
-						const component = this.createResultFallback();
-						if (component) {
-							renderContainer.addChild(component);
-							hasContent = true;
-						}
-					}
-				}
+				hasContent = renderToolResultInShell(shellState, renderContainer) || hasContent;
+				this.resultRendererComponent = shellState.resultRendererComponent;
 			}
 		} else {
 			this.contentText.setCustomBgFn(bgFn);
-			this.contentText.setText(this.formatToolExecution());
+			this.contentText.setText(formatGenericToolExecution(this.toolName, this.args, this.result, this.showImages));
 			hasContent = true;
 		}
 
@@ -332,28 +318,19 @@ export class ToolExecutionComponent extends Container {
 		this.imageSpacers = [];
 
 		if (this.result) {
-			const imageBlocks = this.result.content.filter((c) => c.type === "image");
-			const caps = getCapabilities();
-			for (let i = 0; i < imageBlocks.length; i++) {
-				const img = imageBlocks[i];
-				if (caps.images && this.showImages && img.data && img.mimeType) {
-					const converted = this.convertedImages.get(i);
-					const imageData = converted?.data ?? img.data;
-					const imageMimeType = converted?.mimeType ?? img.mimeType;
-					if (caps.images === "kitty" && imageMimeType !== "image/png") continue;
-
-					const spacer = new Spacer(1);
-					this.addChild(spacer);
-					this.imageSpacers.push(spacer);
-					const imageComponent = new Image(
-						imageData,
-						imageMimeType,
-						{ fallbackColor: (s: string) => theme.fg("toolOutput", s) },
-						{ maxWidthCells: this.imageWidthCells },
-					);
-					this.imageComponents.push(imageComponent);
-					this.addChild(imageComponent);
-				}
+			const { imageComponents, imageSpacers } = buildToolResultImageAttachments(
+				this.result,
+				this.showImages,
+				this.imageWidthCells,
+				this.convertedImages,
+			);
+			for (const spacer of imageSpacers) {
+				this.addChild(spacer);
+				this.imageSpacers.push(spacer);
+			}
+			for (const imageComponent of imageComponents) {
+				this.imageComponents.push(imageComponent);
+				this.addChild(imageComponent);
 			}
 		}
 
@@ -366,16 +343,4 @@ export class ToolExecutionComponent extends Container {
 		return getRenderedTextOutput(this.result, this.showImages);
 	}
 
-	private formatToolExecution(): string {
-		let text = theme.fg("toolTitle", theme.bold(this.toolName));
-		const content = JSON.stringify(this.args, null, 2);
-		if (content) {
-			text += `\n\n${content}`;
-		}
-		const output = this.getTextOutput();
-		if (output) {
-			text += `\n${output}`;
-		}
-		return text;
-	}
 }
