@@ -682,72 +682,109 @@ export class TUI extends Container {
 			return;
 		}
 
-		if (this.inputListeners.size > 0) {
-			let current = data;
-			for (const listener of this.inputListeners) {
-				const result = listener(current);
-				if (result?.consume) {
-					return;
-				}
-				if (result?.data !== undefined) {
-					current = result.data;
-				}
-			}
-			if (current.length === 0) {
-				return;
-			}
-			data = current;
-		}
-
-		// Consume terminal cell size responses without blocking unrelated input.
-		if (this.consumeCellSizeResponse(data)) {
+		const processed = this.runInputListeners(data);
+		if (processed === null) {
 			return;
 		}
 
-		// Global debug key handler (Shift+Ctrl+D)
-		if (matchesKey(data, "shift+ctrl+d") && this.onDebug) {
-			this.onDebug();
+		if (this.consumeCellSizeResponse(processed)) {
 			return;
 		}
 
-		// If focused component is an overlay, verify it's still visible
-		// (visibility can change due to terminal resize or visible() callback)
+		if (this.maybeFireDebugCallback(processed)) {
+			return;
+		}
+
+		this.reconcileOverlayFocus();
+
+		this.dispatchToFocusedComponent(processed);
+	}
+
+	/**
+	 * Run the registered input listeners, letting them rewrite or consume the
+	 * input. Returns the (possibly rewritten) data, or null if any listener
+	 * consumed it.
+	 */
+	private runInputListeners(data: string): string | null {
+		if (this.inputListeners.size === 0) return data;
+		let current = data;
+		for (const listener of this.inputListeners) {
+			const result = listener(current);
+			if (result?.consume) {
+				return null;
+			}
+			if (result?.data !== undefined) {
+				current = result.data;
+			}
+		}
+		return current.length === 0 ? null : current;
+	}
+
+	/**
+	 * Fire the global debug callback (Shift+Ctrl+D) when applicable.
+	 * Returns true when the input was consumed by the callback.
+	 */
+	private maybeFireDebugCallback(data: string): boolean {
+		if (!matchesKey(data, "shift+ctrl+d") || !this.onDebug) return false;
+		this.onDebug();
+		return true;
+	}
+
+	/**
+	 * Re-focus as needed:
+	 * - If the focused overlay is no longer visible, jump to the topmost visible
+	 *   overlay or restore the previous focus.
+	 * - Otherwise, resume any pending focus-restore state.
+	 */
+	private reconcileOverlayFocus(): void {
 		const focusedOverlay = this.overlayStack.find((o) => o.component === this.focusedComponent);
 		if (focusedOverlay && !this.isOverlayVisible(focusedOverlay)) {
-			// Focused overlay is no longer visible, redirect to topmost visible overlay
 			const topVisible = this.getTopmostVisibleOverlay();
 			if (topVisible) {
 				this.setFocus(topVisible.component);
 			} else {
 				this.setFocusInternal({ component: focusedOverlay.preFocus, overlayFocusRestore: "preserve" });
 			}
+			return;
 		}
 
 		const focusIsOverlay = this.overlayStack.some((o) => o.component === this.focusedComponent);
-		if (!focusIsOverlay) {
-			const restoreState = this.getVisibleOverlayFocusRestore();
-			if (restoreState.status === "eligible") {
-				this.setFocus(restoreState.overlay.component);
-			} else if (restoreState.status === "blocked" && restoreState.blockedBy !== this.focusedComponent) {
-				if (restoreState.resume.status === "restore-overlay") {
-					this.setFocus(restoreState.overlay.component);
-				} else {
-					this.clearOverlayFocusRestore();
-					this.setFocus(restoreState.resume.target);
-				}
-			}
-		}
+		if (focusIsOverlay) return;
 
-		// Pass input to focused component (including Ctrl+C)
-		// The focused component can decide how to handle Ctrl+C
-		if (this.focusedComponent?.handleInput) {
-			// Filter out key release events unless component opts in
-			if (isKeyRelease(data) && !this.focusedComponent.wantsKeyRelease) {
-				return;
-			}
-			this.focusedComponent.handleInput(data);
-			this.requestRender();
+		const restoreState = this.getVisibleOverlayFocusRestore();
+		this.applyOverlayFocusRestore(restoreState);
+	}
+
+	/**
+	 * Apply a pending overlay focus-restore state to the current focus. Only
+	 * acts when the restore is "eligible" or "blocked" by something other than
+	 * the current focus.
+	 */
+	private applyOverlayFocusRestore(restoreState: OverlayFocusRestoreState): void {
+		if (restoreState.status === "eligible") {
+			this.setFocus(restoreState.overlay.component);
+			return;
 		}
+		if (restoreState.status !== "blocked" || restoreState.blockedBy === this.focusedComponent) return;
+		if (restoreState.resume.status === "restore-overlay") {
+			this.setFocus(restoreState.overlay.component);
+		} else {
+			this.clearOverlayFocusRestore();
+			this.setFocus(restoreState.resume.target);
+		}
+	}
+
+	/**
+	 * Hand the data off to the focused component, filtering out key release
+	 * events unless the component opts in. Requests a render after the input
+	 * is processed.
+	 */
+	private dispatchToFocusedComponent(data: string): void {
+		const focused = this.focusedComponent;
+		if (!focused?.handleInput) return;
+		if (isKeyRelease(data) && !focused.wantsKeyRelease) return;
+		focused.handleInput(data);
+		this.requestRender();
 	}
 
 	private consumeOsc11BackgroundResponse(data: string): boolean {

@@ -13,10 +13,14 @@ import {
 } from "../utils.ts";
 import {
 	buildDisplayLineWithCursor,
+	buildPasteMarker,
 	collectValidPasteMarkers,
+	decodeCsiUPasteContent,
+	filterNonPrintableKeepingNewlines,
 	isNewLineInput,
 	isPasteMarker,
 	mergeSegmentWithMarker,
+	prependSpaceBeforeFilePath,
 	recordWordWrapOpportunity,
 	resolveCursorInChunk,
 	resolveWordWrapOverflow,
@@ -417,18 +421,10 @@ export class Editor implements Component, Focusable {
 	}
 
 	render(width: number): string[] {
-		const maxPadding = Math.max(0, Math.floor((width - 1) / 2));
-		const paddingX = Math.min(this.paddingX, maxPadding);
-		const contentWidth = Math.max(1, width - paddingX * 2);
-
-		// Layout width: with padding the cursor can overflow into it,
-		// without padding we reserve 1 column for the cursor.
-		const layoutWidth = Math.max(1, contentWidth - (paddingX ? 0 : 1));
+		const { paddingX, contentWidth, layoutWidth, horizontal } = this.computeRenderLayout(width);
 
 		// Store for cursor navigation (must match wrapping width)
 		this.lastWidth = layoutWidth;
-
-		const horizontal = this.borderColor("─");
 
 		// Layout the text
 		const layoutLines = this.layoutText(layoutWidth);
@@ -437,20 +433,7 @@ export class Editor implements Component, Focusable {
 		const terminalRows = this.tui.terminal.rows;
 		const maxVisibleLines = Math.max(5, Math.floor(terminalRows * 0.3));
 
-		// Find the cursor line index in layoutLines
-		let cursorLineIndex = layoutLines.findIndex((line) => line.hasCursor);
-		if (cursorLineIndex === -1) cursorLineIndex = 0;
-
-		// Adjust scroll offset to keep cursor visible
-		if (cursorLineIndex < this.scrollOffset) {
-			this.scrollOffset = cursorLineIndex;
-		} else if (cursorLineIndex >= this.scrollOffset + maxVisibleLines) {
-			this.scrollOffset = cursorLineIndex - maxVisibleLines + 1;
-		}
-
-		// Clamp scroll offset to valid range
-		const maxScrollOffset = Math.max(0, layoutLines.length - maxVisibleLines);
-		this.scrollOffset = Math.max(0, Math.min(this.scrollOffset, maxScrollOffset));
+		this.adjustScrollForCursor(layoutLines, maxVisibleLines);
 
 		// Get visible lines slice
 		const visibleLines = layoutLines.slice(this.scrollOffset, this.scrollOffset + maxVisibleLines);
@@ -459,68 +442,122 @@ export class Editor implements Component, Focusable {
 		const leftPadding = " ".repeat(paddingX);
 		const rightPadding = leftPadding;
 
-		// Render top border (with scroll indicator if scrolled down)
-		if (this.scrollOffset > 0) {
-			const indicator = `─── ↑ ${this.scrollOffset} more `;
-			const remaining = width - visibleWidth(indicator);
-			if (remaining >= 0) {
-				result.push(this.borderColor(indicator + "─".repeat(remaining)));
-			} else {
-				result.push(this.borderColor(truncateToWidth(indicator, width)));
-			}
-		} else {
-			result.push(horizontal.repeat(width));
-		}
+		result.push(this.renderTopBorder(width, horizontal));
 
 		// Render each visible layout line
 		// Emit hardware cursor marker when focused so TUI can position the
 		// hardware cursor for IME candidate-window placement even while
 		// autocomplete (e.g. slash-command menu) is visible.
 		const emitCursorMarker = this.focused;
-
 		for (const layoutLine of visibleLines) {
-			const cursorBuilt = buildDisplayLineWithCursor({
-				text: layoutLine.text,
-				cursorPos: layoutLine.hasCursor ? layoutLine.cursorPos : undefined,
-				emitCursorMarker,
-				cursorMarker: CURSOR_MARKER,
-				contentWidth,
-				paddingX,
-				segment: (t, m) => this.segment(t, m),
-			});
-			const displayText = cursorBuilt.displayText;
-			const lineVisibleWidth = cursorBuilt.lineVisibleWidth;
-			const cursorInPadding = cursorBuilt.cursorInPadding;
-
-			// Calculate padding based on actual visible width
-			const padding = " ".repeat(Math.max(0, contentWidth - lineVisibleWidth));
-			const lineRightPadding = cursorInPadding ? rightPadding.slice(1) : rightPadding;
-
-			// Render the line (no side borders, just horizontal lines above and below)
-			result.push(`${leftPadding}${displayText}${padding}${lineRightPadding}`);
+			result.push(this.renderLayoutLine(layoutLine, contentWidth, paddingX, leftPadding, rightPadding, emitCursorMarker));
 		}
 
-		// Render bottom border (with scroll indicator if more content below)
-		const linesBelow = layoutLines.length - (this.scrollOffset + visibleLines.length);
-		if (linesBelow > 0) {
-			const indicator = `─── ↓ ${linesBelow} more `;
-			const remaining = width - visibleWidth(indicator);
-			result.push(this.borderColor(indicator + "─".repeat(Math.max(0, remaining))));
-		} else {
-			result.push(horizontal.repeat(width));
-		}
+		result.push(this.renderBottomBorder(width, horizontal, layoutLines.length, visibleLines.length));
 
 		// Add autocomplete list if active
-		if (this.autocompleteState && this.autocompleteList) {
-			const autocompleteResult = this.autocompleteList.render(contentWidth);
-			for (const line of autocompleteResult) {
-				const lineWidth = visibleWidth(line);
-				const linePadding = " ".repeat(Math.max(0, contentWidth - lineWidth));
-				result.push(`${leftPadding}${line}${linePadding}${rightPadding}`);
-			}
-		}
+		this.appendAutocompleteIfActive(contentWidth, paddingX, leftPadding, rightPadding, result);
 
 		return result;
+	}
+
+	/**
+	 * Compute the padding/content/layout widths and the default horizontal
+	 * border glyph for `render`.
+	 */
+	private computeRenderLayout(width: number): {
+		paddingX: number;
+		contentWidth: number;
+		layoutWidth: number;
+		horizontal: string;
+	} {
+		const maxPadding = Math.max(0, Math.floor((width - 1) / 2));
+		const paddingX = Math.min(this.paddingX, maxPadding);
+		const contentWidth = Math.max(1, width - paddingX * 2);
+		// Layout width: with padding the cursor can overflow into it,
+		// without padding we reserve 1 column for the cursor.
+		const layoutWidth = Math.max(1, contentWidth - (paddingX ? 0 : 1));
+		const horizontal = this.borderColor("─");
+		return { paddingX, contentWidth, layoutWidth, horizontal };
+	}
+
+	/** Adjust `this.scrollOffset` so the cursor line stays inside the viewport. */
+	private adjustScrollForCursor(layoutLines: LayoutLine[], maxVisibleLines: number): void {
+		let cursorLineIndex = layoutLines.findIndex((line) => line.hasCursor);
+		if (cursorLineIndex === -1) cursorLineIndex = 0;
+
+		if (cursorLineIndex < this.scrollOffset) {
+			this.scrollOffset = cursorLineIndex;
+		} else if (cursorLineIndex >= this.scrollOffset + maxVisibleLines) {
+			this.scrollOffset = cursorLineIndex - maxVisibleLines + 1;
+		}
+
+		const maxScrollOffset = Math.max(0, layoutLines.length - maxVisibleLines);
+		this.scrollOffset = Math.max(0, Math.min(this.scrollOffset, maxScrollOffset));
+	}
+
+	/** Build the top border line, with a `↑ N more` indicator when scrolled down. */
+	private renderTopBorder(width: number, horizontal: string): string {
+		if (this.scrollOffset === 0) {
+			return horizontal.repeat(width);
+		}
+		const indicator = `─── ↑ ${this.scrollOffset} more `;
+		const remaining = width - visibleWidth(indicator);
+		if (remaining >= 0) {
+			return this.borderColor(indicator + "─".repeat(remaining));
+		}
+		return this.borderColor(truncateToWidth(indicator, width));
+	}
+
+	/** Build the bottom border line, with a `↓ N more` indicator when more content follows. */
+	private renderBottomBorder(width: number, horizontal: string, totalLayoutLines: number, visibleLineCount: number): string {
+		const linesBelow = totalLayoutLines - (this.scrollOffset + visibleLineCount);
+		if (linesBelow === 0) {
+			return horizontal.repeat(width);
+		}
+		const indicator = `─── ↓ ${linesBelow} more `;
+		const remaining = width - visibleWidth(indicator);
+		return this.borderColor(indicator + "─".repeat(Math.max(0, remaining)));
+	}
+
+	/** Render a single layout line, including the cursor and any padding. */
+	private renderLayoutLine(
+		layoutLine: LayoutLine,
+		contentWidth: number,
+		paddingX: number,
+		leftPadding: string,
+		rightPadding: string,
+		emitCursorMarker: boolean,
+	): string {
+		const cursorBuilt = buildDisplayLineWithCursor({
+			text: layoutLine.text,
+			cursorPos: layoutLine.hasCursor ? layoutLine.cursorPos : undefined,
+			emitCursorMarker,
+			cursorMarker: CURSOR_MARKER,
+			contentWidth,
+			paddingX,
+			segment: (t, m) => this.segment(t, m),
+		});
+		const padding = " ".repeat(Math.max(0, contentWidth - cursorBuilt.lineVisibleWidth));
+		const lineRightPadding = cursorBuilt.cursorInPadding ? rightPadding.slice(1) : rightPadding;
+		return `${leftPadding}${cursorBuilt.displayText}${padding}${lineRightPadding}`;
+	}
+
+	/** Append rendered autocomplete lines, if any, into the result buffer. */
+	private appendAutocompleteIfActive(
+		contentWidth: number,
+		paddingX: number,
+		leftPadding: string,
+		rightPadding: string,
+		result: string[],
+	): void {
+		if (!this.autocompleteState || !this.autocompleteList) return;
+		const autocompleteResult = this.autocompleteList.render(contentWidth);
+		for (const line of autocompleteResult) {
+			const lineWidth = visibleWidth(line);
+			const linePadding = " ".repeat(Math.max(0, contentWidth - lineWidth));
+			result.push(`${leftPadding}${line}${linePadding}${rightPadding}`);
+		}
 	}
 
 	private tryHandleJumpModeInput(data: string, kb: ReturnType<typeof getKeybindings>): boolean {
@@ -1017,36 +1054,51 @@ export class Editor implements Component, Focusable {
 		}
 
 		// Check if we should trigger or update autocomplete
-		if (!this.autocompleteState) {
-			// Auto-trigger for "/" at the start of a line (slash commands)
-			if (char === "/" && this.isAtStartOfMessage()) {
+		if (this.autocompleteState) {
+			this.updateAutocomplete();
+			return;
+		}
+		this.maybeAutocompleteOnInsert(char);
+	}
+
+	/**
+	 * Decide whether the just-inserted character should trigger a fresh
+	 * autocomplete request. Used after `insertCharacter` to keep the dispatch
+	 * table in `insertCharacter` itself small.
+	 */
+	private maybeAutocompleteOnInsert(char: string): void {
+		if (char === "/" && this.isAtStartOfMessage()) {
+			this.tryTriggerAutocomplete();
+			return;
+		}
+		if (this.autocompleteTriggerCharacters.includes(char)) {
+			if (this.isAtTokenStart()) {
 				this.tryTriggerAutocomplete();
 			}
-			// Auto-trigger for symbol-based completion like @, #, or provider triggers at token boundaries
-			else if (this.autocompleteTriggerCharacters.includes(char)) {
-				const currentLine = this.state.lines[this.state.cursorLine] || "";
-				const textBeforeCursor = currentLine.slice(0, this.state.cursorCol);
-				const charBeforeSymbol = textBeforeCursor[textBeforeCursor.length - 2];
-				if (textBeforeCursor.length === 1 || charBeforeSymbol === " " || charBeforeSymbol === "\t") {
-					this.tryTriggerAutocomplete();
-				}
-			}
-			// Also auto-trigger when typing letters in a slash command or symbol completion context
-			else if (/[a-zA-Z0-9.\-_]/.test(char)) {
-				const currentLine = this.state.lines[this.state.cursorLine] || "";
-				const textBeforeCursor = currentLine.slice(0, this.state.cursorCol);
-				// Check if we're in a slash command (with or without space for arguments)
-				if (this.isInSlashCommandContext(textBeforeCursor)) {
-					this.tryTriggerAutocomplete();
-				}
-				// Check if we're in a symbol-based completion context like @, #, or provider triggers
-				else if (this.autocompleteTriggerPattern.test(textBeforeCursor)) {
-					this.tryTriggerAutocomplete();
-				}
-			}
-		} else {
-			this.updateAutocomplete();
+			return;
 		}
+		if (/[a-zA-Z0-9.\-_]/.test(char)) {
+			if (this.isInAutocompleteContext()) {
+				this.tryTriggerAutocomplete();
+			}
+		}
+	}
+
+	/** Return true when the cursor is at a token boundary (after space/tab/start). */
+	private isAtTokenStart(): boolean {
+		const currentLine = this.state.lines[this.state.cursorLine] || "";
+		const textBeforeCursor = currentLine.slice(0, this.state.cursorCol);
+		if (textBeforeCursor.length === 1) return true;
+		const charBeforeSymbol = textBeforeCursor[textBeforeCursor.length - 2];
+		return charBeforeSymbol === " " || charBeforeSymbol === "\t";
+	}
+
+	/** Return true when the text before the cursor is inside a completable context. */
+	private isInAutocompleteContext(): boolean {
+		const currentLine = this.state.lines[this.state.cursorLine] || "";
+		const textBeforeCursor = currentLine.slice(0, this.state.cursorCol);
+		if (this.isInSlashCommandContext(textBeforeCursor)) return true;
+		return this.autocompleteTriggerPattern.test(textBeforeCursor);
 	}
 
 	private handlePaste(pastedText: string): void {
@@ -1056,65 +1108,26 @@ export class Editor implements Component, Focusable {
 
 		this.pushUndoSnapshot();
 
-		// Some terminals (e.g. tmux popups with extended-keys-format=csi-u) re-encode
-		// control bytes inside bracketed paste as CSI-u Ctrl+<letter> sequences
-		// (ESC [ <codepoint> ; 5 u). Decode those back to their literal byte so the
-		// per-char filter below preserves newlines instead of stripping ESC and
-		// leaking the printable tail (e.g. "[106;5u") into the editor.
-		const decodedText = pastedText.replace(/\x1b\[(\d+);5u/g, (match, code) => {
-			const cp = Number(code);
-			if (cp >= 97 && cp <= 122) return String.fromCodePoint(cp - 96);
-			if (cp >= 65 && cp <= 90) return String.fromCodePoint(cp - 64);
-			return match;
-		});
-
-		// Clean the pasted text: normalize line endings, expand tabs
+		const decodedText = decodeCsiUPasteContent(pastedText);
 		const cleanText = this.normalizeText(decodedText);
+		const filteredText = filterNonPrintableKeepingNewlines(cleanText);
+		const withPathSpacing = prependSpaceBeforeFilePath(filteredText, this.state.lines, this.state.cursorLine, this.state.cursorCol);
 
-		// Filter out non-printable characters except newlines
-		let filteredText = cleanText
-			.split("")
-			.filter((char) => char === "\n" || char.codePointAt(0)! >= 32)
-			.join("");
-
-		// If pasting a file path (starts with /, ~, or .) and the character before
-		// the cursor is a word character, prepend a space for better readability
-		if (/^[/~.]/.test(filteredText)) {
-			const currentLine = this.state.lines[this.state.cursorLine] || "";
-			const charBeforeCursor = this.state.cursorCol > 0 ? currentLine[this.state.cursorCol - 1] : "";
-			if (charBeforeCursor && /\w/.test(charBeforeCursor)) {
-				filteredText = ` ${filteredText}`;
-			}
-		}
-
-		// Split into lines to check for large paste
-		const pastedLines = filteredText.split("\n");
-
-		// Check if this is a large paste (> 10 lines or > 1000 characters)
-		const totalChars = filteredText.length;
+		const pastedLines = withPathSpacing.split("\n");
+		const totalChars = withPathSpacing.length;
 		if (pastedLines.length > 10 || totalChars > 1000) {
-			// Store the paste and insert a marker
-			this.pasteCounter++;
-			const pasteId = this.pasteCounter;
-			this.pastes.set(pasteId, filteredText);
-
-			// Insert marker like "[paste #1 +123 lines]" or "[paste #1 1234 chars]"
-			const marker =
-				pastedLines.length > 10
-					? `[paste #${pasteId} +${pastedLines.length} lines]`
-					: `[paste #${pasteId} ${totalChars} chars]`;
-			this.insertTextAtCursorInternal(marker);
+			this.insertPasteMarker(withPathSpacing, pastedLines.length, totalChars);
 			return;
 		}
+		this.insertTextAtCursorInternal(withPathSpacing);
+	}
 
-		if (pastedLines.length === 1) {
-			// Single line - insert atomically (do not trigger autocomplete during paste)
-			this.insertTextAtCursorInternal(filteredText);
-			return;
-		}
-
-		// Multi-line paste - use direct state manipulation
-		this.insertTextAtCursorInternal(filteredText);
+	private insertPasteMarker(text: string, lineCount: number, totalChars: number): void {
+		this.pasteCounter++;
+		const pasteId = this.pasteCounter;
+		this.pastes.set(pasteId, text);
+		const marker = buildPasteMarker(pasteId, lineCount, totalChars);
+		this.insertTextAtCursorInternal(marker);
 	}
 
 	private addNewLine(): void {
@@ -1661,48 +1674,10 @@ export class Editor implements Component, Focusable {
 		const currentVisualLine = this.findCurrentVisualLine(visualLines);
 
 		if (deltaLine !== 0) {
-			const targetVisualLine = currentVisualLine + deltaLine;
-
-			if (targetVisualLine >= 0 && targetVisualLine < visualLines.length) {
-				this.moveToVisualLine(visualLines, currentVisualLine, targetVisualLine);
-			}
+			this.moveCursorVertically(visualLines, currentVisualLine, deltaLine);
 		}
-
 		if (deltaCol !== 0) {
-			const currentLine = this.state.lines[this.state.cursorLine] || "";
-
-			if (deltaCol > 0) {
-				// Moving right - move by one grapheme (handles emojis, combining characters, etc.)
-				if (this.state.cursorCol < currentLine.length) {
-					const afterCursor = currentLine.slice(this.state.cursorCol);
-					const graphemes = [...this.segment(afterCursor, "grapheme")];
-					const firstGrapheme = graphemes[0];
-					this.setCursorCol(this.state.cursorCol + (firstGrapheme ? firstGrapheme.segment.length : 1));
-				} else if (this.state.cursorLine < this.state.lines.length - 1) {
-					// Wrap to start of next logical line
-					this.state.cursorLine++;
-					this.setCursorCol(0);
-				} else {
-					// At end of last line - can't move, but set preferredVisualCol for up/down navigation
-					const currentVL = visualLines[currentVisualLine];
-					if (currentVL) {
-						this.preferredVisualCol = this.state.cursorCol - currentVL.startCol;
-					}
-				}
-			} else {
-				// Moving left - move by one grapheme (handles emojis, combining characters, etc.)
-				if (this.state.cursorCol > 0) {
-					const beforeCursor = currentLine.slice(0, this.state.cursorCol);
-					const graphemes = [...this.segment(beforeCursor, "grapheme")];
-					const lastGrapheme = graphemes[graphemes.length - 1];
-					this.setCursorCol(this.state.cursorCol - (lastGrapheme ? lastGrapheme.segment.length : 1));
-				} else if (this.state.cursorLine > 0) {
-					// Wrap to end of previous logical line
-					this.state.cursorLine--;
-					const prevLine = this.state.lines[this.state.cursorLine] || "";
-					this.setCursorCol(prevLine.length);
-				}
-			}
+			this.moveCursorHorizontally(visualLines, currentVisualLine, deltaCol);
 		}
 
 		// Keep an open autocomplete picker in sync with the new cursor
@@ -1715,6 +1690,82 @@ export class Editor implements Component, Focusable {
 		// concatenate the stale suggestion onto the partial command name).
 		if (this.autocompleteState) {
 			this.updateAutocomplete();
+		}
+	}
+
+	/**
+	 * Move the cursor up or down by the given number of visual lines. No-op
+	 * when the target is outside the visual line map.
+	 */
+	private moveCursorVertically(
+		visualLines: Array<{ logicalLine: number; startCol: number; length: number }>,
+		currentVisualLine: number,
+		deltaLine: number,
+	): void {
+		const targetVisualLine = currentVisualLine + deltaLine;
+		if (targetVisualLine < 0 || targetVisualLine >= visualLines.length) return;
+		this.moveToVisualLine(visualLines, currentVisualLine, targetVisualLine);
+	}
+
+	/**
+	 * Move the cursor left (-1) or right (+1) by one grapheme. At line
+	 * boundaries, wrap to the next/previous logical line; at the end of the
+	 * buffer, update the sticky column for the next vertical move.
+	 */
+	private moveCursorHorizontally(
+		visualLines: Array<{ logicalLine: number; startCol: number; length: number }>,
+		currentVisualLine: number,
+		deltaCol: number,
+	): void {
+		if (deltaCol > 0) {
+			this.moveCursorRight(visualLines, currentVisualLine);
+		} else {
+			this.moveCursorLeft();
+		}
+	}
+
+	/**
+	 * Move the cursor right by one grapheme, wrapping to the start of the next
+	 * line at end-of-line. At end-of-buffer, capture the current visual column
+	 * so the next vertical move lands on the same screen position.
+	 */
+	private moveCursorRight(
+		visualLines: Array<{ logicalLine: number; startCol: number; length: number }>,
+		currentVisualLine: number,
+	): void {
+		const currentLine = this.state.lines[this.state.cursorLine] || "";
+		if (this.state.cursorCol < currentLine.length) {
+			const afterCursor = currentLine.slice(this.state.cursorCol);
+			const graphemes = [...this.segment(afterCursor, "grapheme")];
+			const firstGrapheme = graphemes[0];
+			this.setCursorCol(this.state.cursorCol + (firstGrapheme ? firstGrapheme.segment.length : 1));
+			return;
+		}
+		if (this.state.cursorLine < this.state.lines.length - 1) {
+			this.state.cursorLine++;
+			this.setCursorCol(0);
+			return;
+		}
+		const currentVL = visualLines[currentVisualLine];
+		if (currentVL) {
+			this.preferredVisualCol = this.state.cursorCol - currentVL.startCol;
+		}
+	}
+
+	/** Move the cursor left by one grapheme, wrapping to the end of the previous line. */
+	private moveCursorLeft(): void {
+		const currentLine = this.state.lines[this.state.cursorLine] || "";
+		if (this.state.cursorCol > 0) {
+			const beforeCursor = currentLine.slice(0, this.state.cursorCol);
+			const graphemes = [...this.segment(beforeCursor, "grapheme")];
+			const lastGrapheme = graphemes[graphemes.length - 1];
+			this.setCursorCol(this.state.cursorCol - (lastGrapheme ? lastGrapheme.segment.length : 1));
+			return;
+		}
+		if (this.state.cursorLine > 0) {
+			this.state.cursorLine--;
+			const prevLine = this.state.lines[this.state.cursorLine] || "";
+			this.setCursorCol(prevLine.length);
 		}
 	}
 

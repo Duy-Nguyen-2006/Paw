@@ -310,16 +310,34 @@ export class Markdown implements Component {
 			return [];
 		}
 
-		const borderOverhead = 3 * numCols + 1;
-		const availableForCells = availableWidth - borderOverhead;
-		if (availableForCells < numCols) {
-			const fallbackLines = token.raw ? wrapTextWithAnsi(token.raw, availableWidth) : [];
-			if (nextTokenType && nextTokenType !== "space") {
-				fallbackLines.push("");
-			}
-			return fallbackLines;
+		const fallback = tryBuildFallbackTable(token, availableWidth, nextTokenType);
+		if (fallback) return fallback;
+
+		const columnWidths = this.computeTableColumnWidths(token, availableWidth, numCols, styleContext);
+
+		const lines: string[] = [];
+		lines.push(buildTableBorderLine(columnWidths, "┌", "┐", "─┬─"));
+		lines.push(...this.buildTableHeaderLines(token, columnWidths, styleContext));
+		const separatorLine = buildTableBorderLine(columnWidths, "├", "┤", "─┼─");
+		lines.push(separatorLine);
+		lines.push(...renderTableDataRows(token.rows, columnWidths, (cells, ctx) => this.renderInlineTokens(cells, ctx), styleContext, wrapCellText, separatorLine));
+		lines.push(buildTableBorderLine(columnWidths, "└", "┘", "─┴─"));
+
+		if (nextTokenType && nextTokenType !== "space") {
+			lines.push("");
 		}
 
+		return lines;
+	}
+
+	/** Compute the per-column widths for a table, given the available width. */
+	private computeTableColumnWidths(
+		token: Tokens.Table,
+		availableWidth: number,
+		numCols: number,
+		styleContext: InlineStyleContext | undefined,
+	): number[] {
+		const borderOverhead = 3 * numCols + 1;
 		const maxUnbrokenWordWidth = 30;
 		const { naturalWidths, minWordWidths } = computeTableNaturalAndMinWidths(
 			token,
@@ -327,47 +345,42 @@ export class Markdown implements Component {
 			styleContext,
 			maxUnbrokenWordWidth,
 		);
+		return resolveTableColumnWidths(naturalWidths, minWordWidths, availableWidth - borderOverhead, availableWidth, borderOverhead, numCols);
+	}
 
-		const columnWidths = resolveTableColumnWidths(
-			naturalWidths,
-			minWordWidths,
-			availableForCells,
-			availableWidth,
-			borderOverhead,
-			numCols,
-		);
-
-		const lines: string[] = [];
-		const topBorderCells = columnWidths.map((w) => "─".repeat(w));
-		lines.push(`┌─${topBorderCells.join("─┬─")}─┐`);
-
+	/** Render the header rows of a table to a list of already-wrapped strings. */
+	private buildTableHeaderLines(token: Tokens.Table, columnWidths: number[], styleContext: InlineStyleContext | undefined): string[] {
 		const headerCellLines: string[][] = token.header.map((cell, i) => {
 			const text = this.renderInlineTokens(cell.tokens || [], styleContext);
-			return wrapCellText(text, columnWidths[i]);
+			return wrapCellText(text, columnWidths[i]!);
 		});
-		lines.push(...renderTableHeaderRows(headerCellLines, columnWidths, this.theme.bold));
-
-		const separatorCells = columnWidths.map((w) => "─".repeat(w));
-		const separatorLine = `├─${separatorCells.join("─┼─")}─┤`;
-		lines.push(separatorLine);
-
-		lines.push(
-			...renderTableDataRows(
-				token.rows,
-				columnWidths,
-				(tokens, ctx) => this.renderInlineTokens(tokens, ctx),
-				styleContext,
-				wrapCellText,
-				separatorLine,
-			),
-		);
-
-		const bottomBorderCells = columnWidths.map((w) => "─".repeat(w));
-		lines.push(`└─${bottomBorderCells.join("─┴─")}─┘`);
-
-		if (nextTokenType && nextTokenType !== "space") {
-			lines.push("");
-		}
-		return lines;
+		return renderTableHeaderRows(headerCellLines, columnWidths, this.theme.bold);
 	}
+}
+
+/**
+ * If the requested width is too small for the column borders, fall back to
+ * rendering the raw table text wrapped to the available width. Returns null
+ * when the table can be laid out normally.
+ */
+function tryBuildFallbackTable(token: Tokens.Table, availableWidth: number, nextTokenType?: string): string[] | null {
+	const numCols = token.header.length;
+	if (numCols === 0) return null;
+	const borderOverhead = 3 * numCols + 1;
+	const availableForCells = availableWidth - borderOverhead;
+	if (availableForCells >= numCols) return null;
+	const fallbackLines = token.raw ? wrapTextWithAnsi(token.raw, availableWidth) : [];
+	if (nextTokenType && nextTokenType !== "space") {
+		fallbackLines.push("");
+	}
+	return fallbackLines;
+}
+
+/**
+ * Build a single table border line such as `┌─...─┬─...─┐` using the given
+ * left/right corner and inner-joiner characters.
+ */
+function buildTableBorderLine(columnWidths: number[], leftCorner: string, rightCorner: string, joiner: string): string {
+	const cells = columnWidths.map((w) => "─".repeat(w));
+	return `${leftCorner}─${cells.join(joiner)}─${rightCorner}`;
 }

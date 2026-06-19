@@ -265,6 +265,34 @@ class AnsiCodeTracker {
 	private bgColor: string | null = null; // Stores the full code like "41" or "48;5;240"
 	private activeHyperlink: ActiveHyperlink | null = null;
 
+	/**
+	 * SGR codes that toggle a single boolean attribute on the tracker.
+	 * The table dispatches to small setter methods so the main handler stays
+	 * focused on the dispatch and color branches.
+	 */
+	private static readonly SGR_TOGGLE: ReadonlyMap<number, (t: AnsiCodeTracker) => void> = new Map<
+		number,
+		(t: AnsiCodeTracker) => void
+	>([
+		[0, (t) => t.reset()],
+		[1, (t) => t.setBold(true)],
+		[2, (t) => t.setDim(true)],
+		[3, (t) => t.setItalic(true)],
+		[4, (t) => t.setUnderline(true)],
+		[5, (t) => t.setBlink(true)],
+		[7, (t) => t.setInverse(true)],
+		[8, (t) => t.setHidden(true)],
+		[9, (t) => t.setStrikethrough(true)],
+		[21, (t) => t.setBold(false)],
+		[22, (t) => t.setBoldAndDimOff()],
+		[23, (t) => t.setItalic(false)],
+		[24, (t) => t.setUnderline(false)],
+		[25, (t) => t.setBlink(false)],
+		[27, (t) => t.setInverse(false)],
+		[28, (t) => t.setHidden(false)],
+		[29, (t) => t.setStrikethrough(false)],
+	]);
+
 	process(ansiCode: string): void {
 		// OSC 8 hyperlink: \x1b]8;;<url>\x1b\\ (open) or \x1b]8;;\x1b\\ (close).
 		// Preserve the original terminator because some terminals only make BEL-terminated
@@ -310,93 +338,54 @@ class AnsiCodeTracker {
 			return 0;
 		}
 		if (parts[i + 1] === "5" && parts[i + 2] !== undefined) {
-			const colorCode = `${parts[i]};${parts[i + 1]};${parts[i + 2]}`;
-			if (code === 38) {
-				this.fgColor = colorCode;
-			} else {
-				this.bgColor = colorCode;
-			}
-			return 3;
+			return this.setExtendedColor(parts, i, code);
 		}
 		if (parts[i + 1] === "2" && parts[i + 4] !== undefined) {
-			const colorCode = `${parts[i]};${parts[i + 1]};${parts[i + 2]};${parts[i + 3]};${parts[i + 4]}`;
-			if (code === 38) {
-				this.fgColor = colorCode;
-			} else {
-				this.bgColor = colorCode;
-			}
-			return 5;
+			return this.setTrueColor(parts, i, code);
 		}
 		return 0;
 	}
 
+	/** Store a 256-color extended palette code and return the parameter width. */
+	private setExtendedColor(parts: string[], i: number, code: number): number {
+		const colorCode = `${parts[i]};${parts[i + 1]};${parts[i + 2]}`;
+		if (code === 38) {
+			this.fgColor = colorCode;
+		} else {
+			this.bgColor = colorCode;
+		}
+		return 3;
+	}
+
+	/** Store a 24-bit true-color code and return the parameter width. */
+	private setTrueColor(parts: string[], i: number, code: number): number {
+		const colorCode = `${parts[i]};${parts[i + 1]};${parts[i + 2]};${parts[i + 3]};${parts[i + 4]}`;
+		if (code === 38) {
+			this.fgColor = colorCode;
+		} else {
+			this.bgColor = colorCode;
+		}
+		return 5;
+	}
+
 	private applyStandardSgrCode(code: number): void {
-		switch (code) {
-			case 0:
-				this.reset();
-				break;
-			case 1:
-				this.bold = true;
-				break;
-			case 2:
-				this.dim = true;
-				break;
-			case 3:
-				this.italic = true;
-				break;
-			case 4:
-				this.underline = true;
-				break;
-			case 5:
-				this.blink = true;
-				break;
-			case 7:
-				this.inverse = true;
-				break;
-			case 8:
-				this.hidden = true;
-				break;
-			case 9:
-				this.strikethrough = true;
-				break;
-			case 21:
-				this.bold = false;
-				break;
-			case 22:
-				this.bold = false;
-				this.dim = false;
-				break;
-			case 23:
-				this.italic = false;
-				break;
-			case 24:
-				this.underline = false;
-				break;
-			case 25:
-				this.blink = false;
-				break;
-			case 27:
-				this.inverse = false;
-				break;
-			case 28:
-				this.hidden = false;
-				break;
-			case 29:
-				this.strikethrough = false;
-				break;
-			case 39:
-				this.fgColor = null;
-				break;
-			case 49:
-				this.bgColor = null;
-				break;
-			default:
-				if ((code >= 30 && code <= 37) || (code >= 90 && code <= 97)) {
-					this.fgColor = String(code);
-				} else if ((code >= 40 && code <= 47) || (code >= 100 && code <= 107)) {
-					this.bgColor = String(code);
-				}
-				break;
+		const handler = AnsiCodeTracker.SGR_TOGGLE.get(code);
+		if (handler) {
+			handler(this);
+			return;
+		}
+		if (code === 39) {
+			this.fgColor = null;
+			return;
+		}
+		if (code === 49) {
+			this.bgColor = null;
+			return;
+		}
+		if ((code >= 30 && code <= 37) || (code >= 90 && code <= 97)) {
+			this.fgColor = String(code);
+		} else if ((code >= 40 && code <= 47) || (code >= 100 && code <= 107)) {
+			this.bgColor = String(code);
 		}
 	}
 
@@ -412,6 +401,35 @@ class AnsiCodeTracker {
 		this.fgColor = null;
 		this.bgColor = null;
 		// SGR reset does not affect OSC 8 hyperlink state
+	}
+
+	private setBold(v: boolean): void {
+		this.bold = v;
+	}
+	private setDim(v: boolean): void {
+		this.dim = v;
+	}
+	private setItalic(v: boolean): void {
+		this.italic = v;
+	}
+	private setUnderline(v: boolean): void {
+		this.underline = v;
+	}
+	private setBlink(v: boolean): void {
+		this.blink = v;
+	}
+	private setInverse(v: boolean): void {
+		this.inverse = v;
+	}
+	private setHidden(v: boolean): void {
+		this.hidden = v;
+	}
+	private setStrikethrough(v: boolean): void {
+		this.strikethrough = v;
+	}
+	private setBoldAndDimOff(): void {
+		this.bold = false;
+		this.dim = false;
 	}
 
 	/** Clear all state for reuse. */

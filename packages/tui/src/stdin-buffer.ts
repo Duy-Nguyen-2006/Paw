@@ -48,55 +48,64 @@ function extractCompleteSequences(buffer: string): { sequences: string[]; remain
 
 	while (pos < buffer.length) {
 		const remaining = buffer.slice(pos);
-
-		// Try to extract a sequence starting at this position
-		if (remaining.startsWith(ESC)) {
-			// Find the end of this escape sequence
-			let seqEnd = 1;
-			while (seqEnd <= remaining.length) {
-				const candidate = remaining.slice(0, seqEnd);
-				const status = isCompleteEscapeSequence(candidate);
-
-				if (status === "complete") {
-					// WezTerm with enable_kitty_keyboard sends the Escape key press as a
-					// raw '\x1b' byte (simple text path in encode_kitty, ignoring
-					// DISAMBIGUATE_ESCAPE_CODES) and the release as a full Kitty CSI-u
-					// sequence. These arrive concatenated as '\x1b\x1b[27;...u'.
-					// The buffer would normally treat '\x1b\x1b' as a complete meta-key
-					// sequence (ESC + single char), leaving '[27;...u' to be typed as
-					// plain text. If the character immediately following '\x1b\x1b'
-					// would begin a new escape sequence, emit only the first ESC and
-					// restart from the second.
-					const splitEsc = tryEmitSplitEscEsc(remaining, seqEnd);
-					if (splitEsc) {
-						sequences.push(splitEsc.emit);
-						pos += splitEsc.advance;
-						break;
-					}
-					sequences.push(candidate);
-					pos += seqEnd;
-					break;
-				} else if (status === "incomplete") {
-					seqEnd++;
-				} else {
-					// Should not happen when starting with ESC
-					sequences.push(candidate);
-					pos += seqEnd;
-					break;
-				}
-			}
-
-			if (seqEnd > remaining.length) {
-				return { sequences, remainder: remaining };
-			}
-		} else {
+		if (!remaining.startsWith(ESC)) {
 			// Not an escape sequence - take a single character
 			sequences.push(remaining[0]!);
 			pos++;
+			continue;
+		}
+		const result = extractOneEscapeSequence(remaining, sequences);
+		pos += result.consumed;
+		if (result.remainder !== undefined) {
+			return { sequences, remainder: result.remainder };
 		}
 	}
 
 	return { sequences, remainder: "" };
+}
+
+/**
+ * Consume one ESC-prefixed sequence from the start of `remaining`, appending
+ * to `sequences`. Returns the number of characters consumed, plus an optional
+ * `remainder` string when the buffer is exhausted mid-sequence.
+ */
+function extractOneEscapeSequence(
+	remaining: string,
+	sequences: string[],
+): { consumed: number; remainder?: string } {
+	let seqEnd = 1;
+	while (seqEnd <= remaining.length) {
+		const candidate = remaining.slice(0, seqEnd);
+		const status = isCompleteEscapeSequence(candidate);
+
+		if (status === "complete") {
+			// WezTerm with enable_kitty_keyboard sends the Escape key press as a
+			// raw '\x1b' byte (simple text path in encode_kitty, ignoring
+			// DISAMBIGUATE_ESCAPE_CODES) and the release as a full Kitty CSI-u
+			// sequence. These arrive concatenated as '\x1b\x1b[27;...u'.
+			// The buffer would normally treat '\x1b\x1b' as a complete meta-key
+			// sequence (ESC + single char), leaving '[27;...u' to be typed as
+			// plain text. If the character immediately following '\x1b\x1b'
+			// would begin a new escape sequence, emit only the first ESC and
+			// restart from the second.
+			const splitEsc = tryEmitSplitEscEsc(remaining, seqEnd);
+			if (splitEsc) {
+				sequences.push(splitEsc.emit);
+				return { consumed: splitEsc.advance };
+			}
+			sequences.push(candidate);
+			return { consumed: seqEnd };
+		}
+		if (status === "incomplete") {
+			seqEnd++;
+			continue;
+		}
+		// Should not happen when starting with ESC
+		sequences.push(candidate);
+		return { consumed: seqEnd };
+	}
+	// Buffer ended with an incomplete escape sequence - keep the rest for later.
+	return { consumed: 0, remainder: remaining };
 }
 
 export type StdinBufferOptions = {

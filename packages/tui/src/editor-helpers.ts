@@ -182,3 +182,60 @@ export function buildDisplayLineWithCursor(params: RenderCursorLineParams): {
 
 	return { displayText, lineVisibleWidth, cursorInPadding };
 }
+
+/**
+ * Some terminals (e.g. tmux popups with extended-keys-format=csi-u) re-encode
+ * control bytes inside bracketed paste as CSI-u Ctrl+<letter> sequences
+ * (ESC [ <codepoint> ; 5 u). Decode those back to their literal byte so the
+ * per-char filter below preserves newlines instead of stripping ESC and
+ * leaking the printable tail (e.g. "[106;5u") into the editor.
+ */
+export function decodeCsiUPasteContent(pastedText: string): string {
+	return pastedText.replace(/\x1b\[(\d+);5u/g, (match, code) => {
+		const cp = Number(code);
+		if (cp >= 97 && cp <= 122) return String.fromCodePoint(cp - 96);
+		if (cp >= 65 && cp <= 90) return String.fromCodePoint(cp - 64);
+		return match;
+	});
+}
+
+/**
+ * Drop control characters from the pasted text while keeping newlines intact.
+ */
+export function filterNonPrintableKeepingNewlines(text: string): string {
+	return text
+		.split("")
+		.filter((char) => char === "\n" || char.codePointAt(0)! >= 32)
+		.join("");
+}
+
+/**
+ * When pasting a path-like string (starts with `/`, `~`, or `.`) right after a
+ * word character, prepend a space so the path doesn't get concatenated onto
+ * the previous token.
+ */
+export function prependSpaceBeforeFilePath(
+	text: string,
+	lines: string[],
+	cursorLine: number,
+	cursorCol: number,
+): string {
+	if (!/^[/~.]/.test(text)) return text;
+	const currentLine = lines[cursorLine] || "";
+	const charBeforeCursor = cursorCol > 0 ? currentLine[cursorCol - 1] : "";
+	if (charBeforeCursor && /\w/.test(charBeforeCursor)) {
+		return ` ${text}`;
+	}
+	return text;
+}
+
+/**
+ * Build a paste marker like `[paste #1 +123 lines]` or `[paste #1 1234 chars]`,
+ * choosing the lines variant when the paste has more than 10 lines.
+ */
+export function buildPasteMarker(pasteId: number, lineCount: number, totalChars: number): string {
+	if (lineCount > 10) {
+		return `[paste #${pasteId} +${lineCount} lines]`;
+	}
+	return `[paste #${pasteId} ${totalChars} chars]`;
+}
