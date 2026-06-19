@@ -1,6 +1,4 @@
 import {
-	BedrockRuntimeClient,
-	type BedrockRuntimeClientConfig,
 	BedrockRuntimeServiceException,
 	StopReason as BedrockStopReason,
 	type Tool as BedrockTool,
@@ -21,8 +19,8 @@ import {
 	type ToolResultContentBlock,
 	ToolResultStatus,
 } from "@aws-sdk/client-bedrock-runtime";
-import { NodeHttpHandler } from "@smithy/node-http-handler";
 import type { BuildMiddleware, DocumentType, MetadataBearer } from "@smithy/types";
+import { createBedrockRuntimeClient, getConfiguredBedrockRegion } from "./amazon-bedrock-client-helpers.ts";
 import { calculateCost } from "../models.ts";
 import type {
 	Api,
@@ -47,7 +45,6 @@ import type {
 } from "../types.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { parseStreamingJson } from "../utils/json-parse.ts";
-import { createHttpProxyAgentsForTarget } from "../utils/node-http-proxy.ts";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.ts";
 import { adjustMaxTokensForThinking, buildBaseOptions, clampReasoning } from "./simple-options.ts";
 import { transformMessages } from "./transform-messages.ts";
@@ -120,77 +117,8 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOpt
 
 		const blocks = output.content as Block[];
 
-		const config: BedrockRuntimeClientConfig = {
-			profile: options.profile,
-		};
-		const configuredRegion = getConfiguredBedrockRegion(options);
-		const hasConfiguredProfile = hasConfiguredBedrockProfile();
-		const endpointRegion = getStandardBedrockEndpointRegion(model.baseUrl);
-		const useExplicitEndpoint = shouldUseExplicitBedrockEndpoint(
-			model.baseUrl,
-			configuredRegion,
-			hasConfiguredProfile,
-		);
-
-		// Only pin standard AWS Bedrock runtime endpoints when no region/profile is configured.
-		// This preserves custom endpoints (VPC/proxy) from #3402 without forcing built-in
-		// catalog defaults such as us-east-1 to override AWS_REGION/AWS_PROFILE.
-		if (useExplicitEndpoint) {
-			config.endpoint = model.baseUrl;
-		}
-
-		// Resolve bearer token for Bedrock API key auth.
-		const bearerToken = options.bearerToken || process.env.AWS_BEARER_TOKEN_BEDROCK || undefined;
-		const useBearerToken = bearerToken !== undefined && process.env.AWS_BEDROCK_SKIP_AUTH !== "1";
-
-		// in Node.js/Bun environment only
-		if (typeof process !== "undefined" && (process.versions?.node || process.versions?.bun)) {
-			// Region resolution: ARN-embedded > explicit option > env vars > SDK default chain.
-			// When the model ID is an inference profile ARN, extract the region from it.
-			// This avoids conflicts with AWS_REGION set for other services.
-			const arnRegionMatch = model.id.match(/^arn:aws(?:-[a-z0-9-]+)?:bedrock:([a-z0-9-]+):/);
-			if (arnRegionMatch) {
-				config.region = arnRegionMatch[1];
-			} else if (configuredRegion) {
-				config.region = configuredRegion;
-			} else if (endpointRegion && useExplicitEndpoint) {
-				config.region = endpointRegion;
-			} else if (!hasConfiguredProfile) {
-				config.region = "us-east-1";
-			}
-
-			// Support proxies that don't need authentication
-			if (process.env.AWS_BEDROCK_SKIP_AUTH === "1") {
-				config.credentials = {
-					accessKeyId: "dummy-access-key",
-					secretAccessKey: "dummy-secret-key",
-				};
-			}
-
-			const proxyAgents = createHttpProxyAgentsForTarget(model.baseUrl);
-			if (proxyAgents) {
-				// Bedrock runtime uses NodeHttp2Handler by default since v3.798.0, which is based
-				// on `http2` module and has no support for http agent.
-				// Use NodeHttpHandler to support HTTP(S) proxy agents.
-				config.requestHandler = new NodeHttpHandler(proxyAgents);
-			} else if (process.env.AWS_BEDROCK_FORCE_HTTP1 === "1") {
-				// Some custom endpoints require HTTP/1.1 instead of HTTP/2
-				config.requestHandler = new NodeHttpHandler();
-			}
-		} else {
-			// Non-Node environment (browser): fall back to us-east-1 since
-			// there's no config file resolution available.
-			config.region =
-				configuredRegion || (endpointRegion && useExplicitEndpoint ? endpointRegion : undefined) || "us-east-1";
-		}
-
-		if (useBearerToken) {
-			config.token = { token: bearerToken };
-			config.authSchemePreference = ["httpBearerAuth"];
-		}
-
 		try {
-			const client = new BedrockRuntimeClient(config);
+			const client = createBedrockRuntimeClient(model, options);
 			if (options.headers && Object.keys(options.headers).length > 0) {
 				addCustomHeadersMiddleware(client, options.headers);
 			}
@@ -961,49 +889,6 @@ function mapStopReason(reason: string | undefined): StopReason {
 		default:
 			return "error";
 	}
-}
-
-function getConfiguredBedrockRegion(options: BedrockOptions): string | undefined {
-	if (typeof process === "undefined") {
-		return options.region;
-	}
-
-	return options.region || process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || undefined;
-}
-
-function hasConfiguredBedrockProfile(): boolean {
-	if (typeof process === "undefined") {
-		return false;
-	}
-
-	return Boolean(process.env.AWS_PROFILE);
-}
-
-function getStandardBedrockEndpointRegion(baseUrl: string | undefined): string | undefined {
-	if (!baseUrl) {
-		return undefined;
-	}
-
-	try {
-		const { hostname } = new URL(baseUrl);
-		const match = hostname.toLowerCase().match(/^bedrock-runtime(?:-fips)?\.([a-z0-9-]+)\.amazonaws\.com(?:\.cn)?$/);
-		return match?.[1];
-	} catch {
-		return undefined;
-	}
-}
-
-function shouldUseExplicitBedrockEndpoint(
-	baseUrl: string,
-	configuredRegion: string | undefined,
-	hasConfiguredProfile: boolean,
-): boolean {
-	const endpointRegion = getStandardBedrockEndpointRegion(baseUrl);
-	if (!endpointRegion) {
-		return true;
-	}
-
-	return !configuredRegion && !hasConfiguredProfile;
 }
 
 function isGovCloudBedrockTarget(model: Model<"bedrock-converse-stream">, options: BedrockOptions): boolean {
