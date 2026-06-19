@@ -73,7 +73,7 @@ import type {
 	ProjectTrustContext,
 } from "../../core/extensions/index.ts";
 import { FooterDataProvider, type ReadonlyFooterDataProvider } from "../../core/footer-data-provider.ts";
-import { configureHttpDispatcher, formatHttpIdleTimeoutMs } from "../../core/http-dispatcher.ts";
+import { configureHttpDispatcher } from "../../core/http-dispatcher.ts";
 import { type AppKeybinding, KeybindingsManager } from "../../core/keybindings.ts";
 import { createCompactionSummaryMessage } from "../../core/messages.ts";
 import { defaultModelPerProvider, findExactModelReferenceMatch, resolveModelScope } from "../../core/model-resolver.ts";
@@ -125,11 +125,15 @@ import { TreeSelectorComponent } from "./components/tree-selector.ts";
 import { TrustSelectorComponent } from "./components/trust-selector.ts";
 import { UserMessageComponent } from "./components/user-message.ts";
 import { UserMessageSelectorComponent } from "./components/user-message-selector.ts";
+import { buildInteractiveBuiltinSlashActions } from "./interactive-builtin-slash-actions.ts";
 import { showLoadedResourcesInChat } from "./interactive-loaded-resources.ts";
 import {
+	buildScopeGroups,
 	formatContextPath,
+	formatDiagnostics,
 	formatDisplayPath,
 	formatExtensionDisplayPath,
+	formatScopeGroups,
 	getCompactDisplayPathSegments,
 	getCompactExtensionLabel,
 	getCompactExtensionLabels,
@@ -140,16 +144,12 @@ import {
 	getShortPath,
 	isPackageSource,
 	resolveLocalSourceInfo,
-	buildScopeGroups,
-	formatScopeGroups,
-	formatDiagnostics,
 } from "./interactive-resource-display.ts";
-import { buildInteractiveBuiltinSlashActions } from "./interactive-builtin-slash-actions.ts";
+import { buildSettingsSelectorCallbacks, buildSettingsSelectorConfig } from "./interactive-settings-selector.ts";
 import { matchBuiltinSlashCommand, runSlashCommandAction } from "./interactive-slash-dispatch.ts";
 import { resolveTreeNavigationSummary } from "./interactive-tree-navigation.ts";
 import {
 	detectTerminalBackgroundTheme,
-	getAvailableThemes,
 	getAvailableThemesWithPaths,
 	getEditorTheme,
 	getMarkdownTheme,
@@ -2133,51 +2133,79 @@ export class InteractiveMode {
 			return;
 		}
 
-		// Handle bash command (! for normal, !! for excluded from context)
-		if (text.startsWith("!")) {
-			const isExcluded = text.startsWith("!!");
-			const command = isExcluded ? text.slice(2).trim() : text.slice(1).trim();
-			if (command) {
-				if (this.session.isBashRunning) {
-					this.showWarning("A bash command is already running. Press Esc to cancel it first.");
-					this.editor.setText(text);
-					return;
-				}
-				this.editor.addToHistory?.(text);
-				await this.handleBashCommand(command, isExcluded);
-				this.isBashMode = false;
-				this.updateEditorBorderColor();
-				return;
-			}
-		}
-
-		// Queue input during compaction (extension commands execute immediately)
-		if (this.session.isCompacting) {
-			if (this.isExtensionCommand(text)) {
-				this.editor.addToHistory?.(text);
-				this.editor.setText("");
-				await this.session.prompt(text);
-			} else {
-				this.queueCompactionMessage(text, "steer");
-			}
+		if (text.startsWith("!") && (await this.trySubmitBashCommand(text))) {
 			return;
 		}
 
-		// If streaming, use prompt() with steer behavior
-		// This handles extension commands (execute immediately), prompt template expansion, and queueing
+		if (this.session.isCompacting) {
+			await this.submitDuringCompaction(text);
+			return;
+		}
+
 		if (this.session.isStreaming) {
+			await this.submitWhileStreaming(text);
+			return;
+		}
+
+		this.submitNormalPrompt(text);
+	}
+
+	/**
+	 * Handle the `!`/`!!` bash-command path of editor submission.
+	 * Returns true when the input was a bash command and was dispatched
+	 * (or refused because another bash is already running).
+	 */
+	private async trySubmitBashCommand(text: string): Promise<boolean> {
+		const isExcluded = text.startsWith("!!");
+		const command = isExcluded ? text.slice(2).trim() : text.slice(1).trim();
+		if (!command) {
+			return false;
+		}
+		if (this.session.isBashRunning) {
+			this.showWarning("A bash command is already running. Press Esc to cancel it first.");
+			this.editor.setText(text);
+			return true;
+		}
+		this.editor.addToHistory?.(text);
+		await this.handleBashCommand(command, isExcluded);
+		this.isBashMode = false;
+		this.updateEditorBorderColor();
+		return true;
+	}
+
+	/**
+	 * Queue or execute the input while the agent is compacting.
+	 * Extension commands run immediately; everything else is queued.
+	 */
+	private async submitDuringCompaction(text: string): Promise<void> {
+		if (this.isExtensionCommand(text)) {
 			this.editor.addToHistory?.(text);
 			this.editor.setText("");
-			await this.session.prompt(text, { streamingBehavior: "steer" });
-			this.updatePendingMessagesDisplay();
-			this.ui.requestRender();
+			await this.session.prompt(text);
 			return;
 		}
+		this.queueCompactionMessage(text, "steer");
+	}
 
-		// Normal message submission
-		// First, move any pending bash components to chat
+	/**
+	 * Submit a prompt while the agent is streaming.
+	 * This handles extension commands (immediate), prompt template expansion, and queueing
+	 * via prompt() with the steer behavior.
+	 */
+	private async submitWhileStreaming(text: string): Promise<void> {
+		this.editor.addToHistory?.(text);
+		this.editor.setText("");
+		await this.session.prompt(text, { streamingBehavior: "steer" });
+		this.updatePendingMessagesDisplay();
+		this.ui.requestRender();
+	}
+
+	/**
+	 * Submit a normal (idle) prompt. Flushes any pending bash components first,
+	 * then either invokes the input callback or queues the input for the run loop.
+	 */
+	private submitNormalPrompt(text: string): void {
 		this.flushPendingBashComponents();
-
 		if (this.onInputCallback) {
 			this.onInputCallback(text);
 		} else {
@@ -2326,9 +2354,7 @@ export class InteractiveMode {
 		this.ui.requestRender();
 	}
 
-	private onAgentEventToolExecutionStart(
-		event: Extract<AgentSessionEvent, { type: "tool_execution_start" }>,
-	): void {
+	private onAgentEventToolExecutionStart(event: Extract<AgentSessionEvent, { type: "tool_execution_start" }>): void {
 		let component = this.pendingTools.get(event.toolCallId);
 		if (!component) {
 			component = this.createToolExecutionComponent(event.toolName, event.toolCallId, event.args);
@@ -3441,167 +3467,55 @@ export class InteractiveMode {
 
 	private showSettingsSelector(): void {
 		this.showSelector((done) => {
+			const deps = this.buildSettingsSelectorDeps(done);
 			const selector = new SettingsSelectorComponent(
-				{
-					autoCompact: this.session.autoCompactionEnabled,
-					showImages: this.settingsManager.getShowImages(),
-					imageWidthCells: this.settingsManager.getImageWidthCells(),
-					autoResizeImages: this.settingsManager.getImageAutoResize(),
-					blockImages: this.settingsManager.getBlockImages(),
-					enableSkillCommands: this.settingsManager.getEnableSkillCommands(),
-					steeringMode: this.session.steeringMode,
-					followUpMode: this.session.followUpMode,
-					transport: this.settingsManager.getTransport(),
-					httpIdleTimeoutMs: this.settingsManager.getHttpIdleTimeoutMs(),
-					thinkingLevel: this.session.thinkingLevel,
-					availableThinkingLevels: this.session.getAvailableThinkingLevels(),
-					currentTheme: this.settingsManager.getTheme() || "dark",
-					availableThemes: getAvailableThemes(),
-					hideThinkingBlock: this.hideThinkingBlock,
-					collapseChangelog: this.settingsManager.getCollapseChangelog(),
-					enableInstallTelemetry: this.settingsManager.getEnableInstallTelemetry(),
-					doubleEscapeAction: this.settingsManager.getDoubleEscapeAction(),
-					treeFilterMode: this.settingsManager.getTreeFilterMode(),
-					showHardwareCursor: this.settingsManager.getShowHardwareCursor(),
-					defaultProjectTrust: this.settingsManager.getDefaultProjectTrust(),
-					editorPaddingX: this.settingsManager.getEditorPaddingX(),
-					autocompleteMaxVisible: this.settingsManager.getAutocompleteMaxVisible(),
-					quietStartup: this.settingsManager.getQuietStartup(),
-					clearOnShrink: this.settingsManager.getClearOnShrink(),
-					showTerminalProgress: this.settingsManager.getShowTerminalProgress(),
-					warnings: this.settingsManager.getWarnings(),
-				},
-				{
-					onAutoCompactChange: (enabled) => {
-						this.session.setAutoCompactionEnabled(enabled);
-						this.footer.setAutoCompactEnabled(enabled);
-					},
-					onShowImagesChange: (enabled) => {
-						this.settingsManager.setShowImages(enabled);
-						for (const child of this.chatContainer.children) {
-							if (child instanceof ToolExecutionComponent) {
-								child.setShowImages(enabled);
-							}
-						}
-					},
-					onImageWidthCellsChange: (width) => {
-						this.settingsManager.setImageWidthCells(width);
-						for (const child of this.chatContainer.children) {
-							if (child instanceof ToolExecutionComponent) {
-								child.setImageWidthCells(width);
-							}
-						}
-					},
-					onAutoResizeImagesChange: (enabled) => {
-						this.settingsManager.setImageAutoResize(enabled);
-					},
-					onBlockImagesChange: (blocked) => {
-						this.settingsManager.setBlockImages(blocked);
-					},
-					onEnableSkillCommandsChange: (enabled) => {
-						this.settingsManager.setEnableSkillCommands(enabled);
-						this.setupAutocompleteProvider();
-					},
-					onSteeringModeChange: (mode) => {
-						this.session.setSteeringMode(mode);
-					},
-					onFollowUpModeChange: (mode) => {
-						this.session.setFollowUpMode(mode);
-					},
-					onTransportChange: (transport) => {
-						this.settingsManager.setTransport(transport);
-						this.session.agent.transport = transport;
-					},
-					onHttpIdleTimeoutMsChange: (timeoutMs) => {
-						this.settingsManager.setHttpIdleTimeoutMs(timeoutMs);
-						configureHttpDispatcher(timeoutMs);
-						this.showStatus(`HTTP idle timeout: ${formatHttpIdleTimeoutMs(timeoutMs)}`);
-					},
-					onThinkingLevelChange: (level) => {
-						this.session.setThinkingLevel(level);
-						this.footer.invalidate();
-						this.updateEditorBorderColor();
-					},
-					onThemeChange: (themeName) => {
-						const result = setTheme(themeName, true);
-						this.settingsManager.setTheme(themeName);
-						this.ui.invalidate();
-						if (!result.success) {
-							this.showError(`Failed to load theme "${themeName}": ${result.error}\nFell back to dark theme.`);
-						}
-					},
-					onThemePreview: (themeName) => {
-						const result = setTheme(themeName, true);
-						if (result.success) {
-							this.ui.invalidate();
-							this.ui.requestRender();
-						}
-					},
-					onHideThinkingBlockChange: (hidden) => {
-						this.hideThinkingBlock = hidden;
-						this.settingsManager.setHideThinkingBlock(hidden);
-						for (const child of this.chatContainer.children) {
-							if (child instanceof AssistantMessageComponent) {
-								child.setHideThinkingBlock(hidden);
-							}
-						}
-						this.chatContainer.clear();
-						this.rebuildChatFromMessages();
-					},
-					onCollapseChangelogChange: (collapsed) => {
-						this.settingsManager.setCollapseChangelog(collapsed);
-					},
-					onEnableInstallTelemetryChange: (enabled) => {
-						this.settingsManager.setEnableInstallTelemetry(enabled);
-					},
-					onQuietStartupChange: (enabled) => {
-						this.settingsManager.setQuietStartup(enabled);
-					},
-					onDefaultProjectTrustChange: (defaultProjectTrust) => {
-						this.settingsManager.setDefaultProjectTrust(defaultProjectTrust);
-					},
-					onDoubleEscapeActionChange: (action) => {
-						this.settingsManager.setDoubleEscapeAction(action);
-					},
-					onTreeFilterModeChange: (mode) => {
-						this.settingsManager.setTreeFilterMode(mode);
-					},
-					onShowHardwareCursorChange: (enabled) => {
-						this.settingsManager.setShowHardwareCursor(enabled);
-						this.ui.setShowHardwareCursor(enabled);
-					},
-					onEditorPaddingXChange: (padding) => {
-						this.settingsManager.setEditorPaddingX(padding);
-						this.defaultEditor.setPaddingX(padding);
-						if (this.editor !== this.defaultEditor && this.editor.setPaddingX !== undefined) {
-							this.editor.setPaddingX(padding);
-						}
-					},
-					onAutocompleteMaxVisibleChange: (maxVisible) => {
-						this.settingsManager.setAutocompleteMaxVisible(maxVisible);
-						this.defaultEditor.setAutocompleteMaxVisible(maxVisible);
-						if (this.editor !== this.defaultEditor && this.editor.setAutocompleteMaxVisible !== undefined) {
-							this.editor.setAutocompleteMaxVisible(maxVisible);
-						}
-					},
-					onClearOnShrinkChange: (enabled) => {
-						this.settingsManager.setClearOnShrink(enabled);
-						this.ui.setClearOnShrink(enabled);
-					},
-					onShowTerminalProgressChange: (enabled) => {
-						this.settingsManager.setShowTerminalProgress(enabled);
-					},
-					onWarningsChange: (warnings) => {
-						this.settingsManager.setWarnings(warnings);
-					},
-					onCancel: () => {
-						done();
-						this.ui.requestRender();
-					},
-				},
+				buildSettingsSelectorConfig(deps),
+				buildSettingsSelectorCallbacks(deps),
 			);
 			return { component: selector, focus: selector.getSettingsList() };
 		});
+	}
+
+	/**
+	 * Build the shared deps object used by the settings selector config/callbacks.
+	 * Extracted to keep showSettingsSelector focused on wiring the selector.
+	 */
+	private buildSettingsSelectorDeps(done: () => void) {
+		return {
+			session: this.session,
+			settingsManager: this.settingsManager,
+			chatContainer: this.chatContainer,
+			defaultEditor: this.defaultEditor,
+			editor: this.editor,
+			ui: this.ui,
+			footer: this.footer,
+			hideThinkingBlock: this.hideThinkingBlock,
+			setupAutocompleteProvider: () => this.setupAutocompleteProvider(),
+			showError: (message: string) => this.showError(message),
+			showStatus: (message: string) => this.showStatus(message),
+			updateEditorBorderColor: () => this.updateEditorBorderColor(),
+			onHideThinkingBlockChange: (hidden: boolean) => this.applyHideThinkingBlockChange(hidden),
+			onCancel: () => {
+				done();
+				this.ui.requestRender();
+			},
+		};
+	}
+
+	/**
+	 * Apply a change to the "hide thinking block" setting, propagate it to existing
+	 * chat components, and rebuild the chat from session messages.
+	 */
+	private applyHideThinkingBlockChange(hidden: boolean): void {
+		this.hideThinkingBlock = hidden;
+		this.settingsManager.setHideThinkingBlock(hidden);
+		for (const child of this.chatContainer.children) {
+			if (child instanceof AssistantMessageComponent) {
+				child.setHideThinkingBlock(hidden);
+			}
+		}
+		this.chatContainer.clear();
+		this.rebuildChatFromMessages();
 	}
 
 	private async handleModelCommand(searchTerm?: string): Promise<void> {
@@ -3941,8 +3855,7 @@ export class InteractiveMode {
 								"Summarize",
 								"Summarize with custom prompt",
 							]),
-						showCustomInstructionsEditor: () =>
-							this.showExtensionEditor("Custom summarization instructions"),
+						showCustomInstructionsEditor: () => this.showExtensionEditor("Custom summarization instructions"),
 						onReturnToTree: (id) => this.showTreeSelector(id),
 					});
 					if (summary.cancelledToTree) {
