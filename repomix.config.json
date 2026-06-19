@@ -1,10 +1,10 @@
 {
   "$schema": "https://repomix.com/schemas/repomix-schema.json",
   "output": {
-    "filePath": "docs/repomix-senior-review.md",
-    "style": "markdown",
-    "parsableStyle": true,
-    "headerText": "Paw monorepo — single-file pack for senior review. Generated with repomix. Secrets redacted by repomix security check.",
+    "filePath": "repomix-output.xml",
+    "style": "xml",
+    "parsableStyle": false,
+    "headerText": "Paw monorepo — single-file pack. Generated with repomix. Secrets redacted by repomix security check.",
     "fileSummary": true,
     "directoryStructure": true,
     "removeComments": false,
@@ -33,7 +33,7 @@
       "**/*.min.js",
       "packages/ai/src/models.generated.ts",
       "packages/ai/src/image-models.generated.ts",
-      "docs/repomix-senior-review.md"
+      "repomix-output.xml"
     ]
   },
   "security": {

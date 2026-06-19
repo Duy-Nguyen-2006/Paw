@@ -1,10 +1,10 @@
 {
   "$schema": "https://repomix.com/schemas/repomix-schema.json",
   "output": {
-    "filePath": "docs/repomix-senior-review-paw-core.md",
-    "style": "markdown",
-    "parsableStyle": true,
-    "headerText": "Paw core only (runtime, spec, stories, Paw tests) — senior review pack. Full monorepo: docs/repomix-senior-review.md",
+    "filePath": "repomix-output-paw-core.xml",
+    "style": "xml",
+    "parsableStyle": false,
+    "headerText": "Paw core only (runtime, spec, stories, Paw tests). Full monorepo: repomix-output.xml",
     "fileSummary": true,
     "directoryStructure": true,
     "topFilesLength": 15
@@ -31,8 +31,8 @@
       "**/dist/**",
       "harness.db",
       ".scannerwork/**",
-      "docs/repomix-senior-review.md",
-      "docs/repomix-senior-review-paw-core.md"
+      "repomix-output.xml",
+      "repomix-output-paw-core.xml"
     ]
   },
   "security": {
