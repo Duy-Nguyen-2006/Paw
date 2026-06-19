@@ -106,6 +106,18 @@ const CRASH_RESUME_SEQUENCE: readonly PawSessionStateName[] = [
 	"FINAL_REPORT",
 ];
 
+function formatSecretRedactionCheckDetail(
+	description: string,
+	expected: boolean,
+	detected: boolean,
+	decision: string,
+): string {
+	if (expected && detected) return `${description} redacted as expected`;
+	if (expected && !detected) return `${description} was NOT redacted (${decision})`;
+	if (!expected && detected) return `${description} was redacted (false positive)`;
+	return `${description} left untouched as expected`;
+}
+
 const SECRET_FIXTURES: readonly {
 	pattern: PawRedactionPattern;
 	value: string;
@@ -233,32 +245,48 @@ export async function runPawDrillCommand(args: string[]): Promise<void> {
 
 function formatPawDrillResult(result: PawDrillResult): string {
 	const lines = [`Paw drill ${result.name}`, `status: ${result.status}`];
-	if (result.name === "crash-resume") {
-		lines.push(`checks: ${result.checks.length}`);
-		for (const check of result.checks) {
-			lines.push(`  ${check.passed ? "ok" : "FAIL"} ${check.state}: ${check.detail}`);
-		}
-	} else if (result.name === "secret-redaction") {
-		lines.push(`checks: ${result.checks.length}`);
-		for (const check of result.checks) {
-			lines.push(`  ${check.blocked ? "ok" : "FAIL"} ${check.pattern}: ${check.detail}`);
-		}
-	} else if (result.name === "provider-failover") {
-		lines.push(`drill: ${result.drill.status}`);
-		lines.push(`evidence: ${result.drill.evidence}`);
-	} else if (result.name === "patch-robustness") {
-		lines.push(`checks: ${result.checks.length}`);
-		for (const check of result.checks) {
-			lines.push(`  ${check.passed ? "ok" : "FAIL"} ${check.scenario}: ${check.detail}`);
-		}
-	} else {
-		lines.push(`checks: ${result.checks.length}`);
-		for (const check of result.checks) {
-			lines.push(`  ${check.passed ? "ok" : "FAIL"} ${check.scenario}: ${check.detail}`);
-		}
-	}
+	lines.push(...formatPawDrillResultBody(result));
 	lines.push(`evidence: ${result.evidence}`);
 	return lines.join("\n");
+}
+
+function formatPawDrillResultBody(result: PawDrillResult): string[] {
+	switch (result.name) {
+		case "crash-resume":
+			return formatCrashResumeDrillLines(result.checks);
+		case "secret-redaction":
+			return formatSecretRedactionDrillLines(result.checks);
+		case "provider-failover":
+			return [`drill: ${result.drill.status}`, `evidence: ${result.drill.evidence}`];
+		case "patch-robustness":
+			return formatScenarioDrillLines(result.checks);
+		case "reviewer-diff":
+			return formatScenarioDrillLines(result.checks);
+	}
+}
+
+function formatCrashResumeDrillLines(checks: readonly PawCrashResumeCheck[]): string[] {
+	const lines = [`checks: ${checks.length}`];
+	for (const check of checks) {
+		lines.push(`  ${check.passed ? "ok" : "FAIL"} ${check.state}: ${check.detail}`);
+	}
+	return lines;
+}
+
+function formatSecretRedactionDrillLines(checks: readonly PawSecretRedactionCheck[]): string[] {
+	const lines = [`checks: ${checks.length}`];
+	for (const check of checks) {
+		lines.push(`  ${check.blocked ? "ok" : "FAIL"} ${check.pattern}: ${check.detail}`);
+	}
+	return lines;
+}
+
+function formatScenarioDrillLines(checks: readonly { scenario: string; passed: boolean; detail: string }[]): string[] {
+	const lines = [`checks: ${checks.length}`];
+	for (const check of checks) {
+		lines.push(`  ${check.passed ? "ok" : "FAIL"} ${check.scenario}: ${check.detail}`);
+	}
+	return lines;
 }
 
 async function runDrill(args: PawDrillParsedArgs, input: PawDrillCommandInput): Promise<PawDrillResult> {
@@ -448,13 +476,7 @@ export async function runPawSecretRedactionDrill(
 			pattern: fixture.pattern,
 			blocked: detected,
 			detected,
-			detail: fixture.expected
-				? detected
-					? `${fixture.description} redacted as expected`
-					: `${fixture.description} was NOT redacted (${decision.decision})`
-				: detected
-					? `${fixture.description} was redacted (false positive)`
-					: `${fixture.description} left untouched as expected`,
+			detail: formatSecretRedactionCheckDetail(fixture.description, fixture.expected, detected, decision.decision),
 		});
 	}
 	const failed: PawSecretRedactionCheck[] = [];

@@ -141,30 +141,9 @@ export function assertValidPawSessionState(state: PawSessionState): PawValidatio
 		});
 	}
 
-	for (const sliceId of state.pending_slice_ids) {
-		if (state.completed_slice_ids.includes(sliceId)) {
-			issues.push({
-				path: "/pending_slice_ids",
-				message: `Slice ${sliceId} cannot be both pending and completed.`,
-			});
-		}
-	}
+	validatePawSliceListOverlap(issues, state);
 
-	if (isPawBlockedState(state.name)) {
-		if (state.blocked_reason === null) {
-			issues.push({
-				path: "/blocked_reason",
-				message: "Blocked states require blocked_reason metadata.",
-			});
-		} else {
-			validateBlockedReason(issues, state.name, state.blocked_reason);
-		}
-	} else if (state.blocked_reason !== null) {
-		issues.push({
-			path: "/blocked_reason",
-			message: "Unblocked states must not carry blocked_reason metadata.",
-		});
-	}
+	validatePawBlockedReasonField(issues, state.name, state.blocked_reason);
 
 	if (issues.length > 0) {
 		return { ok: false, issues };
@@ -428,6 +407,41 @@ function validateBlockedReason(
 
 function blockedStateCode(state: PawBlockedStateName): PawBlockedReasonCode {
 	return state.slice("BLOCKED_".length) as PawBlockedReasonCode;
+}
+
+function validatePawSliceListOverlap(issues: PawValidationIssue[], state: PawSessionState): void {
+	for (const sliceId of state.pending_slice_ids) {
+		if (state.completed_slice_ids.includes(sliceId)) {
+			issues.push({
+				path: "/pending_slice_ids",
+				message: `Slice ${sliceId} cannot be both pending and completed.`,
+			});
+		}
+	}
+}
+
+function validatePawBlockedReasonField(
+	issues: PawValidationIssue[],
+	name: PawSessionStateName,
+	blockedReason: PawSessionState["blocked_reason"],
+): void {
+	if (isPawBlockedState(name)) {
+		if (blockedReason === null) {
+			issues.push({
+				path: "/blocked_reason",
+				message: "Blocked states require blocked_reason metadata.",
+			});
+			return;
+		}
+		validateBlockedReason(issues, name, blockedReason);
+		return;
+	}
+	if (blockedReason !== null) {
+		issues.push({
+			path: "/blocked_reason",
+			message: "Unblocked states must not carry blocked_reason metadata.",
+		});
+	}
 }
 
 function addDuplicateIssues(issues: PawValidationIssue[], path: string, values: readonly string[]): void {

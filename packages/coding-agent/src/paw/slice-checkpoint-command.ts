@@ -124,7 +124,17 @@ export function parsePawPrepareCheckpointArgs(args: string[]): PawPrepareCheckpo
 		return sessionIdResult;
 	}
 
-	const state: PawPrepareCheckpointArgParseState = {
+	const state = createEmptyPawPrepareCheckpointArgParseState();
+	const optionParseResult = parsePawPrepareCheckpointOptionArgs(args, 1, state);
+	if (optionParseResult.kind === "error") {
+		return optionParseResult;
+	}
+
+	return finalizePawPrepareCheckpointParsedArgs(sessionIdResult.sessionId, state);
+}
+
+function createEmptyPawPrepareCheckpointArgParseState(): PawPrepareCheckpointArgParseState {
+	return {
 		baseTree: undefined,
 		shortId: undefined,
 		timestamp: undefined,
@@ -132,8 +142,14 @@ export function parsePawPrepareCheckpointArgs(args: string[]): PawPrepareCheckpo
 		changedFiles: [],
 		seenScalarOptions: new Set<string>(),
 	};
+}
 
-	for (let index = 1; index < args.length; ) {
+function parsePawPrepareCheckpointOptionArgs(
+	args: string[],
+	startIndex: number,
+	state: PawPrepareCheckpointArgParseState,
+): { kind: "ok" } | PawPrepareCheckpointParsedArgs {
+	for (let index = startIndex; index < args.length; ) {
 		const arg = args[index];
 		const nextIndex = parsePawPrepareCheckpointRemainingArg(arg, args, index, state);
 		if (typeof nextIndex !== "number") {
@@ -141,8 +157,7 @@ export function parsePawPrepareCheckpointArgs(args: string[]): PawPrepareCheckpo
 		}
 		index = nextIndex;
 	}
-
-	return finalizePawPrepareCheckpointParsedArgs(sessionIdResult.sessionId, state);
+	return { kind: "ok" };
 }
 
 export async function createPawPrepareCheckpointCommandResult(
@@ -454,26 +469,12 @@ function finalizePawPrepareCheckpointParsedArgs(
 	sessionId: string,
 	state: PawPrepareCheckpointArgParseState,
 ): PawPrepareCheckpointParsedArgs {
-	if (state.baseTree === undefined) {
-		return {
-			kind: "error",
-			message: `Missing required option for "${PREPARE_CHECKPOINT_COMMAND_LABEL}": --base-tree`,
-		};
-	}
-	if (state.shortId === undefined) {
-		return {
-			kind: "error",
-			message: `Missing required option for "${PREPARE_CHECKPOINT_COMMAND_LABEL}": --short-id`,
-		};
-	}
-	if (state.timestamp === undefined) {
-		return {
-			kind: "error",
-			message: `Missing required option for "${PREPARE_CHECKPOINT_COMMAND_LABEL}": --timestamp`,
-		};
+	const requiredError = validatePawPrepareCheckpointRequiredOptions(state);
+	if (requiredError !== undefined) {
+		return { kind: "error", message: requiredError };
 	}
 
-	const timestampError = validatePawPrepareCheckpointTimestamp(state.timestamp);
+	const timestampError = validatePawPrepareCheckpointTimestamp(state.timestamp as string);
 	if (timestampError !== undefined) {
 		return { kind: "error", message: timestampError };
 	}
@@ -484,17 +485,36 @@ function finalizePawPrepareCheckpointParsedArgs(
 		};
 	}
 
+	return { kind: "ok", sessionId, input: buildPawPrepareCheckpointParsedInput(state) };
+}
+
+function validatePawPrepareCheckpointRequiredOptions(state: PawPrepareCheckpointArgParseState): string | undefined {
+	const requiredScalars: Array<{ value: string | undefined; option: string }> = [
+		{ value: state.baseTree, option: "--base-tree" },
+		{ value: state.shortId, option: "--short-id" },
+		{ value: state.timestamp, option: "--timestamp" },
+	];
+	for (const { value, option } of requiredScalars) {
+		if (value === undefined) {
+			return `Missing required option for "${PREPARE_CHECKPOINT_COMMAND_LABEL}": ${option}`;
+		}
+	}
+	return undefined;
+}
+
+function buildPawPrepareCheckpointParsedInput(
+	state: PawPrepareCheckpointArgParseState,
+): PawPrepareCheckpointParsedInput {
 	const input: PawPrepareCheckpointParsedInput = {
-		baseTree: state.baseTree,
-		shortId: state.shortId,
-		timestamp: state.timestamp,
+		baseTree: state.baseTree as string,
+		shortId: state.shortId as string,
+		timestamp: state.timestamp as string,
 		changedFiles: state.changedFiles,
 	};
 	if (state.notes !== undefined) {
 		input.notes = state.notes;
 	}
-
-	return { kind: "ok", sessionId, input };
+	return input;
 }
 
 function validatePawPrepareCheckpointTimestamp(timestamp: string): string | undefined {

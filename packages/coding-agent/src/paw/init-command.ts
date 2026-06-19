@@ -197,96 +197,52 @@ async function handlePawClean(rest: string[]): Promise<void> {
 
 type PawSubcommandHandler = (rest: string[]) => Promise<void>;
 
-const PAW_SUBCOMMAND_HANDLERS: Record<string, PawSubcommandHandler> = {
-	init: handlePawInit,
-	doctor: handlePawDoctor,
-	"eval-live": async (rest) => {
-		await runPawEvalLiveCommand(rest);
-	},
-	drill: async (rest) => {
-		await runPawDrillCommand(rest);
-	},
-	diff: async (rest) => {
-		await runPawDiffCommand(rest);
-	},
-	plan: async (rest) => {
-		await runPawPlanCommand(rest);
-	},
-	timeline: async (rest) => {
-		await runPawTimelineCommand(rest);
-	},
-	cost: async (rest) => {
-		await runPawCostCommand(rest);
-	},
-	explain: async (rest) => {
-		await runPawExplainCommand(rest);
-	},
-	chat: async (rest) => {
-		await runPawChatCommand(rest);
-	},
-	approve: async (rest) => {
-		await runPawApproveRetryCommand(["approve", ...rest]);
-	},
-	reject: async (rest) => {
-		await runPawApproveRetryCommand(["reject", ...rest]);
-	},
-	retry: async (rest) => {
-		await runPawApproveRetryCommand(["retry", ...rest]);
-	},
-	status: handlePawStatus,
-	report: async (rest) => {
-		await runPawReportCommand(rest);
-	},
-	start: async (rest) => {
-		await runPawStartCommand(rest);
-	},
-	resume: async (rest) => {
-		await runPawResumeCommand(rest);
-	},
-	verify: async (rest) => {
-		await runPawVerifyCommand(rest);
-	},
-	build: async (rest) => {
-		await runPawBuildCommand(rest);
-	},
-	"approve-plan": async (rest) => {
-		await runPawApprovePlanCommand(rest);
-	},
-	"select-slice": async (rest) => {
-		await runPawSelectSliceCommand(rest);
-	},
-	"begin-implementation": async (rest) => {
-		await runPawBeginImplementationCommand(rest);
-	},
-	"complete-worker": async (rest) => {
-		await runPawCompleteWorkerCommand(rest);
-	},
-	"block-worker": async (rest) => {
-		await runPawBlockWorkerCommand(rest);
-	},
-	"block-reviewer": async (rest) => {
-		await runPawBlockReviewerCommand(rest);
-	},
-	"complete-reviewer": async (rest) => {
-		await runPawCompleteReviewerCommand(rest);
-	},
-	"block-verifier": async (rest) => {
-		await runPawBlockVerifierCommand(rest);
-	},
-	"complete-verification": async (rest) => {
-		await runPawCompleteVerificationCommand(rest);
-	},
-	"prepare-checkpoint": async (rest) => {
-		await runPawPrepareCheckpointCommand(rest);
-	},
-	rollback: async (rest) => {
-		await runPawRollbackCommand(rest);
-	},
-	finalize: async (rest) => {
-		await runPawFinalizeCommand(rest);
-	},
-	clean: handlePawClean,
-};
+function pawDelegate(run: (rest: string[]) => Promise<void>): PawSubcommandHandler {
+	return (rest) => run(rest);
+}
+
+function pawApproveRetryDelegate(action: "approve" | "reject" | "retry"): PawSubcommandHandler {
+	return (rest) => runPawApproveRetryCommand([action, ...rest]);
+}
+
+function createPawSubcommandHandlers(): Record<string, PawSubcommandHandler> {
+	return {
+		init: handlePawInit,
+		doctor: handlePawDoctor,
+		"eval-live": pawDelegate(runPawEvalLiveCommand),
+		drill: pawDelegate(runPawDrillCommand),
+		diff: pawDelegate(runPawDiffCommand),
+		plan: pawDelegate(runPawPlanCommand),
+		timeline: pawDelegate(runPawTimelineCommand),
+		cost: pawDelegate(runPawCostCommand),
+		explain: pawDelegate(runPawExplainCommand),
+		chat: pawDelegate(runPawChatCommand),
+		approve: pawApproveRetryDelegate("approve"),
+		reject: pawApproveRetryDelegate("reject"),
+		retry: pawApproveRetryDelegate("retry"),
+		status: handlePawStatus,
+		report: pawDelegate(runPawReportCommand),
+		start: pawDelegate(runPawStartCommand),
+		resume: pawDelegate(runPawResumeCommand),
+		verify: pawDelegate(runPawVerifyCommand),
+		build: pawDelegate(runPawBuildCommand),
+		"approve-plan": pawDelegate(runPawApprovePlanCommand),
+		"select-slice": pawDelegate(runPawSelectSliceCommand),
+		"begin-implementation": pawDelegate(runPawBeginImplementationCommand),
+		"complete-worker": pawDelegate(runPawCompleteWorkerCommand),
+		"block-worker": pawDelegate(runPawBlockWorkerCommand),
+		"block-reviewer": pawDelegate(runPawBlockReviewerCommand),
+		"complete-reviewer": pawDelegate(runPawCompleteReviewerCommand),
+		"block-verifier": pawDelegate(runPawBlockVerifierCommand),
+		"complete-verification": pawDelegate(runPawCompleteVerificationCommand),
+		"prepare-checkpoint": pawDelegate(runPawPrepareCheckpointCommand),
+		rollback: pawDelegate(runPawRollbackCommand),
+		finalize: pawDelegate(runPawFinalizeCommand),
+		clean: handlePawClean,
+	};
+}
+
+const PAW_SUBCOMMAND_HANDLERS = createPawSubcommandHandlers();
 
 export async function handlePawCommand(args: string[]): Promise<boolean> {
 	if (args[0] !== "paw") {

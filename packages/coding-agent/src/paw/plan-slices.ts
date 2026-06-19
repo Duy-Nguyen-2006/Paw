@@ -39,60 +39,9 @@ export function createPawPlanSliceQueue(input: unknown): PawValidationResult<Paw
 	const seenOrders = new Set<number>();
 
 	for (const [index, item] of input.entries()) {
-		if (typeof item !== "object" || item === null || Array.isArray(item)) {
-			issues.push({ path: `/${index}`, message: "Planner slice must be an object." });
-			continue;
-		}
-
-		for (const property of Object.keys(item)) {
-			if (!ALLOWED_SLICE_PROPERTIES.has(property)) {
-				issues.push({ path: `/${index}/${property}`, message: `Unexpected planner slice property ${property}.` });
-			}
-		}
-
-		const sliceId = validateRequiredString(issues, item, "slice_id", `/${index}/slice_id`, "Slice id is required.");
-		const title = validateRequiredString(issues, item, "title", `/${index}/title`, "Slice title is required.");
-		const order = validateOrder(issues, item, index);
-		const targetFiles = validateTargetFiles(issues, item, index);
-		const maxRiskLevel = validateMaxRiskLevel(issues, item, index);
-		const acceptance = validateAcceptance(issues, item, index);
-
-		if (sliceId !== undefined) {
-			if (seenSliceIds.has(sliceId)) {
-				issues.push({ path: `/${index}/slice_id`, message: `Duplicate slice id ${sliceId}.` });
-			}
-			seenSliceIds.add(sliceId);
-		}
-		if (order !== undefined) {
-			if (seenOrders.has(order)) {
-				issues.push({ path: `/${index}/order`, message: `Duplicate slice order ${order}.` });
-			}
-			seenOrders.add(order);
-		}
-
-		if (
-			sliceId !== undefined &&
-			title !== undefined &&
-			order !== undefined &&
-			targetFiles.valid &&
-			maxRiskLevel.valid &&
-			acceptance.valid
-		) {
-			const slice: PawPlannerSlice = {
-				slice_id: sliceId,
-				title,
-				order,
-			};
-			if (targetFiles.value !== undefined) {
-				slice.target_files = targetFiles.value;
-			}
-			if (maxRiskLevel.value !== undefined) {
-				slice.max_risk_level = maxRiskLevel.value;
-			}
-			if (acceptance.value !== undefined) {
-				slice.acceptance = acceptance.value;
-			}
-			slices.push(slice);
+		const parsedSlice = parsePawPlannerSliceEntry(item, index, issues, seenSliceIds, seenOrders);
+		if (parsedSlice !== undefined) {
+			slices.push(parsedSlice);
 		}
 	}
 
@@ -108,6 +57,103 @@ export function createPawPlanSliceQueue(input: unknown): PawValidationResult<Paw
 			slice_ids: sortedSlices.map((slice) => slice.slice_id),
 		},
 	};
+}
+
+function parsePawPlannerSliceEntry(
+	item: unknown,
+	index: number,
+	issues: PawValidationIssue[],
+	seenSliceIds: Set<string>,
+	seenOrders: Set<number>,
+): PawPlannerSlice | undefined {
+	if (typeof item !== "object" || item === null || Array.isArray(item)) {
+		issues.push({ path: `/${index}`, message: "Planner slice must be an object." });
+		return undefined;
+	}
+
+	const record = item as Record<string, unknown>;
+	validatePawPlannerSliceAllowedProperties(record, index, issues);
+
+	const sliceId = validateRequiredString(issues, record, "slice_id", `/${index}/slice_id`, "Slice id is required.");
+	const title = validateRequiredString(issues, record, "title", `/${index}/title`, "Slice title is required.");
+	const order = validateOrder(issues, record, index);
+	const targetFiles = validateTargetFiles(issues, record, index);
+	const maxRiskLevel = validateMaxRiskLevel(issues, record, index);
+	const acceptance = validateAcceptance(issues, record, index);
+
+	recordPawPlannerSliceDuplicateIds(sliceId, order, index, issues, seenSliceIds, seenOrders);
+
+	if (
+		sliceId === undefined ||
+		title === undefined ||
+		order === undefined ||
+		!targetFiles.valid ||
+		!maxRiskLevel.valid ||
+		!acceptance.valid
+	) {
+		return undefined;
+	}
+
+	return buildPawPlannerSlice(sliceId, title, order, targetFiles, maxRiskLevel, acceptance);
+}
+
+function validatePawPlannerSliceAllowedProperties(
+	record: Record<string, unknown>,
+	index: number,
+	issues: PawValidationIssue[],
+): void {
+	for (const property of Object.keys(record)) {
+		if (!ALLOWED_SLICE_PROPERTIES.has(property)) {
+			issues.push({ path: `/${index}/${property}`, message: `Unexpected planner slice property ${property}.` });
+		}
+	}
+}
+
+function recordPawPlannerSliceDuplicateIds(
+	sliceId: string | undefined,
+	order: number | undefined,
+	index: number,
+	issues: PawValidationIssue[],
+	seenSliceIds: Set<string>,
+	seenOrders: Set<number>,
+): void {
+	if (sliceId !== undefined) {
+		if (seenSliceIds.has(sliceId)) {
+			issues.push({ path: `/${index}/slice_id`, message: `Duplicate slice id ${sliceId}.` });
+		}
+		seenSliceIds.add(sliceId);
+	}
+	if (order !== undefined) {
+		if (seenOrders.has(order)) {
+			issues.push({ path: `/${index}/order`, message: `Duplicate slice order ${order}.` });
+		}
+		seenOrders.add(order);
+	}
+}
+
+function buildPawPlannerSlice(
+	sliceId: string,
+	title: string,
+	order: number,
+	targetFiles: { valid: true; value?: string[] },
+	maxRiskLevel: { valid: true; value?: PawRiskLevel },
+	acceptance: { valid: true; value?: string },
+): PawPlannerSlice {
+	const slice: PawPlannerSlice = {
+		slice_id: sliceId,
+		title,
+		order,
+	};
+	if (targetFiles.value !== undefined) {
+		slice.target_files = targetFiles.value;
+	}
+	if (maxRiskLevel.value !== undefined) {
+		slice.max_risk_level = maxRiskLevel.value;
+	}
+	if (acceptance.value !== undefined) {
+		slice.acceptance = acceptance.value;
+	}
+	return slice;
 }
 
 function validateRequiredString(

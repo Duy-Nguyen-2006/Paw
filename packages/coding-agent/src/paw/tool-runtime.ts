@@ -280,51 +280,94 @@ function evaluatePawToolRuntimePreflight(
 	input: PawToolRuntimeInput,
 	authorization: PawToolExecutionAuthorization | undefined,
 ): PawToolRuntimePreflightDecision {
-	const validationIssues = validatePawToolRuntimeRequest(input.request);
-	if (validationIssues.length > 0) {
-		return {
-			status: "deny",
-			decision: {
-				status: "invalid",
-				code: "INVALID_TOOL_REQUEST",
-				executed: false,
-				filesChanged: false,
-				message: "Paw tool runtime request is invalid.",
-				issues: validationIssues,
-			},
-		};
+	const invalidDecision = evaluatePawToolRuntimeInvalidRequestDecision(input.request);
+	if (invalidDecision !== undefined) {
+		return invalidDecision;
 	}
 
+	const secretDecision = evaluatePawToolRuntimeSecretPathDecision(input);
+	if (secretDecision !== undefined) {
+		return secretDecision;
+	}
+
+	const sourceDecision = evaluatePawToolRuntimeUntrustedSourceDecision(input);
+	if (sourceDecision !== undefined) {
+		return sourceDecision;
+	}
+
+	const approvalDecision = evaluatePawToolRuntimeApprovalDecision(input, authorization);
+	if (approvalDecision !== undefined) {
+		return approvalDecision;
+	}
+
+	return evaluatePawToolRuntimeSandboxOrDryRunAllow(input);
+}
+
+function evaluatePawToolRuntimeInvalidRequestDecision(
+	request: PawToolRuntimeRequest,
+): PawToolRuntimePreflightDecision | undefined {
+	const validationIssues = validatePawToolRuntimeRequest(request);
+	if (validationIssues.length === 0) {
+		return undefined;
+	}
+	return {
+		status: "deny",
+		decision: {
+			status: "invalid",
+			code: "INVALID_TOOL_REQUEST",
+			executed: false,
+			filesChanged: false,
+			message: "Paw tool runtime request is invalid.",
+			issues: validationIssues,
+		},
+	};
+}
+
+function evaluatePawToolRuntimeSecretPathDecision(
+	input: PawToolRuntimeInput,
+): PawToolRuntimePreflightDecision | undefined {
 	const secretPath = input.request.paths?.find((path) => isPawSecretPath(path, input.config.secrets));
-	if (secretPath !== undefined) {
-		return {
-			status: "deny",
-			decision: blocked(
-				input.request,
-				"SECRET_PATH",
-				`Paw tool request touches secret path ${secretPath}.`,
-				"Use a non-secret path or provide a redacted artifact reference.",
-				[{ path: "/paths", message: `Secret path is excluded from Paw tool runtime: ${secretPath}.` }],
-			),
-		};
+	if (secretPath === undefined) {
+		return undefined;
 	}
+	return {
+		status: "deny",
+		decision: blocked(
+			input.request,
+			"SECRET_PATH",
+			`Paw tool request touches secret path ${secretPath}.`,
+			"Use a non-secret path or provide a redacted artifact reference.",
+			[{ path: "/paths", message: `Secret path is excluded from Paw tool runtime: ${secretPath}.` }],
+		),
+	};
+}
 
-	if (input.request.source !== undefined) {
-		const sourceDecision = evaluatePawUntrustedSource(input.request.source, input.config.injection);
-		if (sourceDecision.status === "read_only_summary" && input.request.readOnly !== true) {
-			return {
-				status: "deny",
-				decision: blocked(
-					input.request,
-					"UNTRUSTED_SOURCE",
-					`Paw tool request from untrusted source ${input.request.source} cannot perform write-capable work.`,
-					"Convert untrusted content into a read-only structured summary before requesting tools.",
-					[{ path: "/source", message: sourceDecision.handling }],
-				),
-			};
-		}
+function evaluatePawToolRuntimeUntrustedSourceDecision(
+	input: PawToolRuntimeInput,
+): PawToolRuntimePreflightDecision | undefined {
+	if (input.request.source === undefined) {
+		return undefined;
 	}
+	const sourceDecision = evaluatePawUntrustedSource(input.request.source, input.config.injection);
+	if (sourceDecision.status !== "read_only_summary" || input.request.readOnly === true) {
+		return undefined;
+	}
+	return {
+		status: "deny",
+		decision: blocked(
+			input.request,
+			"UNTRUSTED_SOURCE",
+			`Paw tool request from untrusted source ${input.request.source} cannot perform write-capable work.`,
+			"Convert untrusted content into a read-only structured summary before requesting tools.",
+			[{ path: "/source", message: sourceDecision.handling }],
+		),
+	};
+}
 
+function evaluatePawToolRuntimeApprovalDecision(
+	input: PawToolRuntimeInput,
+	authorization: PawToolExecutionAuthorization | undefined,
+): PawToolRuntimePreflightDecision | undefined {
 	const approval = evaluatePawToolApproval({
 		riskLevel: input.request.riskLevel,
 		runMode: input.request.runMode,
@@ -348,34 +391,40 @@ function evaluatePawToolRuntimePreflight(
 			]),
 		};
 	}
+	return undefined;
+}
 
+function evaluatePawToolRuntimeSandboxOrDryRunAllow(input: PawToolRuntimeInput): PawToolRuntimePreflightDecision {
 	if (input.request.readOnly !== true) {
-		const sandbox = evaluatePawSandbox({
-			config: input.config.sandbox,
-			availablePrimitives: input.request.sandbox?.availablePrimitives ?? [],
-			riskLevel: input.request.riskLevel,
-			unsafeOverride: input.request.sandbox?.unsafeOverride,
-		});
-		if (sandbox.status !== "allow") {
-			return {
-				status: "deny",
-				decision: blocked(input.request, sandbox.code, sandbox.message, sandbox.suggestedAction, [
-					{ path: "/sandbox", message: sandbox.message },
-				]),
-			};
-		}
-		return {
-			status: "allow",
-			message: sandbox.message,
-			...("selectedPrimitive" in sandbox ? { sandboxPrimitive: sandbox.selectedPrimitive } : {}),
-			degraded: sandbox.degraded,
-		};
+		return evaluatePawToolRuntimeMutatingSandboxAllow(input);
 	}
-
 	return {
 		status: "allow",
 		message: "Paw tool request is allowed for dry-run inspection only.",
 		degraded: false,
+	};
+}
+
+function evaluatePawToolRuntimeMutatingSandboxAllow(input: PawToolRuntimeInput): PawToolRuntimePreflightDecision {
+	const sandbox = evaluatePawSandbox({
+		config: input.config.sandbox,
+		availablePrimitives: input.request.sandbox?.availablePrimitives ?? [],
+		riskLevel: input.request.riskLevel,
+		unsafeOverride: input.request.sandbox?.unsafeOverride,
+	});
+	if (sandbox.status !== "allow") {
+		return {
+			status: "deny",
+			decision: blocked(input.request, sandbox.code, sandbox.message, sandbox.suggestedAction, [
+				{ path: "/sandbox", message: sandbox.message },
+			]),
+		};
+	}
+	return {
+		status: "allow",
+		message: sandbox.message,
+		...("selectedPrimitive" in sandbox ? { sandboxPrimitive: sandbox.selectedPrimitive } : {}),
+		degraded: sandbox.degraded,
 	};
 }
 

@@ -66,48 +66,75 @@ export async function scanPawRepoForSecrets(
 	while (queue.length > 0 && scannedFiles < maxFiles) {
 		const current = queue.shift();
 		if (current === undefined) break;
-		const rel = relative(root, current);
-		if (rel.split(/[/\\]/).some((segment) => SKIP_DIRS.has(segment))) continue;
+		if (pathHasSkippedDirSegment(relative(root, current))) continue;
 
-		let entries: string[];
-		try {
-			entries = await readdirSafe(current);
-		} catch {
-			continue;
-		}
+		const entries = await readdirSafe(current);
 		for (const entry of entries) {
-			const entryPath = join(current, entry);
-			const entryRel = relative(root, entryPath);
-			try {
-				const stat = await statSafe(entryPath);
-				if (!stat) continue;
-				if (stat.isDirectory()) {
-					if (entryRel.split(/[/\\]/).some((segment) => SKIP_DIRS.has(segment))) continue;
-					queue.push(entryPath);
-					continue;
-				}
-				if (!stat.isFile()) continue;
-				if (extname(entry).toLowerCase() === ".lock") continue;
-				if (BINARY_EXTENSIONS.has(extname(entry).toLowerCase())) continue;
-				if (stat.size > maxBytes) continue;
-				const content = await readFile(entryPath, "utf-8").catch(() => "");
-				if (content.length === 0) continue;
+			if (scannedFiles >= maxFiles) break;
+			const scanOutcome = await scanOneSecretEntry({
+				root,
+				current,
+				entry,
+				config,
+				maxBytes,
+			});
+			if (scanOutcome.kind === "enqueue") {
+				queue.push(scanOutcome.path);
+				continue;
+			}
+			if (scanOutcome.kind === "scanned") {
 				scannedFiles += 1;
-				const detected = detectPawSecretPatterns(content, config);
-				for (const pattern of detected) {
-					findings.push({
-						pattern,
-						severity: pattern === "private_keys" ? "block" : "warn",
-						preview: previewSecretMatch(content, pattern),
-						path: entryRel,
-						occurrences: countPawSecretOccurrences(content, pattern),
-					});
-				}
-			} catch {}
+				findings.push(...scanOutcome.findings);
+			}
 		}
 	}
 	const blocked = findings.some((finding) => finding.severity === "block");
 	return { ok: findings.length === 0, blocked, scannedFiles, findings };
+}
+
+function pathHasSkippedDirSegment(relPath: string): boolean {
+	return relPath.split(/[/\\]/).some((segment) => SKIP_DIRS.has(segment));
+}
+
+type SecretEntryScanOutcome =
+	| { kind: "skip" }
+	| { kind: "enqueue"; path: string }
+	| { kind: "scanned"; findings: PawSecretScanFinding[] };
+
+async function scanOneSecretEntry(input: {
+	root: string;
+	current: string;
+	entry: string;
+	config: PawSecretsConfig;
+	maxBytes: number;
+}): Promise<SecretEntryScanOutcome> {
+	const entryPath = join(input.current, input.entry);
+	const entryRel = relative(input.root, entryPath);
+	try {
+		const stat = await statSafe(entryPath);
+		if (!stat) return { kind: "skip" };
+		if (stat.isDirectory()) {
+			if (pathHasSkippedDirSegment(entryRel)) return { kind: "skip" };
+			return { kind: "enqueue", path: entryPath };
+		}
+		if (!stat.isFile()) return { kind: "skip" };
+		const ext = extname(input.entry).toLowerCase();
+		if (ext === ".lock" || BINARY_EXTENSIONS.has(ext)) return { kind: "skip" };
+		if (stat.size > input.maxBytes) return { kind: "skip" };
+		const content = await readFile(entryPath, "utf-8").catch(() => "");
+		if (content.length === 0) return { kind: "skip" };
+		const detected = detectPawSecretPatterns(content, input.config);
+		const findings = detected.map((pattern) => ({
+			pattern,
+			severity: (pattern === "private_keys" ? "block" : "warn") as PawSecretScanSeverity,
+			preview: previewSecretMatch(content, pattern),
+			path: entryRel,
+			occurrences: countPawSecretOccurrences(content, pattern),
+		}));
+		return { kind: "scanned", findings };
+	} catch {
+		return { kind: "skip" };
+	}
 }
 
 async function readdirSafe(path: string): Promise<string[]> {

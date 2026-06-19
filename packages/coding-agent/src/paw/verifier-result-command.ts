@@ -1,9 +1,17 @@
-import { readFile, stat } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { relative } from "node:path";
 import { APP_NAME } from "../config.ts";
+import {
+	type PawCliScalarFieldBinding,
+	pawCliArgsShowHelp,
+	pawCliParseRequiredSessionId,
+	pawCliParseScalarFieldsFromArgs,
+} from "./cli-arg-parsing.ts";
+import { formatPawCliValidationIssues, isPawFileSystemError, pawCliIsDirectory, pawCliIsFile } from "./cli-fs.ts";
 import type { PawValidationIssue } from "./contracts.ts";
+import { mapPawNotLockedCommandFields } from "./lock-result-mapping.ts";
 import { resolvePawProjectPaths } from "./persistence.ts";
-import type { PawVerifyGateDecision, PawVerifyGateSet } from "./resilience-policy.ts";
+import type { PawVerifyGateDecision } from "./resilience-policy.ts";
 import {
 	acquirePawSessionLock,
 	type PawSessionLock,
@@ -14,6 +22,9 @@ import {
 } from "./session-store.ts";
 import type { PawSessionStateName } from "./state.ts";
 import { completePawVerification, type PawVerificationResult } from "./verifier-result.ts";
+import { extractPawVerifyDecisionsFromJson, normalizePawVerifyGateDecisionList } from "./verify-gate-decision-parse.ts";
+
+const COMPLETE_VERIFICATION_COMMAND_LABEL = "paw complete-verification";
 
 export type PawCompleteVerificationCommandResult =
 	| PawCompleteVerificationCommandCompletedResult
@@ -133,10 +144,6 @@ export interface PawCompleteVerificationCommandLockedByOtherResult {
 	lockReleased: boolean;
 }
 
-interface FileSystemError extends Error {
-	code?: string;
-}
-
 export interface PawCompleteVerificationParsedInput {
 	decisionFile: string;
 }
@@ -149,59 +156,43 @@ export type PawCompleteVerificationParsedArgs =
 const COMPLETE_VERIFICATION_SCALAR_OPTIONS = new Set(["--decision-file"]);
 
 export function parsePawCompleteVerificationArgs(args: string[]): PawCompleteVerificationParsedArgs {
-	if (args.includes("--help") || args.includes("-h")) {
+	if (pawCliArgsShowHelp(args)) {
 		return { kind: "help" };
 	}
 
-	if (args.length === 0) {
-		return { kind: "error", message: 'Missing required session id for "paw complete-verification".' };
-	}
-
-	const sessionId = args[0];
-	if (sessionId.startsWith("-")) {
-		return { kind: "error", message: 'Missing required session id for "paw complete-verification".' };
+	const sessionIdResult = pawCliParseRequiredSessionId(args, COMPLETE_VERIFICATION_COMMAND_LABEL);
+	if ("kind" in sessionIdResult) {
+		return sessionIdResult;
 	}
 
 	let decisionFile: string | undefined;
-	const seenScalarOptions = new Set<string>();
-
-	for (let index = 1; index < args.length; ) {
-		const arg = args[index];
-
-		if (COMPLETE_VERIFICATION_SCALAR_OPTIONS.has(arg)) {
-			if (seenScalarOptions.has(arg)) {
-				return { kind: "error", message: `Duplicate option for "paw complete-verification": ${arg}` };
-			}
-			seenScalarOptions.add(arg);
-			if (index + 1 >= args.length) {
-				return { kind: "error", message: `Missing value for "paw complete-verification" option: ${arg}` };
-			}
-			const value = args[index + 1];
-			if (value.trim().length === 0) {
-				return {
-					kind: "error",
-					message: `Option ${arg} for "paw complete-verification" must be a non-empty string.`,
-				};
-			}
-			if (arg === "--decision-file") {
+	const bindings: PawCliScalarFieldBinding[] = [
+		{
+			option: "--decision-file",
+			set: (value) => {
 				decisionFile = value;
-			}
-			index += 2;
-			continue;
-		}
-
-		if (arg.startsWith("-")) {
-			return { kind: "error", message: `Unknown option for "paw complete-verification": ${arg}` };
-		}
-
-		return { kind: "error", message: `Unknown option for "paw complete-verification": ${arg}` };
+			},
+		},
+	];
+	const fields = pawCliParseScalarFieldsFromArgs(
+		COMPLETE_VERIFICATION_COMMAND_LABEL,
+		args,
+		1,
+		COMPLETE_VERIFICATION_SCALAR_OPTIONS,
+		bindings,
+	);
+	if ("kind" in fields) {
+		return fields;
 	}
 
 	if (decisionFile === undefined) {
-		return { kind: "error", message: 'Missing required option for "paw complete-verification": --decision-file' };
+		return {
+			kind: "error",
+			message: `Missing required option for "${COMPLETE_VERIFICATION_COMMAND_LABEL}": --decision-file`,
+		};
 	}
 
-	return { kind: "ok", sessionId, input: { decisionFile } };
+	return { kind: "ok", sessionId: sessionIdResult.sessionId, input: { decisionFile } };
 }
 
 export async function createPawCompleteVerificationCommandResult(
@@ -213,7 +204,7 @@ export async function createPawCompleteVerificationCommandResult(
 	const relativeDecisionFile = relative(repoRoot, input.decisionFile) || input.decisionFile;
 	const projectPaths = resolvePawProjectPaths(repoRoot);
 	const pawDir = relative(projectPaths.repoRoot, projectPaths.pawDir) || ".paw";
-	if (!(await isDirectory(projectPaths.pawDir))) {
+	if (!(await pawCliIsDirectory(projectPaths.pawDir))) {
 		return {
 			status: "missing_project",
 			pawDir,
@@ -222,7 +213,7 @@ export async function createPawCompleteVerificationCommandResult(
 
 	const sessionPaths = resolvePawSessionPaths(repoRoot, sessionId);
 	const relativeStateFile = relative(projectPaths.repoRoot, sessionPaths.stateFile);
-	if (!(await isFile(sessionPaths.stateFile))) {
+	if (!(await pawCliIsFile(sessionPaths.stateFile))) {
 		return {
 			status: "missing_session",
 			sessionId,
@@ -281,7 +272,7 @@ export function formatPawCompleteVerificationCommandResult(result: PawCompleteVe
 				`lock released: ${result.lockReleased ? "yes" : "no"}`,
 			].join("\n");
 		case "invalid_decision_file":
-			return `Cannot complete verification for session ${result.sessionId}: invalid decision file at ${result.decisionFile}: ${formatIssues(result.issues)}`;
+			return `Cannot complete verification for session ${result.sessionId}: invalid decision file at ${result.decisionFile}: ${formatPawCliValidationIssues(result.issues)}`;
 		case "missing_decision_file":
 			return `Cannot complete verification for session ${result.sessionId}: decision file not found at ${result.decisionFile}.`;
 		case "missing_project":
@@ -291,13 +282,13 @@ export function formatPawCompleteVerificationCommandResult(result: PawCompleteVe
 		case "locked":
 			return `Paw session ${result.sessionId} is locked by pid ${result.lock.pid} on ${result.lock.host}.`;
 		case "invalid_state":
-			return `Cannot complete verification for session ${result.sessionId} from ${result.previousStateName}: ${formatIssues(result.issues)}`;
+			return `Cannot complete verification for session ${result.sessionId} from ${result.previousStateName}: ${formatPawCliValidationIssues(result.issues)}`;
 		case "no_selected_slice":
 			return `Cannot complete verification for session ${result.sessionId}: no selected slice in ${result.previousStateName}.`;
 		case "invalid_verify_decisions":
-			return `Cannot complete verification for session ${result.sessionId} from ${result.previousStateName}: ${formatIssues(result.issues)}`;
+			return `Cannot complete verification for session ${result.sessionId} from ${result.previousStateName}: ${formatPawCliValidationIssues(result.issues)}`;
 		case "invalid_transition":
-			return `Cannot complete verification for session ${result.sessionId} from ${result.previousStateName}: ${formatIssues(result.issues)}`;
+			return `Cannot complete verification for session ${result.sessionId} from ${result.previousStateName}: ${formatPawCliValidationIssues(result.issues)}`;
 		case "not_locked":
 			return result.reason === "stale"
 				? `Cannot complete verification for session ${result.sessionId}: session lock is stale (${result.staleReason ?? "unknown"}).`
@@ -393,20 +384,7 @@ function mapPawCompleteVerificationResult(
 				lockReleased,
 			};
 		case "not_locked":
-			return completion.reason === "stale"
-				? {
-						status: "not_locked",
-						sessionId,
-						reason: "stale",
-						staleReason: completion.staleReason,
-						lockReleased,
-					}
-				: {
-						status: "not_locked",
-						sessionId,
-						reason: "unlocked",
-						lockReleased,
-					};
+			return mapPawNotLockedCommandFields(sessionId, completion.reason, lockReleased, completion.staleReason);
 		case "locked_by_other":
 			return {
 				status: "locked_by_other",
@@ -427,7 +405,7 @@ async function readVerificationDecisionFile(decisionFile: string): Promise<Verif
 		const content = await readFile(decisionFile, "utf-8");
 		return parseVerificationDecisionFileContent(content);
 	} catch (error) {
-		if (isFileSystemError(error) && error.code === "ENOENT") {
+		if (isPawFileSystemError(error) && error.code === "ENOENT") {
 			return { kind: "missing" };
 		}
 		throw error;
@@ -445,7 +423,7 @@ function parseVerificationDecisionFileContent(content: string): VerificationDeci
 		};
 	}
 
-	const decisions = extractVerifyDecisions(parsed);
+	const decisions = extractPawVerifyDecisionsFromJson(parsed);
 	if (decisions === undefined) {
 		return {
 			kind: "invalid",
@@ -470,143 +448,12 @@ function parseVerificationDecisionFileContent(content: string): VerificationDeci
 		};
 	}
 
-	const issues: PawValidationIssue[] = [];
-	const normalized: PawVerifyGateDecision[] = [];
-	for (let index = 0; index < decisions.length; index += 1) {
-		const decision = decisions[index];
-		const basePath = `/verify_decisions/${index}`;
-		const normalizedDecision = normalizeVerifyGateDecision(decision, basePath, issues);
-		if (normalizedDecision !== undefined) {
-			normalized.push(normalizedDecision);
-		}
+	const normalizedResult = normalizePawVerifyGateDecisionList(decisions);
+	if (!normalizedResult.ok) {
+		return { kind: "invalid", issues: normalizedResult.issues };
 	}
 
-	if (issues.length > 0) {
-		return { kind: "invalid", issues };
-	}
-
-	return { kind: "ok", value: normalized };
-}
-
-function extractVerifyDecisions(parsed: unknown): unknown[] | undefined {
-	if (Array.isArray(parsed)) {
-		return parsed;
-	}
-	if (typeof parsed === "object" && parsed !== null && "verify_decisions" in parsed) {
-		const verifyDecisions = (parsed as { verify_decisions?: unknown }).verify_decisions;
-		if (Array.isArray(verifyDecisions)) {
-			return verifyDecisions;
-		}
-	}
-	return undefined;
-}
-
-function collectVerifyGateFieldIssues(record: Record<string, unknown>, basePath: string): PawValidationIssue[] {
-	const itemIssues: PawValidationIssue[] = [];
-	if (typeof record.status !== "string") {
-		itemIssues.push({ path: `${basePath}/status`, message: "status must be a string." });
-	}
-	const gate = record.gate;
-	if (typeof gate !== "string" || gate.trim().length === 0) {
-		itemIssues.push({ path: `${basePath}/gate`, message: "gate must be a non-empty string." });
-	}
-	if (!isPawVerifyGateSet(record.gateSet)) {
-		itemIssues.push({ path: `${basePath}/gateSet`, message: 'gateSet must be "v1", "v2", or "unconfigured".' });
-	}
-	if (typeof record.verified !== "boolean") {
-		itemIssues.push({ path: `${basePath}/verified`, message: "verified must be a boolean." });
-	}
-	if (typeof record.applicable !== "boolean") {
-		itemIssues.push({ path: `${basePath}/applicable`, message: "applicable must be a boolean." });
-	}
-	return itemIssues;
-}
-
-function normalizeVerifyGateDecision(
-	decision: unknown,
-	basePath: string,
-	issues: PawValidationIssue[],
-): PawVerifyGateDecision | undefined {
-	if (typeof decision !== "object" || decision === null) {
-		issues.push({ path: basePath, message: "Each verify decision must be an object." });
-		return undefined;
-	}
-
-	const record = decision as Record<string, unknown>;
-	const itemIssues = collectVerifyGateFieldIssues(record, basePath);
-	if (itemIssues.length > 0) {
-		issues.push(...itemIssues);
-		return undefined;
-	}
-
-	const { status, gate, gateSet, verified, applicable, reason } = record;
-	const normalizedStatus = status as string;
-	const normalizedGate = gate as string;
-	const normalizedGateSet = gateSet as PawVerifyGateSet;
-	const normalizedApplicable = applicable as boolean;
-
-	if (normalizedStatus === "verified") {
-		if (verified !== true) {
-			issues.push({ path: `${basePath}/verified`, message: "verified decisions must set verified=true." });
-			return undefined;
-		}
-		return {
-			status: "verified",
-			gate: normalizedGate,
-			verified: true,
-			applicable: normalizedApplicable,
-			gateSet: normalizedGateSet,
-		};
-	}
-
-	if (normalizedStatus === "unverified") {
-		if (verified !== false) {
-			issues.push({ path: `${basePath}/verified`, message: "unverified decisions must set verified=false." });
-			return undefined;
-		}
-		const unverifiedReason = typeof reason === "string" && reason.trim().length > 0 ? reason : "unverified";
-		return {
-			status: "unverified",
-			gate: normalizedGate,
-			verified: false,
-			applicable: normalizedApplicable,
-			gateSet: normalizedGateSet,
-			reason: unverifiedReason,
-		};
-	}
-
-	issues.push({ path: `${basePath}/status`, message: 'status must be "verified" or "unverified".' });
-	return undefined;
-}
-
-function isPawVerifyGateSet(value: unknown): value is PawVerifyGateSet {
-	return value === "v1" || value === "v2" || value === "unconfigured";
-}
-
-async function isDirectory(path: string): Promise<boolean> {
-	try {
-		return (await stat(path)).isDirectory();
-	} catch (error) {
-		if (isFileSystemError(error) && error.code === "ENOENT") {
-			return false;
-		}
-		throw error;
-	}
-}
-
-async function isFile(path: string): Promise<boolean> {
-	try {
-		return (await stat(path)).isFile();
-	} catch (error) {
-		if (isFileSystemError(error) && error.code === "ENOENT") {
-			return false;
-		}
-		throw error;
-	}
-}
-
-function formatIssues(issues: readonly PawValidationIssue[]): string {
-	return issues.map((issue) => `${issue.path} ${issue.message}`).join("; ");
+	return { kind: "ok", value: normalizedResult.value };
 }
 
 function printPawCompleteVerificationHelp(): void {
@@ -627,8 +474,4 @@ Commands:
 function printPawCompleteVerificationCommandError(message: string): void {
 	console.error(`Error: ${message}`);
 	process.exitCode = 1;
-}
-
-function isFileSystemError(error: unknown): error is FileSystemError {
-	return error instanceof Error;
 }

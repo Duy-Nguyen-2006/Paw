@@ -79,66 +79,117 @@ export function parsePawEvalLiveArgs(args: string[]): PawEvalLiveParsedArgs {
 	if (args.some((arg) => arg === "--help" || arg === "-h")) {
 		return { kind: "help" };
 	}
-	const repos: string[] = [];
-	let workdir: string | undefined;
-	let maxSteps = 6;
-	let handoff: string | undefined;
-	let _matrix: string | undefined;
-	let install = false;
-	let keepWorkdir = false;
-	const seenSingleton = new Set<string>();
+	const state = createEmptyEvalLiveParseState();
 	for (let index = 0; index < args.length; ) {
-		const arg = args[index];
-		if (arg === "--install") {
-			install = true;
-			index += 1;
-			continue;
-		}
-		if (arg === "--keep-workdir") {
-			keepWorkdir = true;
-			index += 1;
-			continue;
-		}
-		if (!EVAL_LIVE_SCALAR_OPTIONS.has(arg)) {
-			return { kind: "error", message: `Unknown option for "paw eval-live": ${arg}` };
-		}
-		if (index + 1 >= args.length) {
-			return { kind: "error", message: `Missing value for "paw eval-live" option: ${arg}` };
-		}
-		const value = args[index + 1];
-		if (value.trim().length === 0) {
-			return { kind: "error", message: `Option ${arg} for "paw eval-live" must be non-empty.` };
-		}
-		if (arg !== "--repo") {
-			if (seenSingleton.has(arg)) {
-				return { kind: "error", message: `Duplicate option for "paw eval-live": ${arg}` };
-			}
-			seenSingleton.add(arg);
-		}
-		if (arg === "--repo") {
-			repos.push(value);
-		} else if (arg === "--workdir") {
-			workdir = value;
-		} else if (arg === "--max-steps") {
-			const parsed = Number.parseInt(value, 10);
-			if (!Number.isInteger(parsed) || parsed <= 0) {
-				return { kind: "error", message: 'Option --max-steps for "paw eval-live" must be a positive integer.' };
-			}
-			maxSteps = parsed;
-		} else if (arg === "--handoff") {
-			handoff = value;
-		} else if (arg === "--matrix") {
-			_matrix = value;
-		}
-		index += 2;
+		const step = consumeEvalLiveArg(args, index, state);
+		if (step.kind === "error") return step;
+		index = step.nextIndex;
 	}
-	if (repos.length === 0) {
+	if (state.repos.length === 0) {
 		return { kind: "error", message: 'Missing required option for "paw eval-live": --repo <url-or-path>' };
 	}
-	const input: PawEvalLiveParsedInput = { repos, install, keepWorkdir, maxSteps };
-	if (workdir !== undefined) input.workdir = workdir;
-	if (handoff !== undefined) input.handoff = handoff;
-	return { kind: "ok", input };
+	return { kind: "ok", input: buildEvalLiveParsedInput(state) };
+}
+
+interface EvalLiveParseState {
+	repos: string[];
+	workdir?: string;
+	maxSteps: number;
+	handoff?: string;
+	install: boolean;
+	keepWorkdir: boolean;
+	seenSingleton: Set<string>;
+}
+
+function createEmptyEvalLiveParseState(): EvalLiveParseState {
+	return {
+		repos: [],
+		maxSteps: 6,
+		install: false,
+		keepWorkdir: false,
+		seenSingleton: new Set<string>(),
+	};
+}
+
+type EvalLiveArgStep = { kind: "ok"; nextIndex: number } | { kind: "error"; message: string };
+
+function consumeEvalLiveArg(args: string[], index: number, state: EvalLiveParseState): EvalLiveArgStep {
+	const arg = args[index];
+	if (arg === "--install") {
+		state.install = true;
+		return { kind: "ok", nextIndex: index + 1 };
+	}
+	if (arg === "--keep-workdir") {
+		state.keepWorkdir = true;
+		return { kind: "ok", nextIndex: index + 1 };
+	}
+	if (!EVAL_LIVE_SCALAR_OPTIONS.has(arg)) {
+		return { kind: "error", message: `Unknown option for "paw eval-live": ${arg}` };
+	}
+	const valueResult = readEvalLiveScalarValue(args, index, arg);
+	if (valueResult.kind === "error") return valueResult;
+	const assignError = assignEvalLiveScalarOption(arg, valueResult.value, state);
+	if (assignError !== null) return { kind: "error", message: assignError };
+	return { kind: "ok", nextIndex: index + 2 };
+}
+
+function readEvalLiveScalarValue(
+	args: string[],
+	index: number,
+	arg: string,
+): { kind: "ok"; value: string } | { kind: "error"; message: string } {
+	if (index + 1 >= args.length) {
+		return { kind: "error", message: `Missing value for "paw eval-live" option: ${arg}` };
+	}
+	const value = args[index + 1];
+	if (value.trim().length === 0) {
+		return { kind: "error", message: `Option ${arg} for "paw eval-live" must be non-empty.` };
+	}
+	return { kind: "ok", value };
+}
+
+function assignEvalLiveScalarOption(arg: string, value: string, state: EvalLiveParseState): string | null {
+	if (arg !== "--repo") {
+		if (state.seenSingleton.has(arg)) {
+			return `Duplicate option for "paw eval-live": ${arg}`;
+		}
+		state.seenSingleton.add(arg);
+	}
+	switch (arg) {
+		case "--repo":
+			state.repos.push(value);
+			return null;
+		case "--workdir":
+			state.workdir = value;
+			return null;
+		case "--max-steps": {
+			const parsed = Number.parseInt(value, 10);
+			if (!Number.isInteger(parsed) || parsed <= 0) {
+				return 'Option --max-steps for "paw eval-live" must be a positive integer.';
+			}
+			state.maxSteps = parsed;
+			return null;
+		}
+		case "--handoff":
+			state.handoff = value;
+			return null;
+		case "--matrix":
+			return null;
+		default:
+			return `Unknown option for "paw eval-live": ${arg}`;
+	}
+}
+
+function buildEvalLiveParsedInput(state: EvalLiveParseState): PawEvalLiveParsedInput {
+	const input: PawEvalLiveParsedInput = {
+		repos: state.repos,
+		install: state.install,
+		keepWorkdir: state.keepWorkdir,
+		maxSteps: state.maxSteps,
+	};
+	if (state.workdir !== undefined) input.workdir = state.workdir;
+	if (state.handoff !== undefined) input.handoff = state.handoff;
+	return input;
 }
 
 export async function createPawEvalLiveCommandResult(

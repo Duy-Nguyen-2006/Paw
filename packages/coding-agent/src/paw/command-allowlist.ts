@@ -57,26 +57,53 @@ export type PawCommandAllowlistDecision =
 export function evaluatePawCommandAllowlist(input: PawCommandAllowlistInput): PawCommandAllowlistDecision {
 	const command = normalizeCommandName(input.command);
 	for (const entry of input.config.entries) {
-		const entryCommand = entry.command.endsWith("?") ? entry.command.slice(0, -1) : entry.command;
-		if (command !== entryCommand) continue;
-		if (entry.argPattern === null) {
-			return entry.allowed
-				? { allowed: true, matchedEntry: entry, reason: `Matched ${entry.command} allowlist entry` }
-				: {
-						allowed: false,
-						matchedEntry: entry,
-						reason: `Command ${entry.command} is denied (${entry.riskLevel})`,
-					};
-		}
-		const firstArg = input.args[0] ?? "";
-		const regex = new RegExp(entry.argPattern);
-		if (regex.test(firstArg)) {
-			return entry.allowed
-				? { allowed: true, matchedEntry: entry, reason: `Matched ${entry.command} ${entry.argPattern}` }
-				: { allowed: false, matchedEntry: entry, reason: `Command ${entry.command} ${entry.argPattern} is denied` };
+		const decision = matchPawAllowlistEntry(command, input.args, entry);
+		if (decision !== null) {
+			return decision;
 		}
 	}
-	return input.config.blockedByDefault
+	return defaultPawAllowlistDecision(command, input.config.blockedByDefault);
+}
+
+function matchPawAllowlistEntry(
+	command: string,
+	args: readonly string[],
+	entry: PawCommandAllowlistEntry,
+): PawCommandAllowlistDecision | null {
+	const entryCommand = entry.command.endsWith("?") ? entry.command.slice(0, -1) : entry.command;
+	if (command !== entryCommand) {
+		return null;
+	}
+	if (entry.argPattern === null) {
+		return decisionForAllowlistEntry(
+			entry,
+			`Matched ${entry.command} allowlist entry`,
+			`Command ${entry.command} is denied (${entry.riskLevel})`,
+		);
+	}
+	const firstArg = args[0] ?? "";
+	if (!new RegExp(entry.argPattern).test(firstArg)) {
+		return null;
+	}
+	return decisionForAllowlistEntry(
+		entry,
+		`Matched ${entry.command} ${entry.argPattern}`,
+		`Command ${entry.command} ${entry.argPattern} is denied`,
+	);
+}
+
+function decisionForAllowlistEntry(
+	entry: PawCommandAllowlistEntry,
+	allowReason: string,
+	denyReason: string,
+): PawCommandAllowlistDecision {
+	return entry.allowed
+		? { allowed: true, matchedEntry: entry, reason: allowReason }
+		: { allowed: false, matchedEntry: entry, reason: denyReason };
+}
+
+function defaultPawAllowlistDecision(command: string, blockedByDefault: boolean): PawCommandAllowlistDecision {
+	return blockedByDefault
 		? { allowed: false, matchedEntry: null, reason: `Command ${command} is not in the allowlist` }
 		: {
 				allowed: true,

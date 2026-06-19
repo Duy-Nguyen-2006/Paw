@@ -132,25 +132,36 @@ export function parsePawBuildArgs(args: string[]): PawBuildParsedArgs {
 		return { kind: "error", message: sessionIdError };
 	}
 
+	const optionParseResult = parsePawBuildOptionArgs(args, 1);
+	if (optionParseResult.kind === "error") {
+		return optionParseResult;
+	}
+
+	const validationError = validatePawBuildParsedState(optionParseResult.state);
+	if (validationError !== undefined) {
+		return { kind: "error", message: validationError };
+	}
+
+	return { kind: "ok", sessionId: args[0], input: createPawBuildParsedInput(optionParseResult.state) };
+}
+
+function parsePawBuildOptionArgs(
+	args: string[],
+	startIndex: number,
+): { kind: "ok"; state: PawBuildParseState } | { kind: "error"; message: string } {
 	const state: PawBuildParseState = {
 		once: false,
 		native: false,
 		seenScalarOptions: new Set<string>(),
 	};
-	for (let index = 1; index < args.length; ) {
+	for (let index = startIndex; index < args.length; ) {
 		const parsedOption = parsePawBuildOption(args, index, state);
 		if (parsedOption.status === "error") {
 			return { kind: "error", message: parsedOption.message };
 		}
 		index = parsedOption.nextIndex;
 	}
-
-	const validationError = validatePawBuildParsedState(state);
-	if (validationError !== undefined) {
-		return { kind: "error", message: validationError };
-	}
-
-	return { kind: "ok", sessionId: args[0], input: createPawBuildParsedInput(state) };
+	return { kind: "ok", state };
 }
 
 export async function createPawBuildCommandResult(
@@ -175,33 +186,73 @@ async function createPawBuildStepResult(
 	const config = commandInput.config ?? loadDefaultPawRuntimeConfig(repoRoot);
 	const executor = resolvePawBuildSubAgentExecutor(commandInput, config);
 	const state = await readPawSessionStateIfExists(repoRoot, sessionId);
+	return dispatchPawBuildStepByState(repoRoot, sessionId, state, input, commandInput, config, executor);
+}
+
+async function dispatchPawBuildStepByState(
+	repoRoot: string,
+	sessionId: string,
+	state: { name: PawSessionStateName } | null,
+	input: Extract<PawBuildParsedInput, { once: true }>,
+	commandInput: PawBuildCommandInput,
+	config: PawRuntimeConfig,
+	executor: PawSubAgentRuntimeExecutor,
+): Promise<PawBuildStepResult> {
 	if (stateNameCanSelectSlice(state)) {
 		return createPawSelectSliceCommandResult(repoRoot, sessionId, { lockOptions: commandInput.lockOptions });
 	}
-
 	if (stateNameCanBeginImplementation(state)) {
 		return createPawBeginImplementationCommandResult(repoRoot, sessionId, { lockOptions: commandInput.lockOptions });
 	}
-
 	if (stateNameIsReviewing(state)) {
-		return runPawReviewerOnce({
-			repoRoot,
-			sessionId,
-			config,
-			executor,
-			handoff: input.handoff,
-			lockOptions: commandInput.lockOptions,
-			sandboxPreflight: commandInput.sandboxPreflight,
-		});
+		return runPawBuildReviewerStep(repoRoot, sessionId, input, commandInput, config, executor);
 	}
-
 	if (stateNameIsVerifying(state)) {
-		return createPawVerifyCommandResult(repoRoot, sessionId, {
-			lockOptions: commandInput.lockOptions,
-			nativeVerificationExecutor: resolvePawBuildNativeVerificationExecutor(repoRoot, config, input, commandInput),
-		});
+		return runPawBuildVerifyStep(repoRoot, sessionId, input, commandInput, config);
 	}
+	return runPawBuildWorkerStep(repoRoot, sessionId, input, commandInput, config, executor);
+}
 
+function runPawBuildReviewerStep(
+	repoRoot: string,
+	sessionId: string,
+	input: Extract<PawBuildParsedInput, { once: true }>,
+	commandInput: PawBuildCommandInput,
+	config: PawRuntimeConfig,
+	executor: PawSubAgentRuntimeExecutor,
+): Promise<PawReviewerOnceResult> {
+	return runPawReviewerOnce({
+		repoRoot,
+		sessionId,
+		config,
+		executor,
+		handoff: input.handoff,
+		lockOptions: commandInput.lockOptions,
+		sandboxPreflight: commandInput.sandboxPreflight,
+	});
+}
+
+function runPawBuildVerifyStep(
+	repoRoot: string,
+	sessionId: string,
+	input: Extract<PawBuildParsedInput, { once: true }>,
+	commandInput: PawBuildCommandInput,
+	config: PawRuntimeConfig,
+): Promise<PawVerifyCommandResult> {
+	return createPawVerifyCommandResult(repoRoot, sessionId, {
+		lockOptions: commandInput.lockOptions,
+		nativeVerificationExecutor: resolvePawBuildNativeVerificationExecutor(repoRoot, config, input, commandInput),
+	});
+}
+
+function runPawBuildWorkerStep(
+	repoRoot: string,
+	sessionId: string,
+	input: Extract<PawBuildParsedInput, { once: true }>,
+	commandInput: PawBuildCommandInput,
+	config: PawRuntimeConfig,
+	executor: PawSubAgentRuntimeExecutor,
+): Promise<PawWorkerOnceResult> {
 	return runPawWorkerOnce({
 		repoRoot,
 		sessionId,
@@ -377,47 +428,46 @@ function formatPawBuildVerifyCompletedResult(
 	].join("\n");
 }
 
-function formatPawBuildStepResult(
-	result: Exclude<
-		PawBuildCommandResult,
-		PawBuildLoopResult | Extract<PawVerifyCommandResult, { status: "completed" | "completed_with_unverified" }>
-	>,
-): string {
-	switch (result.status) {
-		case "advanced":
-			return formatPawBuildAdvancedResult(result);
-		case "no_pending_slices":
-			return formatPawBuildNoPendingSlicesResult(result);
-		case "completed":
-			return formatPawBuildWorkerCompletedResult(result);
-		case "blocked":
-			return formatPawBuildBlockedResult(result);
-		case "worker_failed":
-			return `Cannot build session ${result.sessionId}: worker output status is ${result.workerStatus}, expected pass, blocked, or needs_user_decision.`;
-		case "reviewer_failed":
-			return `Cannot build session ${result.sessionId}: reviewer output status is ${result.reviewerStatus}, expected pass, blocked, or needs_user_decision.`;
-		case "invalid_state":
-			return `Cannot build session ${result.sessionId} from ${result.previousStateName}: ${formatIssues(result.issues)}`;
-		case "no_selected_slice":
-			return formatPawBuildNoSelectedSliceResult(result);
-		case "invalid_transition":
-			return `Cannot build session ${result.sessionId} from ${result.previousStateName}: ${formatIssues(result.issues)}`;
-		case "missing_project":
-			return `Paw is not initialized at ${result.pawDir}. Run \`${APP_NAME} paw init\`.`;
-		case "missing_session":
-			return `No Paw session state found for ${result.sessionId} at ${result.stateFile}.`;
-		case "locked":
-			return `Paw session ${result.sessionId} is locked by pid ${result.lock.pid} on ${result.lock.host}.`;
-		case "not_locked":
-			return formatPawBuildNotLockedResult(result);
-		case "locked_by_other":
-			return `Cannot build session ${result.sessionId}: locked by pid ${result.lock.pid} on ${result.lock.host}.`;
-		case "invalid_worker_output":
-		case "invalid_reviewer_output":
-		case "invalid_verification":
-		case "invalid_blocked_reason":
-			return `Cannot build session ${result.sessionId}: ${formatIssues(result.issues)}`;
-	}
+type PawBuildStepFormatInput = Exclude<
+	PawBuildCommandResult,
+	PawBuildLoopResult | Extract<PawVerifyCommandResult, { status: "completed" | "completed_with_unverified" }>
+>;
+
+function formatPawBuildStepResult(result: PawBuildStepFormatInput): string {
+	const formatter = PAW_BUILD_STEP_FORMATTERS[result.status];
+	return formatter(result as never);
+}
+
+const PAW_BUILD_STEP_FORMATTERS: {
+	[K in PawBuildStepFormatInput["status"]]: (result: Extract<PawBuildStepFormatInput, { status: K }>) => string;
+} = {
+	advanced: formatPawBuildAdvancedResult,
+	no_pending_slices: formatPawBuildNoPendingSlicesResult,
+	completed: formatPawBuildWorkerCompletedResult,
+	blocked: formatPawBuildBlockedResult,
+	worker_failed: (result) =>
+		`Cannot build session ${result.sessionId}: worker output status is ${result.workerStatus}, expected pass, blocked, or needs_user_decision.`,
+	reviewer_failed: (result) =>
+		`Cannot build session ${result.sessionId}: reviewer output status is ${result.reviewerStatus}, expected pass, blocked, or needs_user_decision.`,
+	invalid_state: (result) =>
+		`Cannot build session ${result.sessionId} from ${result.previousStateName}: ${formatIssues(result.issues)}`,
+	no_selected_slice: formatPawBuildNoSelectedSliceResult,
+	invalid_transition: (result) =>
+		`Cannot build session ${result.sessionId} from ${result.previousStateName}: ${formatIssues(result.issues)}`,
+	missing_project: (result) => `Paw is not initialized at ${result.pawDir}. Run \`${APP_NAME} paw init\`.`,
+	missing_session: (result) => `No Paw session state found for ${result.sessionId} at ${result.stateFile}.`,
+	locked: (result) => `Paw session ${result.sessionId} is locked by pid ${result.lock.pid} on ${result.lock.host}.`,
+	not_locked: formatPawBuildNotLockedResult,
+	locked_by_other: (result) =>
+		`Cannot build session ${result.sessionId}: locked by pid ${result.lock.pid} on ${result.lock.host}.`,
+	invalid_worker_output: formatPawBuildIssuesOnlyResult,
+	invalid_reviewer_output: formatPawBuildIssuesOnlyResult,
+	invalid_verification: formatPawBuildIssuesOnlyResult,
+	invalid_blocked_reason: formatPawBuildIssuesOnlyResult,
+};
+
+function formatPawBuildIssuesOnlyResult(result: { sessionId: string; issues: readonly PawValidationIssue[] }): string {
+	return `Cannot build session ${result.sessionId}: ${formatIssues(result.issues)}`;
 }
 
 function formatPawBuildAdvancedResult(result: Extract<PawBuildStepResult, { status: "advanced" }>): string {

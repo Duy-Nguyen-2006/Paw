@@ -1,8 +1,10 @@
-import { stat } from "node:fs/promises";
 import { relative } from "node:path";
 import { APP_NAME } from "../config.ts";
+import { pawCliArgsShowHelp, pawCliParseRequiredSessionId, pawCliReadScalarOptionValue } from "./cli-arg-parsing.ts";
+import { formatPawCliValidationIssues, pawCliIsDirectory, pawCliIsFile } from "./cli-fs.ts";
 import type { PawValidationIssue } from "./contracts.ts";
 import { emitPawFinalReport, type PawFinalReportEmissionResult } from "./final-report-emission.ts";
+import { mapPawNotLockedCommandFields } from "./lock-result-mapping.ts";
 import { resolvePawProjectPaths } from "./persistence.ts";
 import {
 	acquirePawSessionLock,
@@ -100,9 +102,7 @@ export interface PawFinalizeCommandInvalidTransitionResult {
 	lockReleased: boolean;
 }
 
-interface FileSystemError extends Error {
-	code?: string;
-}
+const FINALIZE_COMMAND_LABEL = "paw finalize";
 
 export type PawFinalizeParsedArgs =
 	| { kind: "help" }
@@ -110,62 +110,53 @@ export type PawFinalizeParsedArgs =
 	| { kind: "ok"; sessionId: string; summary: string; evidence: string[] };
 
 export function parsePawFinalizeArgs(args: string[]): PawFinalizeParsedArgs {
-	if (args.includes("--help") || args.includes("-h")) {
+	if (pawCliArgsShowHelp(args)) {
 		return { kind: "help" };
 	}
 
-	if (args.length === 0) {
-		return { kind: "error", message: 'Missing required session id for "paw finalize".' };
-	}
-
-	const sessionId = args[0];
-	if (sessionId.startsWith("-")) {
-		return { kind: "error", message: 'Missing required session id for "paw finalize".' };
+	const sessionIdResult = pawCliParseRequiredSessionId(args, FINALIZE_COMMAND_LABEL);
+	if ("kind" in sessionIdResult) {
+		return sessionIdResult;
 	}
 
 	let summary: string | undefined;
 	const evidence: string[] = [];
+	const seenSummary = new Set<string>();
 
 	for (let index = 1; index < args.length; ) {
 		const arg = args[index];
 		if (arg === "--summary") {
-			if (index + 1 >= args.length) {
-				return { kind: "error", message: 'Missing value for "paw finalize" option: --summary' };
+			const scalar = pawCliReadScalarOptionValue(FINALIZE_COMMAND_LABEL, arg, args, index, seenSummary);
+			if ("kind" in scalar) {
+				return scalar;
 			}
-			const value = args[index + 1];
-			if (value.trim().length === 0) {
-				return { kind: "error", message: 'Option --summary for "paw finalize" must be a non-empty string.' };
-			}
-			summary = value;
-			index += 2;
+			summary = scalar.value;
+			index = scalar.nextIndex;
 			continue;
 		}
 
 		if (arg === "--evidence") {
-			if (index + 1 >= args.length) {
-				return { kind: "error", message: 'Missing value for "paw finalize" option: --evidence' };
+			const scalar = pawCliReadScalarOptionValue(FINALIZE_COMMAND_LABEL, arg, args, index, new Set());
+			if ("kind" in scalar) {
+				return scalar;
 			}
-			const value = args[index + 1];
-			if (value.trim().length === 0) {
-				return { kind: "error", message: 'Option --evidence for "paw finalize" must be a non-empty string.' };
-			}
-			evidence.push(value);
-			index += 2;
+			evidence.push(scalar.value);
+			index = scalar.nextIndex;
 			continue;
 		}
 
 		if (arg.startsWith("-")) {
-			return { kind: "error", message: `Unknown option for "paw finalize": ${arg}` };
+			return { kind: "error", message: `Unknown option for "${FINALIZE_COMMAND_LABEL}": ${arg}` };
 		}
 
-		return { kind: "error", message: `Unknown option for "paw finalize": ${arg}` };
+		return { kind: "error", message: `Unknown option for "${FINALIZE_COMMAND_LABEL}": ${arg}` };
 	}
 
 	if (summary === undefined) {
-		return { kind: "error", message: 'Missing required option for "paw finalize": --summary' };
+		return { kind: "error", message: `Missing required option for "${FINALIZE_COMMAND_LABEL}": --summary` };
 	}
 
-	return { kind: "ok", sessionId, summary, evidence };
+	return { kind: "ok", sessionId: sessionIdResult.sessionId, summary, evidence };
 }
 
 export async function createPawFinalizeCommandResult(
@@ -177,7 +168,7 @@ export async function createPawFinalizeCommandResult(
 ): Promise<PawFinalizeCommandResult> {
 	const projectPaths = resolvePawProjectPaths(repoRoot);
 	const pawDir = relative(projectPaths.repoRoot, projectPaths.pawDir) || ".paw";
-	if (!(await isDirectory(projectPaths.pawDir))) {
+	if (!(await pawCliIsDirectory(projectPaths.pawDir))) {
 		return {
 			status: "missing_project",
 			pawDir,
@@ -186,7 +177,7 @@ export async function createPawFinalizeCommandResult(
 
 	const sessionPaths = resolvePawSessionPaths(repoRoot, sessionId);
 	const relativeStateFile = relative(projectPaths.repoRoot, sessionPaths.stateFile);
-	if (!(await isFile(sessionPaths.stateFile))) {
+	if (!(await pawCliIsFile(sessionPaths.stateFile))) {
 		return {
 			status: "missing_session",
 			sessionId,
@@ -243,13 +234,13 @@ export function formatPawFinalizeCommandResult(result: PawFinalizeCommandResult)
 				? `Cannot finalize session ${result.sessionId}: session lock is stale (${result.staleReason ?? "unknown"}).`
 				: `Cannot finalize session ${result.sessionId}: session lock is not held by this process.`;
 		case "invalid_state":
-			return `Cannot finalize session ${result.sessionId} from ${result.previousStateName}: ${formatIssues(result.issues)}`;
+			return `Cannot finalize session ${result.sessionId} from ${result.previousStateName}: ${formatPawCliValidationIssues(result.issues)}`;
 		case "pending_slices":
-			return `Cannot finalize session ${result.sessionId} from ${result.previousStateName}: ${formatIssues(result.issues)}`;
+			return `Cannot finalize session ${result.sessionId} from ${result.previousStateName}: ${formatPawCliValidationIssues(result.issues)}`;
 		case "invalid_report_input":
-			return `Cannot finalize session ${result.sessionId}: ${formatIssues(result.issues)}`;
+			return `Cannot finalize session ${result.sessionId}: ${formatPawCliValidationIssues(result.issues)}`;
 		case "invalid_transition":
-			return `Cannot finalize session ${result.sessionId} from ${result.previousStateName}: ${formatIssues(result.issues)}`;
+			return `Cannot finalize session ${result.sessionId} from ${result.previousStateName}: ${formatPawCliValidationIssues(result.issues)}`;
 	}
 }
 
@@ -298,20 +289,7 @@ function mapPawFinalizeEmissionResult(
 				lockReleased,
 			};
 		case "not_locked":
-			return emission.reason === "stale"
-				? {
-						status: "not_locked",
-						sessionId,
-						reason: "stale",
-						staleReason: emission.staleReason,
-						lockReleased,
-					}
-				: {
-						status: "not_locked",
-						sessionId,
-						reason: "unlocked",
-						lockReleased,
-					};
+			return mapPawNotLockedCommandFields(sessionId, emission.reason, lockReleased, emission.staleReason);
 		case "locked_by_other":
 			return {
 				status: "locked",
@@ -353,32 +331,6 @@ function mapPawFinalizeEmissionResult(
 	}
 }
 
-async function isDirectory(path: string): Promise<boolean> {
-	try {
-		return (await stat(path)).isDirectory();
-	} catch (error) {
-		if (isFileSystemError(error) && error.code === "ENOENT") {
-			return false;
-		}
-		throw error;
-	}
-}
-
-async function isFile(path: string): Promise<boolean> {
-	try {
-		return (await stat(path)).isFile();
-	} catch (error) {
-		if (isFileSystemError(error) && error.code === "ENOENT") {
-			return false;
-		}
-		throw error;
-	}
-}
-
-function formatIssues(issues: readonly PawValidationIssue[]): string {
-	return issues.map((issue) => `${issue.path} ${issue.message}`).join("; ");
-}
-
 function printPawFinalizeHelp(): void {
 	console.log(`Usage:
   ${APP_NAME} paw finalize <session-id> --summary <text> [--evidence <text>]...
@@ -398,8 +350,4 @@ Commands:
 function printPawFinalizeCommandError(message: string): void {
 	console.error(`Error: ${message}`);
 	process.exitCode = 1;
-}
-
-function isFileSystemError(error: unknown): error is FileSystemError {
-	return error instanceof Error;
 }

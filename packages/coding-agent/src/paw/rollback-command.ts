@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { lstat, mkdir, readdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import { basename, dirname, relative, resolve } from "node:path";
 import { APP_NAME } from "../config.ts";
 import {
@@ -8,6 +8,13 @@ import {
 	resolvePawCheckpointPaths,
 	validatePawCheckpointMetadata,
 } from "./checkpoints.ts";
+import {
+	pawCliArgsShowHelp,
+	pawCliParseRequiredSessionId,
+	pawCliReadScalarOptionValue,
+	pawCliUnknownPositionalArg,
+} from "./cli-arg-parsing.ts";
+import { formatPawCliValidationIssues, isPawFileSystemError, pawCliIsDirectory, pawCliIsFile } from "./cli-fs.ts";
 import type { PawValidationIssue } from "./contracts.ts";
 import { readPawJson, resolvePawProjectPaths } from "./persistence.ts";
 import { readPawSessionState, resolvePawSessionPaths } from "./session-store.ts";
@@ -120,34 +127,32 @@ export interface PawRollbackParsedInput {
 	checkpointName?: string;
 }
 
+const ROLLBACK_COMMAND_LABEL = "paw rollback";
+
 export type PawRollbackParsedArgs =
 	| { kind: "help" }
 	| { kind: "error"; message: string }
 	| { kind: "ok"; sessionId: string; input: PawRollbackParsedInput };
 
 export function parsePawRollbackArgs(args: string[]): PawRollbackParsedArgs {
-	if (args.includes("--help") || args.includes("-h")) {
+	if (pawCliArgsShowHelp(args)) {
 		return { kind: "help" };
 	}
 
-	if (args.length === 0) {
-		return { kind: "error", message: 'Missing required session id for "paw rollback".' };
-	}
-
-	const sessionId = args[0];
-	if (sessionId.startsWith("-")) {
-		return { kind: "error", message: 'Missing required session id for "paw rollback".' };
+	const sessionIdResult = pawCliParseRequiredSessionId(args, ROLLBACK_COMMAND_LABEL);
+	if ("kind" in sessionIdResult) {
+		return sessionIdResult;
 	}
 
 	let dryRun = false;
 	let checkpointName: string | undefined;
-	const seenScalarOptions = new Set<string>();
+	const seenCheckpoint = new Set<string>();
 
 	for (let index = 1; index < args.length; ) {
 		const arg = args[index];
 		if (arg === "--dry-run") {
 			if (dryRun) {
-				return { kind: "error", message: 'Duplicate option for "paw rollback": --dry-run' };
+				return { kind: "error", message: `Duplicate option for "${ROLLBACK_COMMAND_LABEL}": --dry-run` };
 			}
 			dryRun = true;
 			index += 1;
@@ -155,34 +160,23 @@ export function parsePawRollbackArgs(args: string[]): PawRollbackParsedArgs {
 		}
 
 		if (arg === "--checkpoint") {
-			if (seenScalarOptions.has(arg)) {
-				return { kind: "error", message: 'Duplicate option for "paw rollback": --checkpoint' };
+			const scalar = pawCliReadScalarOptionValue(ROLLBACK_COMMAND_LABEL, arg, args, index, seenCheckpoint);
+			if ("kind" in scalar) {
+				return scalar;
 			}
-			seenScalarOptions.add(arg);
-			if (index + 1 >= args.length) {
-				return { kind: "error", message: 'Missing value for "paw rollback" option: --checkpoint' };
-			}
-			const value = args[index + 1];
-			if (value.trim().length === 0) {
-				return { kind: "error", message: 'Option --checkpoint for "paw rollback" must be a non-empty string.' };
-			}
-			checkpointName = value;
-			index += 2;
+			checkpointName = scalar.value;
+			index = scalar.nextIndex;
 			continue;
 		}
 
-		if (arg.startsWith("-")) {
-			return { kind: "error", message: `Unknown option for "paw rollback": ${arg}` };
-		}
-
-		return { kind: "error", message: `Unknown option for "paw rollback": ${arg}` };
+		return pawCliUnknownPositionalArg(ROLLBACK_COMMAND_LABEL, arg);
 	}
 
 	const input: PawRollbackParsedInput = { dryRun };
 	if (checkpointName !== undefined) {
 		input.checkpointName = checkpointName;
 	}
-	return { kind: "ok", sessionId, input };
+	return { kind: "ok", sessionId: sessionIdResult.sessionId, input };
 }
 
 export async function createPawRollbackCommandResult(
@@ -192,13 +186,13 @@ export async function createPawRollbackCommandResult(
 ): Promise<PawRollbackCommandResult> {
 	const projectPaths = resolvePawProjectPaths(repoRoot);
 	const pawDir = relative(projectPaths.repoRoot, projectPaths.pawDir) || ".paw";
-	if (!(await isDirectory(projectPaths.pawDir))) {
+	if (!(await pawCliIsDirectory(projectPaths.pawDir))) {
 		return { status: "missing_project", pawDir };
 	}
 
 	const sessionPaths = resolvePawSessionPaths(repoRoot, sessionId);
 	const stateFile = relative(projectPaths.repoRoot, sessionPaths.stateFile);
-	if (!(await isFile(sessionPaths.stateFile))) {
+	if (!(await pawCliIsFile(sessionPaths.stateFile))) {
 		return { status: "missing_session", sessionId, stateFile };
 	}
 
@@ -213,7 +207,7 @@ export async function createPawRollbackCommandResult(
 
 	const checkpointPaths = resolvePawCheckpointPaths(repoRoot, sessionId, checkpointName);
 	const metadataFile = relative(projectPaths.repoRoot, checkpointPaths.metadataFile);
-	if (!(await isFile(checkpointPaths.metadataFile))) {
+	if (!(await pawCliIsFile(checkpointPaths.metadataFile))) {
 		return { status: "missing_checkpoint", sessionId, checkpointName, metadataFile };
 	}
 
@@ -339,7 +333,7 @@ export function formatPawRollbackCommandResult(result: PawRollbackCommandResult)
 		case "missing_checkpoint":
 			return `Cannot dry-run rollback for session ${result.sessionId}: checkpoint ${result.checkpointName} was not found at ${result.metadataFile}.`;
 		case "invalid_checkpoint":
-			return `Cannot dry-run rollback for session ${result.sessionId}: ${formatIssues(result.issues)}`;
+			return `Cannot dry-run rollback for session ${result.sessionId}: ${formatPawCliValidationIssues(result.issues)}`;
 	}
 }
 
@@ -462,7 +456,7 @@ async function hasSymlinkedAncestor(repoRoot: string, targetPath: string): Promi
 				return true;
 			}
 		} catch (error) {
-			if (!isFileSystemError(error) || error.code !== "ENOENT") {
+			if (!isPawFileSystemError(error) || error.code !== "ENOENT") {
 				throw error;
 			}
 		}
@@ -480,7 +474,7 @@ async function readCurrentFileHash(path: string): Promise<string | null> {
 		const content = await readFile(path);
 		return `sha256:${createHash("sha256").update(content).digest("hex")}`;
 	} catch (error) {
-		if (isFileSystemError(error) && error.code === "ENOENT") {
+		if (isPawFileSystemError(error) && error.code === "ENOENT") {
 			return null;
 		}
 		throw error;
@@ -491,7 +485,7 @@ async function removeFileIfExists(path: string): Promise<void> {
 	try {
 		await unlink(path);
 	} catch (error) {
-		if (!isFileSystemError(error) || error.code !== "ENOENT") {
+		if (!isPawFileSystemError(error) || error.code !== "ENOENT") {
 			throw error;
 		}
 	}
@@ -507,7 +501,7 @@ async function findLatestPawCheckpointName(repoRoot: string, sessionId: string):
 	try {
 		entries = await readdir(checkpointDir);
 	} catch (error) {
-		if (isFileSystemError(error) && error.code === "ENOENT") {
+		if (isPawFileSystemError(error) && error.code === "ENOENT") {
 			return null;
 		}
 		throw error;
@@ -515,11 +509,11 @@ async function findLatestPawCheckpointName(repoRoot: string, sessionId: string):
 
 	const directories: string[] = [];
 	for (const entry of entries) {
-		if (await isDirectory(resolvePawCheckpointPaths(repoRoot, sessionId, entry).checkpointDir)) {
+		if (await pawCliIsDirectory(resolvePawCheckpointPaths(repoRoot, sessionId, entry).checkpointDir)) {
 			directories.push(entry);
 		}
 	}
-	return directories.sort((a, b) => a.localeCompare(b)).at(-1) ?? null;
+	return directories.toSorted((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" })).at(-1) ?? null;
 }
 
 function formatRollbackInspectionLines(
@@ -550,32 +544,6 @@ function formatRollbackChangedFiles(changedFiles: PawCheckpointMetadata["changed
 	return ["files:", ...changedFiles.map((file) => `  - ${file.path} (${file.content_hash ?? "deleted"})`)];
 }
 
-function formatIssues(issues: readonly PawValidationIssue[]): string {
-	return issues.map((issue) => `${issue.path} ${issue.message}`).join("; ");
-}
-
-async function isDirectory(path: string): Promise<boolean> {
-	try {
-		return (await stat(path)).isDirectory();
-	} catch (error) {
-		if (isFileSystemError(error) && error.code === "ENOENT") {
-			return false;
-		}
-		throw error;
-	}
-}
-
-async function isFile(path: string): Promise<boolean> {
-	try {
-		return (await stat(path)).isFile();
-	} catch (error) {
-		if (isFileSystemError(error) && error.code === "ENOENT") {
-			return false;
-		}
-		throw error;
-	}
-}
-
 function printPawRollbackHelp(): void {
 	console.log(`Usage:
   ${APP_NAME} paw rollback <session-id> --dry-run [--checkpoint <name>]
@@ -600,12 +568,4 @@ This command never runs git, resets branches, or stashes changes. Non-dry-run ro
 function printPawRollbackCommandError(message: string): void {
 	console.error(`Error: ${message}`);
 	process.exitCode = 1;
-}
-
-interface FileSystemError extends Error {
-	code?: string;
-}
-
-function isFileSystemError(error: unknown): error is FileSystemError {
-	return error instanceof Error;
 }

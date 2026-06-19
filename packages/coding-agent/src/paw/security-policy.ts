@@ -134,30 +134,42 @@ export function isPawSecretPath(path: string, config: PawSecretsConfig): boolean
 
 function collectConfiguredRedactionPatterns(value: string, config: PawSecretsConfig): PawRedactionPattern[] {
 	const patterns: PawRedactionPattern[] = [];
-
-	if (isConfiguredRedactionPattern("private_keys", config) && /-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(value)) {
-		patterns.push("private_keys");
-	}
-	if (
-		isConfiguredRedactionPattern("auth_headers", config) &&
-		/(?:^|\n)\s*(?:authorization|proxy-authorization)\s*:/i.test(value)
-	) {
-		patterns.push("auth_headers");
-	}
-	if (isConfiguredRedactionPattern("cookies", config) && /(?:^|\n)\s*(?:cookie|set-cookie)\s*:/i.test(value)) {
-		patterns.push("cookies");
-	}
-	if (
-		isConfiguredRedactionPattern("env_values", config) &&
-		/(?:^|\n)\s*[A-Za-z_][A-Za-z0-9_]*\s*=\s*["']?[^\s"'][^\n]*/.test(value)
-	) {
-		patterns.push("env_values");
-	}
-	if (isConfiguredRedactionPattern("api_keys", config) && hasApiKeyLikeValue(value)) {
-		patterns.push("api_keys");
-	}
-
+	appendPawRedactionPatternIfMatched(patterns, "private_keys", config, () =>
+		/-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(value),
+	);
+	appendPawRedactionPatternIfMatched(patterns, "auth_headers", config, () =>
+		/(?:^|\n)\s*(?:authorization|proxy-authorization)\s*:/i.test(value),
+	);
+	appendPawRedactionPatternIfMatched(patterns, "cookies", config, () =>
+		/(?:^|\n)\s*(?:cookie|set-cookie)\s*:/i.test(value),
+	);
+	appendPawRedactionPatternIfMatched(patterns, "env_values", config, () =>
+		/(?:^|\n)\s*[A-Za-z_][A-Za-z0-9_]*\s*=\s*["']?[^\s"'][^\n]*/.test(value),
+	);
+	appendPawRedactionPatternIfMatched(patterns, "api_keys", config, () => hasApiKeyLikeValue(value));
 	return patterns;
+}
+
+function appendPawRedactionPatternIfMatched(
+	patterns: PawRedactionPattern[],
+	pattern: Exclude<PawRedactionPattern, "high_entropy">,
+	config: PawSecretsConfig,
+	matches: () => boolean,
+): void {
+	if (isConfiguredRedactionPattern(pattern, config) && matches()) {
+		patterns.push(pattern);
+	}
+}
+
+function appendOptionalPawRedactionPatterns(
+	patterns: PawRedactionPattern[],
+	value: string,
+	config: PawSecretsConfig,
+): void {
+	appendPawRedactionPatternIfMatched(patterns, "tokens", config, () => hasTokenLikeValue(value));
+	if (patterns.length === 0 && config.flag_high_entropy && hasHighEntropyToken(value)) {
+		patterns.push("high_entropy");
+	}
 }
 
 export function classifyPawRedaction(value: string, config: PawSecretsConfig): PawRedactionDecision {
@@ -166,14 +178,7 @@ export function classifyPawRedaction(value: string, config: PawSecretsConfig): P
 	}
 
 	const patterns = collectConfiguredRedactionPatterns(value, config);
-
-	if (isConfiguredRedactionPattern("tokens", config) && hasTokenLikeValue(value)) {
-		patterns.push("tokens");
-	}
-
-	if (patterns.length === 0 && config.flag_high_entropy && hasHighEntropyToken(value)) {
-		patterns.push("high_entropy");
-	}
+	appendOptionalPawRedactionPatterns(patterns, value, config);
 
 	if (patterns.length === 0) {
 		return { decision: "none", patterns };

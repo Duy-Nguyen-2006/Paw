@@ -1,6 +1,12 @@
-import { stat } from "node:fs/promises";
 import { relative } from "node:path";
 import { APP_NAME } from "../config.ts";
+import {
+	pawCliArgsShowHelp,
+	pawCliParseRepeatableScalarOption,
+	pawCliParseRequiredSessionId,
+	pawCliUnknownPositionalArg,
+} from "./cli-arg-parsing.ts";
+import { formatPawCliValidationIssues, pawCliIsDirectory, pawCliIsFile } from "./cli-fs.ts";
 import type { PawValidationIssue } from "./contracts.ts";
 import { resolvePawProjectPaths } from "./persistence.ts";
 import { approvePawPlanSlices, type PawPlanApprovalResult } from "./plan-approval.ts";
@@ -86,9 +92,7 @@ export interface PawApprovePlanCommandLockedByOtherResult {
 	lockReleased: boolean;
 }
 
-interface FileSystemError extends Error {
-	code?: string;
-}
+const APPROVE_PLAN_COMMAND_LABEL = "paw approve-plan";
 
 export type PawApprovePlanParsedArgs =
 	| { kind: "help" }
@@ -96,53 +100,40 @@ export type PawApprovePlanParsedArgs =
 	| { kind: "ok"; sessionId: string; sliceValues: string[] };
 
 export function parsePawApprovePlanArgs(args: string[]): PawApprovePlanParsedArgs {
-	if (args.includes("--help") || args.includes("-h")) {
+	if (pawCliArgsShowHelp(args)) {
 		return { kind: "help" };
 	}
 
-	if (args.length === 0) {
-		return { kind: "error", message: 'Missing required session id for "paw approve-plan".' };
+	const sessionIdResult = pawCliParseRequiredSessionId(args, APPROVE_PLAN_COMMAND_LABEL);
+	if ("kind" in sessionIdResult) {
+		return sessionIdResult;
 	}
 
-	const sessionId = args[0];
-	if (sessionId.startsWith("-")) {
-		return { kind: "error", message: 'Missing required session id for "paw approve-plan".' };
+	const sliceParse = pawCliParseRepeatableScalarOption(APPROVE_PLAN_COMMAND_LABEL, "--slice", args, 1);
+	if ("kind" in sliceParse) {
+		return sliceParse;
 	}
 
-	const sliceValues: string[] = [];
-	for (let index = 1; index < args.length; ) {
-		const arg = args[index];
-
-		if (arg !== "--slice") {
-			return { kind: "error", message: `Unknown option for "paw approve-plan": ${arg}` };
+	for (const value of sliceParse.values) {
+		const sliceError = validatePawApprovePlanSliceValue(value);
+		if (sliceError !== undefined) {
+			return { kind: "error", message: sliceError };
 		}
-
-		const error = validateSliceOption(args, index);
-		if (error) return { kind: "error", message: error };
-		sliceValues.push(args[index + 1]);
-		index += 2;
 	}
 
-	if (sliceValues.length === 0) {
-		return { kind: "error", message: 'Missing required option for "paw approve-plan": --slice' };
+	if (sliceParse.nextIndex < args.length) {
+		return pawCliUnknownPositionalArg(APPROVE_PLAN_COMMAND_LABEL, args[sliceParse.nextIndex]);
 	}
 
-	return { kind: "ok", sessionId, sliceValues };
+	return { kind: "ok", sessionId: sessionIdResult.sessionId, sliceValues: sliceParse.values };
 }
 
-function validateSliceOption(args: string[], index: number): string | null {
-	if (index + 1 >= args.length) {
-		return 'Missing value for "paw approve-plan" option: --slice';
-	}
-	const value = args[index + 1];
-	if (value.trim().length === 0) {
-		return 'Option --slice for "paw approve-plan" must be a non-empty string.';
-	}
+function validatePawApprovePlanSliceValue(value: string): string | undefined {
 	const sliceId = value.split(":", 1)[0]?.trim() ?? "";
 	if (sliceId.length === 0) {
-		return 'Option --slice for "paw approve-plan" must include a non-empty slice id.';
+		return `Option --slice for "${APPROVE_PLAN_COMMAND_LABEL}" must include a non-empty slice id.`;
 	}
-	return null;
+	return undefined;
 }
 
 export function buildPawPlannerSlicesFromCliSliceValues(sliceValues: readonly string[]): PawPlannerSlice[] {
@@ -175,7 +166,7 @@ export async function createPawApprovePlanCommandResult(
 ): Promise<PawApprovePlanCommandResult> {
 	const projectPaths = resolvePawProjectPaths(repoRoot);
 	const pawDir = relative(projectPaths.repoRoot, projectPaths.pawDir) || ".paw";
-	if (!(await isDirectory(projectPaths.pawDir))) {
+	if (!(await pawCliIsDirectory(projectPaths.pawDir))) {
 		return {
 			status: "missing_project",
 			pawDir,
@@ -184,7 +175,7 @@ export async function createPawApprovePlanCommandResult(
 
 	const sessionPaths = resolvePawSessionPaths(repoRoot, sessionId);
 	const relativeStateFile = relative(projectPaths.repoRoot, sessionPaths.stateFile);
-	if (!(await isFile(sessionPaths.stateFile))) {
+	if (!(await pawCliIsFile(sessionPaths.stateFile))) {
 		return {
 			status: "missing_session",
 			sessionId,
@@ -232,9 +223,9 @@ export function formatPawApprovePlanCommandResult(result: PawApprovePlanCommandR
 		case "locked":
 			return `Paw session ${result.sessionId} is locked by pid ${result.lock.pid} on ${result.lock.host}.`;
 		case "invalid_plan":
-			return `Cannot approve plan for session ${result.sessionId}: ${formatIssues(result.issues)}`;
+			return `Cannot approve plan for session ${result.sessionId}: ${formatPawCliValidationIssues(result.issues)}`;
 		case "invalid_transition":
-			return `Cannot approve plan for session ${result.sessionId} from ${result.previousStateName}: ${formatIssues(result.issues)}`;
+			return `Cannot approve plan for session ${result.sessionId} from ${result.previousStateName}: ${formatPawCliValidationIssues(result.issues)}`;
 		case "not_locked":
 			return `Cannot approve plan for session ${result.sessionId}: session lock is not held by this process.`;
 		case "locked_by_other":
@@ -318,37 +309,11 @@ function mapPawApprovePlanApprovalResult(
 	}
 }
 
-async function isDirectory(path: string): Promise<boolean> {
-	try {
-		return (await stat(path)).isDirectory();
-	} catch (error) {
-		if (isFileSystemError(error) && error.code === "ENOENT") {
-			return false;
-		}
-		throw error;
-	}
-}
-
-async function isFile(path: string): Promise<boolean> {
-	try {
-		return (await stat(path)).isFile();
-	} catch (error) {
-		if (isFileSystemError(error) && error.code === "ENOENT") {
-			return false;
-		}
-		throw error;
-	}
-}
-
 function formatSliceIds(sliceIds: readonly string[]): string {
 	if (sliceIds.length === 0) {
 		return "none";
 	}
 	return sliceIds.join(", ");
-}
-
-function formatIssues(issues: readonly PawValidationIssue[]): string {
-	return issues.map((issue) => `${issue.path} ${issue.message}`).join("; ");
 }
 
 function printPawApprovePlanHelp(): void {
@@ -369,8 +334,4 @@ Commands:
 function printPawApprovePlanCommandError(message: string): void {
 	console.error(`Error: ${message}`);
 	process.exitCode = 1;
-}
-
-function isFileSystemError(error: unknown): error is FileSystemError {
-	return error instanceof Error;
 }

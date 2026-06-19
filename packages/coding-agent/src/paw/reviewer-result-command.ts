@@ -1,7 +1,14 @@
-import { readFile, stat } from "node:fs/promises";
 import { relative } from "node:path";
 import { APP_NAME } from "../config.ts";
+import {
+	type PawCliScalarFieldBinding,
+	pawCliArgsShowHelp,
+	pawCliParseRequiredSessionId,
+	pawCliParseScalarFieldsFromArgs,
+} from "./cli-arg-parsing.ts";
+import { formatPawCliValidationIssues, pawCliIsDirectory, pawCliIsFile } from "./cli-fs.ts";
 import type { PawSubAgentOutput, PawValidationIssue } from "./contracts.ts";
+import { mapPawNotLockedCommandFields } from "./lock-result-mapping.ts";
 import { resolvePawProjectPaths } from "./persistence.ts";
 import { completePawReviewerPass, type PawReviewerPassResult } from "./reviewer-result.ts";
 import {
@@ -13,7 +20,9 @@ import {
 	resolvePawSessionPaths,
 } from "./session-store.ts";
 import type { PawSessionStateName } from "./state.ts";
-import { parsePawSubAgentOutputJson } from "./subagent.ts";
+import { readPawSubAgentOutputFile } from "./subagent-output-file.ts";
+
+const COMPLETE_REVIEWER_COMMAND_LABEL = "paw complete-reviewer";
 
 export type PawCompleteReviewerCommandResult =
 	| PawCompleteReviewerCommandCompletedResult
@@ -129,10 +138,6 @@ export interface PawCompleteReviewerCommandLockedByOtherResult {
 	lockReleased: boolean;
 }
 
-interface FileSystemError extends Error {
-	code?: string;
-}
-
 export interface PawCompleteReviewerParsedInput {
 	outputFile: string;
 }
@@ -145,59 +150,43 @@ export type PawCompleteReviewerParsedArgs =
 const COMPLETE_REVIEWER_SCALAR_OPTIONS = new Set(["--output-file"]);
 
 export function parsePawCompleteReviewerArgs(args: string[]): PawCompleteReviewerParsedArgs {
-	if (args.includes("--help") || args.includes("-h")) {
+	if (pawCliArgsShowHelp(args)) {
 		return { kind: "help" };
 	}
 
-	if (args.length === 0) {
-		return { kind: "error", message: 'Missing required session id for "paw complete-reviewer".' };
-	}
-
-	const sessionId = args[0];
-	if (sessionId.startsWith("-")) {
-		return { kind: "error", message: 'Missing required session id for "paw complete-reviewer".' };
+	const sessionIdResult = pawCliParseRequiredSessionId(args, COMPLETE_REVIEWER_COMMAND_LABEL);
+	if ("kind" in sessionIdResult) {
+		return sessionIdResult;
 	}
 
 	let outputFile: string | undefined;
-	const seenScalarOptions = new Set<string>();
-
-	for (let index = 1; index < args.length; ) {
-		const arg = args[index];
-
-		if (COMPLETE_REVIEWER_SCALAR_OPTIONS.has(arg)) {
-			if (seenScalarOptions.has(arg)) {
-				return { kind: "error", message: `Duplicate option for "paw complete-reviewer": ${arg}` };
-			}
-			seenScalarOptions.add(arg);
-			if (index + 1 >= args.length) {
-				return { kind: "error", message: `Missing value for "paw complete-reviewer" option: ${arg}` };
-			}
-			const value = args[index + 1];
-			if (value.trim().length === 0) {
-				return {
-					kind: "error",
-					message: `Option ${arg} for "paw complete-reviewer" must be a non-empty string.`,
-				};
-			}
-			if (arg === "--output-file") {
+	const bindings: PawCliScalarFieldBinding[] = [
+		{
+			option: "--output-file",
+			set: (value) => {
 				outputFile = value;
-			}
-			index += 2;
-			continue;
-		}
-
-		if (arg.startsWith("-")) {
-			return { kind: "error", message: `Unknown option for "paw complete-reviewer": ${arg}` };
-		}
-
-		return { kind: "error", message: `Unknown option for "paw complete-reviewer": ${arg}` };
+			},
+		},
+	];
+	const fields = pawCliParseScalarFieldsFromArgs(
+		COMPLETE_REVIEWER_COMMAND_LABEL,
+		args,
+		1,
+		COMPLETE_REVIEWER_SCALAR_OPTIONS,
+		bindings,
+	);
+	if ("kind" in fields) {
+		return fields;
 	}
 
 	if (outputFile === undefined) {
-		return { kind: "error", message: 'Missing required option for "paw complete-reviewer": --output-file' };
+		return {
+			kind: "error",
+			message: `Missing required option for "${COMPLETE_REVIEWER_COMMAND_LABEL}": --output-file`,
+		};
 	}
 
-	return { kind: "ok", sessionId, input: { outputFile } };
+	return { kind: "ok", sessionId: sessionIdResult.sessionId, input: { outputFile } };
 }
 
 export async function createPawCompleteReviewerCommandResult(
@@ -209,7 +198,7 @@ export async function createPawCompleteReviewerCommandResult(
 	const relativeOutputFile = relative(repoRoot, input.outputFile) || input.outputFile;
 	const projectPaths = resolvePawProjectPaths(repoRoot);
 	const pawDir = relative(projectPaths.repoRoot, projectPaths.pawDir) || ".paw";
-	if (!(await isDirectory(projectPaths.pawDir))) {
+	if (!(await pawCliIsDirectory(projectPaths.pawDir))) {
 		return {
 			status: "missing_project",
 			pawDir,
@@ -218,7 +207,7 @@ export async function createPawCompleteReviewerCommandResult(
 
 	const sessionPaths = resolvePawSessionPaths(repoRoot, sessionId);
 	const relativeStateFile = relative(projectPaths.repoRoot, sessionPaths.stateFile);
-	if (!(await isFile(sessionPaths.stateFile))) {
+	if (!(await pawCliIsFile(sessionPaths.stateFile))) {
 		return {
 			status: "missing_session",
 			sessionId,
@@ -226,7 +215,7 @@ export async function createPawCompleteReviewerCommandResult(
 		};
 	}
 
-	const outputRead = await readReviewerOutputFile(input.outputFile);
+	const outputRead = await readPawSubAgentOutputFile(input.outputFile);
 	if (outputRead.kind === "missing") {
 		return {
 			status: "missing_output_file",
@@ -274,7 +263,7 @@ export function formatPawCompleteReviewerCommandResult(result: PawCompleteReview
 				`lock released: ${result.lockReleased ? "yes" : "no"}`,
 			].join("\n");
 		case "invalid_output_file":
-			return `Cannot complete reviewer pass for session ${result.sessionId}: invalid reviewer output at ${result.outputFile}: ${formatIssues(result.issues)}`;
+			return `Cannot complete reviewer pass for session ${result.sessionId}: invalid reviewer output at ${result.outputFile}: ${formatPawCliValidationIssues(result.issues)}`;
 		case "missing_output_file":
 			return `Cannot complete reviewer pass for session ${result.sessionId}: reviewer output file not found at ${result.outputFile}.`;
 		case "missing_project":
@@ -284,15 +273,15 @@ export function formatPawCompleteReviewerCommandResult(result: PawCompleteReview
 		case "locked":
 			return `Paw session ${result.sessionId} is locked by pid ${result.lock.pid} on ${result.lock.host}.`;
 		case "invalid_state":
-			return `Cannot complete reviewer pass for session ${result.sessionId} from ${result.previousStateName}: ${formatIssues(result.issues)}`;
+			return `Cannot complete reviewer pass for session ${result.sessionId} from ${result.previousStateName}: ${formatPawCliValidationIssues(result.issues)}`;
 		case "no_selected_slice":
 			return `Cannot complete reviewer pass for session ${result.sessionId}: no selected slice in ${result.previousStateName}.`;
 		case "invalid_reviewer_output":
-			return `Cannot complete reviewer pass for session ${result.sessionId}: ${formatIssues(result.issues)}`;
+			return `Cannot complete reviewer pass for session ${result.sessionId}: ${formatPawCliValidationIssues(result.issues)}`;
 		case "reviewer_not_passed":
 			return `Cannot complete reviewer pass for session ${result.sessionId}: reviewer output status is ${result.reviewerStatus}, expected pass.`;
 		case "invalid_transition":
-			return `Cannot complete reviewer pass for session ${result.sessionId} from ${result.previousStateName}: ${formatIssues(result.issues)}`;
+			return `Cannot complete reviewer pass for session ${result.sessionId} from ${result.previousStateName}: ${formatPawCliValidationIssues(result.issues)}`;
 		case "not_locked":
 			return result.reason === "stale"
 				? `Cannot complete reviewer pass for session ${result.sessionId}: session lock is stale (${result.staleReason ?? "unknown"}).`
@@ -384,20 +373,7 @@ function mapPawCompleteReviewerResult(
 				lockReleased,
 			};
 		case "not_locked":
-			return completion.reason === "stale"
-				? {
-						status: "not_locked",
-						sessionId,
-						reason: "stale",
-						staleReason: completion.staleReason,
-						lockReleased,
-					}
-				: {
-						status: "not_locked",
-						sessionId,
-						reason: "unlocked",
-						lockReleased,
-					};
+			return mapPawNotLockedCommandFields(sessionId, completion.reason, lockReleased, completion.staleReason);
 		case "locked_by_other":
 			return {
 				status: "locked_by_other",
@@ -406,53 +382,6 @@ function mapPawCompleteReviewerResult(
 				lockReleased,
 			};
 	}
-}
-
-type ReviewerOutputReadResult =
-	| { kind: "missing" }
-	| { kind: "invalid"; issues: readonly PawValidationIssue[] }
-	| { kind: "ok"; value: PawSubAgentOutput };
-
-async function readReviewerOutputFile(outputFile: string): Promise<ReviewerOutputReadResult> {
-	try {
-		const content = await readFile(outputFile, "utf-8");
-		const parsed = parsePawSubAgentOutputJson(content);
-		if (!parsed.ok) {
-			return { kind: "invalid", issues: parsed.issues };
-		}
-		return { kind: "ok", value: parsed.value };
-	} catch (error) {
-		if (isFileSystemError(error) && error.code === "ENOENT") {
-			return { kind: "missing" };
-		}
-		throw error;
-	}
-}
-
-async function isDirectory(path: string): Promise<boolean> {
-	try {
-		return (await stat(path)).isDirectory();
-	} catch (error) {
-		if (isFileSystemError(error) && error.code === "ENOENT") {
-			return false;
-		}
-		throw error;
-	}
-}
-
-async function isFile(path: string): Promise<boolean> {
-	try {
-		return (await stat(path)).isFile();
-	} catch (error) {
-		if (isFileSystemError(error) && error.code === "ENOENT") {
-			return false;
-		}
-		throw error;
-	}
-}
-
-function formatIssues(issues: readonly PawValidationIssue[]): string {
-	return issues.map((issue) => `${issue.path} ${issue.message}`).join("; ");
 }
 
 function printPawCompleteReviewerHelp(): void {
@@ -473,8 +402,4 @@ Commands:
 function printPawCompleteReviewerCommandError(message: string): void {
 	console.error(`Error: ${message}`);
 	process.exitCode = 1;
-}
-
-function isFileSystemError(error: unknown): error is FileSystemError {
-	return error instanceof Error;
 }

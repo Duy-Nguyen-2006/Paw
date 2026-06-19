@@ -1,7 +1,14 @@
-import { readFile, stat } from "node:fs/promises";
 import { relative } from "node:path";
 import { APP_NAME } from "../config.ts";
+import {
+	type PawCliScalarFieldBinding,
+	pawCliArgsShowHelp,
+	pawCliParseRequiredSessionId,
+	pawCliParseScalarFieldsFromArgs,
+} from "./cli-arg-parsing.ts";
+import { formatPawCliValidationIssues, pawCliIsDirectory, pawCliIsFile } from "./cli-fs.ts";
 import type { PawRuntimeConfig, PawSubAgentOutput, PawValidationIssue } from "./contracts.ts";
+import { mapPawNotLockedCommandFields } from "./lock-result-mapping.ts";
 import { resolvePawProjectPaths } from "./persistence.ts";
 import {
 	acquirePawSessionLock,
@@ -12,8 +19,10 @@ import {
 	resolvePawSessionPaths,
 } from "./session-store.ts";
 import type { PawSessionStateName } from "./state.ts";
-import { parsePawSubAgentOutputJson } from "./subagent.ts";
+import { readPawSubAgentOutputFile } from "./subagent-output-file.ts";
 import { completePawWorkerPass, type PawWorkerPassResult } from "./worker-result.ts";
+
+const COMPLETE_WORKER_COMMAND_LABEL = "paw complete-worker";
 
 export type PawCompleteWorkerCommandResult =
 	| PawCompleteWorkerCommandCompletedResult
@@ -131,10 +140,6 @@ export interface PawCompleteWorkerCommandLockedByOtherResult {
 	lockReleased: boolean;
 }
 
-interface FileSystemError extends Error {
-	code?: string;
-}
-
 export interface PawCompleteWorkerParsedInput {
 	outputFile: string;
 	timestamp?: string;
@@ -148,59 +153,47 @@ export type PawCompleteWorkerParsedArgs =
 const COMPLETE_WORKER_SCALAR_OPTIONS = new Set(["--output-file", "--timestamp"]);
 
 export function parsePawCompleteWorkerArgs(args: string[]): PawCompleteWorkerParsedArgs {
-	if (args.some((arg) => arg === "--help" || arg === "-h")) {
+	if (pawCliArgsShowHelp(args)) {
 		return { kind: "help" };
 	}
 
-	if (args.length === 0) {
-		return { kind: "error", message: 'Missing required session id for "paw complete-worker".' };
-	}
-
-	const sessionId = args[0];
-	if (sessionId.startsWith("-")) {
-		return { kind: "error", message: 'Missing required session id for "paw complete-worker".' };
+	const sessionIdResult = pawCliParseRequiredSessionId(args, COMPLETE_WORKER_COMMAND_LABEL);
+	if ("kind" in sessionIdResult) {
+		return sessionIdResult;
 	}
 
 	let outputFile: string | undefined;
 	let timestamp: string | undefined;
-	const seenScalarOptions = new Set<string>();
-
-	for (let index = 1; index < args.length; ) {
-		const arg = args[index];
-
-		if (COMPLETE_WORKER_SCALAR_OPTIONS.has(arg)) {
-			if (seenScalarOptions.has(arg)) {
-				return { kind: "error", message: `Duplicate option for "paw complete-worker": ${arg}` };
-			}
-			seenScalarOptions.add(arg);
-			if (index + 1 >= args.length) {
-				return { kind: "error", message: `Missing value for "paw complete-worker" option: ${arg}` };
-			}
-			const value = args[index + 1];
-			if (value.trim().length === 0) {
-				return {
-					kind: "error",
-					message: `Option ${arg} for "paw complete-worker" must be a non-empty string.`,
-				};
-			}
-			if (arg === "--output-file") {
+	const bindings: PawCliScalarFieldBinding[] = [
+		{
+			option: "--output-file",
+			set: (value) => {
 				outputFile = value;
-			} else if (arg === "--timestamp") {
+			},
+		},
+		{
+			option: "--timestamp",
+			set: (value) => {
 				timestamp = value;
-			}
-			index += 2;
-			continue;
-		}
-
-		if (arg.startsWith("-")) {
-			return { kind: "error", message: `Unknown option for "paw complete-worker": ${arg}` };
-		}
-
-		return { kind: "error", message: `Unknown option for "paw complete-worker": ${arg}` };
+			},
+		},
+	];
+	const fields = pawCliParseScalarFieldsFromArgs(
+		COMPLETE_WORKER_COMMAND_LABEL,
+		args,
+		1,
+		COMPLETE_WORKER_SCALAR_OPTIONS,
+		bindings,
+	);
+	if ("kind" in fields) {
+		return fields;
 	}
 
 	if (outputFile === undefined) {
-		return { kind: "error", message: 'Missing required option for "paw complete-worker": --output-file' };
+		return {
+			kind: "error",
+			message: `Missing required option for "${COMPLETE_WORKER_COMMAND_LABEL}": --output-file`,
+		};
 	}
 
 	if (timestamp !== undefined) {
@@ -215,7 +208,7 @@ export function parsePawCompleteWorkerArgs(args: string[]): PawCompleteWorkerPar
 		input.timestamp = timestamp;
 	}
 
-	return { kind: "ok", sessionId, input };
+	return { kind: "ok", sessionId: sessionIdResult.sessionId, input };
 }
 
 export async function createPawCompleteWorkerCommandResult(
@@ -227,7 +220,7 @@ export async function createPawCompleteWorkerCommandResult(
 	const relativeOutputFile = relative(repoRoot, input.outputFile) || input.outputFile;
 	const projectPaths = resolvePawProjectPaths(repoRoot);
 	const pawDir = relative(projectPaths.repoRoot, projectPaths.pawDir) || ".paw";
-	if (!(await isDirectory(projectPaths.pawDir))) {
+	if (!(await pawCliIsDirectory(projectPaths.pawDir))) {
 		return {
 			status: "missing_project",
 			pawDir,
@@ -236,7 +229,7 @@ export async function createPawCompleteWorkerCommandResult(
 
 	const sessionPaths = resolvePawSessionPaths(repoRoot, sessionId);
 	const relativeStateFile = relative(projectPaths.repoRoot, sessionPaths.stateFile);
-	if (!(await isFile(sessionPaths.stateFile))) {
+	if (!(await pawCliIsFile(sessionPaths.stateFile))) {
 		return {
 			status: "missing_session",
 			sessionId,
@@ -244,7 +237,7 @@ export async function createPawCompleteWorkerCommandResult(
 		};
 	}
 
-	const outputRead = await readWorkerOutputFile(input.outputFile);
+	const outputRead = await readPawSubAgentOutputFile(input.outputFile);
 	if (outputRead.kind === "missing") {
 		return {
 			status: "missing_output_file",
@@ -295,7 +288,7 @@ export function formatPawCompleteWorkerCommandResult(result: PawCompleteWorkerCo
 				`lock released: ${result.lockReleased ? "yes" : "no"}`,
 			].join("\n");
 		case "invalid_output_file":
-			return `Cannot complete worker pass for session ${result.sessionId}: invalid worker output at ${result.outputFile}: ${formatIssues(result.issues)}`;
+			return `Cannot complete worker pass for session ${result.sessionId}: invalid worker output at ${result.outputFile}: ${formatPawCliValidationIssues(result.issues)}`;
 		case "missing_output_file":
 			return `Cannot complete worker pass for session ${result.sessionId}: worker output file not found at ${result.outputFile}.`;
 		case "missing_project":
@@ -305,15 +298,15 @@ export function formatPawCompleteWorkerCommandResult(result: PawCompleteWorkerCo
 		case "locked":
 			return `Paw session ${result.sessionId} is locked by pid ${result.lock.pid} on ${result.lock.host}.`;
 		case "invalid_state":
-			return `Cannot complete worker pass for session ${result.sessionId} from ${result.previousStateName}: ${formatIssues(result.issues)}`;
+			return `Cannot complete worker pass for session ${result.sessionId} from ${result.previousStateName}: ${formatPawCliValidationIssues(result.issues)}`;
 		case "no_selected_slice":
 			return `Cannot complete worker pass for session ${result.sessionId}: no selected slice in ${result.previousStateName}.`;
 		case "invalid_worker_output":
-			return `Cannot complete worker pass for session ${result.sessionId}: ${formatIssues(result.issues)}`;
+			return `Cannot complete worker pass for session ${result.sessionId}: ${formatPawCliValidationIssues(result.issues)}`;
 		case "worker_not_passed":
 			return `Cannot complete worker pass for session ${result.sessionId}: worker output status is ${result.workerStatus}, expected pass.`;
 		case "invalid_transition":
-			return `Cannot complete worker pass for session ${result.sessionId} from ${result.previousStateName}: ${formatIssues(result.issues)}`;
+			return `Cannot complete worker pass for session ${result.sessionId} from ${result.previousStateName}: ${formatPawCliValidationIssues(result.issues)}`;
 		case "not_locked":
 			return result.reason === "stale"
 				? `Cannot complete worker pass for session ${result.sessionId}: session lock is stale (${result.staleReason ?? "unknown"}).`
@@ -406,20 +399,7 @@ function mapPawCompleteWorkerResult(
 				lockReleased,
 			};
 		case "not_locked":
-			return completion.reason === "stale"
-				? {
-						status: "not_locked",
-						sessionId,
-						reason: "stale",
-						staleReason: completion.staleReason,
-						lockReleased,
-					}
-				: {
-						status: "not_locked",
-						sessionId,
-						reason: "unlocked",
-						lockReleased,
-					};
+			return mapPawNotLockedCommandFields(sessionId, completion.reason, lockReleased, completion.staleReason);
 		case "locked_by_other":
 			return {
 				status: "locked_by_other",
@@ -430,59 +410,12 @@ function mapPawCompleteWorkerResult(
 	}
 }
 
-type WorkerOutputReadResult =
-	| { kind: "missing" }
-	| { kind: "invalid"; issues: readonly PawValidationIssue[] }
-	| { kind: "ok"; value: PawSubAgentOutput };
-
-async function readWorkerOutputFile(outputFile: string): Promise<WorkerOutputReadResult> {
-	try {
-		const content = await readFile(outputFile, "utf-8");
-		const parsed = parsePawSubAgentOutputJson(content);
-		if (!parsed.ok) {
-			return { kind: "invalid", issues: parsed.issues };
-		}
-		return { kind: "ok", value: parsed.value };
-	} catch (error) {
-		if (isFileSystemError(error) && error.code === "ENOENT") {
-			return { kind: "missing" };
-		}
-		throw error;
-	}
-}
-
 function validatePawCompleteWorkerTimestamp(timestamp: string): string | undefined {
 	const date = new Date(timestamp);
 	if (Number.isNaN(date.getTime())) {
 		return `Invalid timestamp for "paw complete-worker": ${timestamp}`;
 	}
 	return undefined;
-}
-
-async function isDirectory(path: string): Promise<boolean> {
-	try {
-		return (await stat(path)).isDirectory();
-	} catch (error) {
-		if (isFileSystemError(error) && error.code === "ENOENT") {
-			return false;
-		}
-		throw error;
-	}
-}
-
-async function isFile(path: string): Promise<boolean> {
-	try {
-		return (await stat(path)).isFile();
-	} catch (error) {
-		if (isFileSystemError(error) && error.code === "ENOENT") {
-			return false;
-		}
-		throw error;
-	}
-}
-
-function formatIssues(issues: readonly PawValidationIssue[]): string {
-	return issues.map((issue) => `${issue.path} ${issue.message}`).join("; ");
 }
 
 function printPawCompleteWorkerHelp(): void {
@@ -504,8 +437,4 @@ Commands:
 function printPawCompleteWorkerCommandError(message: string): void {
 	console.error(`Error: ${message}`);
 	process.exitCode = 1;
-}
-
-function isFileSystemError(error: unknown): error is FileSystemError {
-	return error instanceof Error;
 }

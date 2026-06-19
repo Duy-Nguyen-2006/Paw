@@ -1,4 +1,5 @@
 import { APP_NAME } from "../config.ts";
+import { pawCliArgsShowHelp } from "./cli-arg-parsing.ts";
 import { type PawEventLogEntry, readPawEventLog } from "./event-log.ts";
 import { readPawSessionState } from "./session-store.ts";
 
@@ -27,40 +28,72 @@ export interface PawTimelineResult {
 }
 
 export function parsePawTimelineArgs(args: string[]): PawTimelineParseResult {
-	if (args.length === 0) {
+	if (args.length === 0 || pawCliArgsShowHelp(args)) {
 		return { kind: "help" };
 	}
-	if (args[0] === "--help" || args[0] === "-h") {
-		return { kind: "help" };
+	const parsed = parsePawTimelineOptions(args);
+	if ("kind" in parsed) {
+		return parsed;
 	}
+	return { kind: "ok", args: parsed };
+}
+
+function parsePawTimelineOptions(args: string[]): PawTimelineParseResult | PawTimelineParsedArgs {
 	let sessionId: string | null = null;
 	let limit: number | null = null;
 	let includeJournal = true;
 	for (let index = 0; index < args.length; index += 1) {
-		const arg = args[index];
-		if (arg === "--limit" || arg === "-n") {
-			const value = args[index + 1];
-			if (value === undefined) return { kind: "error", message: `Missing value for ${arg}` };
-			const parsed = Number.parseInt(value, 10);
-			if (!Number.isInteger(parsed) || parsed <= 0) {
-				return { kind: "error", message: `Option ${arg} must be a positive integer.` };
-			}
-			limit = parsed;
-			index += 1;
-		} else if (arg === "--no-journal") {
-			includeJournal = false;
-		} else if (arg.startsWith("--")) {
-			return { kind: "error", message: `Unknown option for "paw timeline": ${arg}` };
-		} else if (sessionId === null) {
-			sessionId = arg;
-		} else {
-			return { kind: "error", message: `Unexpected positional argument: ${arg}` };
+		const step = consumePawTimelineArg(args, index, { sessionId, limit, includeJournal });
+		if ("kind" in step) {
+			return step;
 		}
+		sessionId = step.sessionId;
+		limit = step.limit;
+		includeJournal = step.includeJournal;
+		index = step.index;
 	}
 	if (sessionId === null) {
 		return { kind: "error", message: "Missing <session-id> for paw timeline" };
 	}
-	return { kind: "ok", args: { sessionId, limit, includeJournal } };
+	return { sessionId, limit, includeJournal };
+}
+
+function consumePawTimelineArg(
+	args: string[],
+	index: number,
+	state: { sessionId: string | null; limit: number | null; includeJournal: boolean },
+): PawTimelineParseResult | { sessionId: string | null; limit: number | null; includeJournal: boolean; index: number } {
+	const arg = args[index];
+	if (arg === "--limit" || arg === "-n") {
+		return parsePawTimelineLimitArg(args, index, arg, state);
+	}
+	if (arg === "--no-journal") {
+		return { ...state, includeJournal: false, index };
+	}
+	if (arg.startsWith("--")) {
+		return { kind: "error", message: `Unknown option for "paw timeline": ${arg}` };
+	}
+	if (state.sessionId === null) {
+		return { ...state, sessionId: arg, index };
+	}
+	return { kind: "error", message: `Unexpected positional argument: ${arg}` };
+}
+
+function parsePawTimelineLimitArg(
+	args: string[],
+	index: number,
+	option: string,
+	state: { sessionId: string | null; limit: number | null; includeJournal: boolean },
+): PawTimelineParseResult | { sessionId: string | null; limit: number | null; includeJournal: boolean; index: number } {
+	const value = args[index + 1];
+	if (value === undefined) {
+		return { kind: "error", message: `Missing value for ${option}` };
+	}
+	const parsed = Number.parseInt(value, 10);
+	if (!Number.isInteger(parsed) || parsed <= 0) {
+		return { kind: "error", message: `Option ${option} must be a positive integer.` };
+	}
+	return { ...state, limit: parsed, index: index + 1 };
 }
 
 export async function runPawTimelineCommand(args: string[]): Promise<void> {

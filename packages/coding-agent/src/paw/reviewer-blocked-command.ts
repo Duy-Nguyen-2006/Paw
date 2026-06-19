@@ -1,7 +1,14 @@
-import { readFile, stat } from "node:fs/promises";
 import { relative } from "node:path";
 import { APP_NAME } from "../config.ts";
+import {
+	type PawCliScalarFieldBinding,
+	pawCliArgsShowHelp,
+	pawCliParseRequiredSessionId,
+	pawCliParseScalarFieldsFromArgs,
+} from "./cli-arg-parsing.ts";
+import { formatPawCliValidationIssues, pawCliIsDirectory, pawCliIsFile } from "./cli-fs.ts";
 import type { PawSubAgentOutput, PawValidationIssue } from "./contracts.ts";
+import { mapPawNotLockedCommandFields } from "./lock-result-mapping.ts";
 import { resolvePawProjectPaths } from "./persistence.ts";
 import { blockPawReviewerResult, type PawReviewerBlockedResult } from "./reviewer-blocked-result.ts";
 import {
@@ -13,8 +20,7 @@ import {
 	resolvePawSessionPaths,
 } from "./session-store.ts";
 import type { PawSessionStateName } from "./state.ts";
-import { parsePawSubAgentOutputJson } from "./subagent.ts";
-
+import { readPawSubAgentOutputFile } from "./subagent-output-file.ts";
 export type PawBlockReviewerCommandResult =
 	| PawBlockReviewerCommandBlockedResult
 	| PawBlockReviewerCommandInvalidOutputFileResult
@@ -141,9 +147,7 @@ export interface PawBlockReviewerCommandLockedByOtherResult {
 	lockReleased: boolean;
 }
 
-interface FileSystemError extends Error {
-	code?: string;
-}
+const BLOCK_REVIEWER_COMMAND_LABEL = "paw block-reviewer";
 
 export interface PawBlockReviewerParsedInput {
 	outputFile: string;
@@ -157,56 +161,40 @@ export type PawBlockReviewerParsedArgs =
 const BLOCK_REVIEWER_SCALAR_OPTIONS = new Set(["--output-file"]);
 
 export function parsePawBlockReviewerArgs(args: string[]): PawBlockReviewerParsedArgs {
-	if (args.includes("--help") || args.includes("-h")) {
+	if (pawCliArgsShowHelp(args)) {
 		return { kind: "help" };
 	}
 
-	if (args.length === 0) {
-		return { kind: "error", message: 'Missing required session id for "paw block-reviewer".' };
-	}
-
-	const sessionId = args[0];
-	if (sessionId.startsWith("-")) {
-		return { kind: "error", message: 'Missing required session id for "paw block-reviewer".' };
+	const sessionIdResult = pawCliParseRequiredSessionId(args, BLOCK_REVIEWER_COMMAND_LABEL);
+	if ("kind" in sessionIdResult) {
+		return sessionIdResult;
 	}
 
 	let outputFile: string | undefined;
-	const seenScalarOptions = new Set<string>();
-
-	for (let index = 1; index < args.length; ) {
-		const arg = args[index];
-
-		if (!BLOCK_REVIEWER_SCALAR_OPTIONS.has(arg)) {
-			return { kind: "error", message: `Unknown option for "paw block-reviewer": ${arg}` };
-		}
-
-		const error = validateScalarOption(arg, args, index, seenScalarOptions);
-		if (error) return { kind: "error", message: error };
-		seenScalarOptions.add(arg);
-		if (arg === "--output-file") {
-			outputFile = args[index + 1];
-		}
-		index += 2;
+	const bindings: PawCliScalarFieldBinding[] = [
+		{
+			option: "--output-file",
+			set: (value) => {
+				outputFile = value;
+			},
+		},
+	];
+	const fields = pawCliParseScalarFieldsFromArgs(
+		BLOCK_REVIEWER_COMMAND_LABEL,
+		args,
+		1,
+		BLOCK_REVIEWER_SCALAR_OPTIONS,
+		bindings,
+	);
+	if ("kind" in fields) {
+		return fields;
 	}
 
 	if (outputFile === undefined) {
-		return { kind: "error", message: 'Missing required option for "paw block-reviewer": --output-file' };
+		return { kind: "error", message: `Missing required option for "${BLOCK_REVIEWER_COMMAND_LABEL}": --output-file` };
 	}
 
-	return { kind: "ok", sessionId, input: { outputFile } };
-}
-
-function validateScalarOption(arg: string, args: string[], index: number, seen: Set<string>): string | null {
-	if (seen.has(arg)) {
-		return `Duplicate option for "paw block-reviewer": ${arg}`;
-	}
-	if (index + 1 >= args.length) {
-		return `Missing value for "paw block-reviewer" option: ${arg}`;
-	}
-	if (args[index + 1].trim().length === 0) {
-		return `Option ${arg} for "paw block-reviewer" must be a non-empty string.`;
-	}
-	return null;
+	return { kind: "ok", sessionId: sessionIdResult.sessionId, input: { outputFile } };
 }
 
 export async function createPawBlockReviewerCommandResult(
@@ -218,7 +206,7 @@ export async function createPawBlockReviewerCommandResult(
 	const relativeOutputFile = relative(repoRoot, input.outputFile) || input.outputFile;
 	const projectPaths = resolvePawProjectPaths(repoRoot);
 	const pawDir = relative(projectPaths.repoRoot, projectPaths.pawDir) || ".paw";
-	if (!(await isDirectory(projectPaths.pawDir))) {
+	if (!(await pawCliIsDirectory(projectPaths.pawDir))) {
 		return {
 			status: "missing_project",
 			pawDir,
@@ -227,7 +215,7 @@ export async function createPawBlockReviewerCommandResult(
 
 	const sessionPaths = resolvePawSessionPaths(repoRoot, sessionId);
 	const relativeStateFile = relative(projectPaths.repoRoot, sessionPaths.stateFile);
-	if (!(await isFile(sessionPaths.stateFile))) {
+	if (!(await pawCliIsFile(sessionPaths.stateFile))) {
 		return {
 			status: "missing_session",
 			sessionId,
@@ -235,7 +223,7 @@ export async function createPawBlockReviewerCommandResult(
 		};
 	}
 
-	const outputRead = await readReviewerOutputFile(input.outputFile);
+	const outputRead = await readPawSubAgentOutputFile(input.outputFile);
 	if (outputRead.kind === "missing") {
 		return {
 			status: "missing_output_file",
@@ -284,7 +272,7 @@ export function formatPawBlockReviewerCommandResult(result: PawBlockReviewerComm
 				`lock released: ${result.lockReleased ? "yes" : "no"}`,
 			].join("\n");
 		case "invalid_output_file":
-			return `Cannot block reviewer for session ${result.sessionId}: invalid reviewer output at ${result.outputFile}: ${formatIssues(result.issues)}`;
+			return `Cannot block reviewer for session ${result.sessionId}: invalid reviewer output at ${result.outputFile}: ${formatPawCliValidationIssues(result.issues)}`;
 		case "missing_output_file":
 			return `Cannot block reviewer for session ${result.sessionId}: reviewer output file not found at ${result.outputFile}.`;
 		case "missing_project":
@@ -294,17 +282,17 @@ export function formatPawBlockReviewerCommandResult(result: PawBlockReviewerComm
 		case "locked":
 			return `Paw session ${result.sessionId} is locked by pid ${result.lock.pid} on ${result.lock.host}.`;
 		case "invalid_state":
-			return `Cannot block reviewer for session ${result.sessionId} from ${result.previousStateName}: ${formatIssues(result.issues)}`;
+			return `Cannot block reviewer for session ${result.sessionId} from ${result.previousStateName}: ${formatPawCliValidationIssues(result.issues)}`;
 		case "no_selected_slice":
 			return `Cannot block reviewer for session ${result.sessionId}: no selected slice in ${result.previousStateName}.`;
 		case "invalid_reviewer_output":
-			return `Cannot block reviewer for session ${result.sessionId}: ${formatIssues(result.issues)}`;
+			return `Cannot block reviewer for session ${result.sessionId}: ${formatPawCliValidationIssues(result.issues)}`;
 		case "reviewer_not_blocked":
 			return `Cannot block reviewer for session ${result.sessionId}: reviewer output status is ${result.reviewerStatus}, expected blocked or needs_user_decision.`;
 		case "invalid_blocked_reason":
-			return `Cannot block reviewer for session ${result.sessionId}: ${formatIssues(result.issues)}`;
+			return `Cannot block reviewer for session ${result.sessionId}: ${formatPawCliValidationIssues(result.issues)}`;
 		case "invalid_transition":
-			return `Cannot block reviewer for session ${result.sessionId} from ${result.previousStateName}: ${formatIssues(result.issues)}`;
+			return `Cannot block reviewer for session ${result.sessionId} from ${result.previousStateName}: ${formatPawCliValidationIssues(result.issues)}`;
 		case "not_locked":
 			return result.reason === "stale"
 				? `Cannot block reviewer for session ${result.sessionId}: session lock is stale (${result.staleReason ?? "unknown"}).`
@@ -409,20 +397,7 @@ function mapPawBlockReviewerResult(
 				lockReleased,
 			};
 		case "not_locked":
-			return blocked.reason === "stale"
-				? {
-						status: "not_locked",
-						sessionId,
-						reason: "stale",
-						staleReason: blocked.staleReason,
-						lockReleased,
-					}
-				: {
-						status: "not_locked",
-						sessionId,
-						reason: "unlocked",
-						lockReleased,
-					};
+			return mapPawNotLockedCommandFields(sessionId, blocked.reason, lockReleased, blocked.staleReason);
 		case "locked_by_other":
 			return {
 				status: "locked_by_other",
@@ -431,53 +406,6 @@ function mapPawBlockReviewerResult(
 				lockReleased,
 			};
 	}
-}
-
-type ReviewerOutputReadResult =
-	| { kind: "missing" }
-	| { kind: "invalid"; issues: readonly PawValidationIssue[] }
-	| { kind: "ok"; value: PawSubAgentOutput };
-
-async function readReviewerOutputFile(outputFile: string): Promise<ReviewerOutputReadResult> {
-	try {
-		const content = await readFile(outputFile, "utf-8");
-		const parsed = parsePawSubAgentOutputJson(content);
-		if (!parsed.ok) {
-			return { kind: "invalid", issues: parsed.issues };
-		}
-		return { kind: "ok", value: parsed.value };
-	} catch (error) {
-		if (isFileSystemError(error) && error.code === "ENOENT") {
-			return { kind: "missing" };
-		}
-		throw error;
-	}
-}
-
-async function isDirectory(path: string): Promise<boolean> {
-	try {
-		return (await stat(path)).isDirectory();
-	} catch (error) {
-		if (isFileSystemError(error) && error.code === "ENOENT") {
-			return false;
-		}
-		throw error;
-	}
-}
-
-async function isFile(path: string): Promise<boolean> {
-	try {
-		return (await stat(path)).isFile();
-	} catch (error) {
-		if (isFileSystemError(error) && error.code === "ENOENT") {
-			return false;
-		}
-		throw error;
-	}
-}
-
-function formatIssues(issues: readonly PawValidationIssue[]): string {
-	return issues.map((issue) => `${issue.path} ${issue.message}`).join("; ");
 }
 
 function printPawBlockReviewerHelp(): void {
@@ -498,8 +426,4 @@ Commands:
 function printPawBlockReviewerCommandError(message: string): void {
 	console.error(`Error: ${message}`);
 	process.exitCode = 1;
-}
-
-function isFileSystemError(error: unknown): error is FileSystemError {
-	return error instanceof Error;
 }

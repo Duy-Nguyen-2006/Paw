@@ -102,6 +102,21 @@ function detectLanguage(repoRoot: string, indicators: string[]): PawDetectedLang
 	return "unknown";
 }
 
+function readPackageJsonWorkspaces(repoRoot: string): unknown | null {
+	const pkgPath = `${repoRoot}/package.json`;
+	if (!existsSync(pkgPath)) return null;
+	try {
+		const pkg = JSON.parse(require("node:fs").readFileSync(pkgPath, "utf-8")) as { workspaces?: unknown };
+		return pkg.workspaces ?? null;
+	} catch {
+		return null;
+	}
+}
+
+function hasNpmWorkspacesField(workspaces: unknown): boolean {
+	return Array.isArray(workspaces) || (typeof workspaces === "object" && workspaces !== null);
+}
+
 function detectMonorepo(repoRoot: string, indicators: string[]): PawDetectedMonorepo {
 	if (existsSync(`${repoRoot}/pnpm-workspace.yaml`)) {
 		indicators.push("pnpm-workspace.yaml present");
@@ -115,70 +130,70 @@ function detectMonorepo(repoRoot: string, indicators: string[]): PawDetectedMono
 		indicators.push("nx.json present");
 		return "nx";
 	}
-	if (existsSync(`${repoRoot}/package.json`)) {
-		try {
-			const pkg = JSON.parse(require("node:fs").readFileSync(`${repoRoot}/package.json`, "utf-8")) as {
-				workspaces?: unknown;
-			};
-			if (Array.isArray(pkg.workspaces) || (typeof pkg.workspaces === "object" && pkg.workspaces !== null)) {
-				indicators.push("package.json has workspaces field");
-				if (existsSync(`${repoRoot}/yarn.lock`)) return "yarn-workspace";
-				return "npm-workspace";
-			}
-		} catch {
-			// ignore
-		}
+	const workspaces = readPackageJsonWorkspaces(repoRoot);
+	if (workspaces !== null && hasNpmWorkspacesField(workspaces)) {
+		indicators.push("package.json has workspaces field");
+		if (existsSync(`${repoRoot}/yarn.lock`)) return "yarn-workspace";
+		return "npm-workspace";
 	}
 	return "none";
 }
 
-function detectTestRunner(repoRoot: string, indicators: string[]): PawProjectDetection["hasTestRunner"] {
+const JS_TEST_RUNNER_KEYS: readonly { key: string; runner: "vitest" | "jest" | "mocha"; indicator: string }[] = [
+	{ key: "vitest", runner: "vitest", indicator: "vitest in dependencies" },
+	{ key: "jest", runner: "jest", indicator: "jest in dependencies" },
+	{ key: "mocha", runner: "mocha", indicator: "mocha in dependencies" },
+];
+
+function detectJsTestRunnerFromPackage(
+	repoRoot: string,
+	indicators: string[],
+): PawProjectDetection["hasTestRunner"] | null {
 	const pkgPath = `${repoRoot}/package.json`;
-	if (existsSync(pkgPath)) {
-		try {
-			const pkg = JSON.parse(require("node:fs").readFileSync(pkgPath, "utf-8")) as {
-				devDependencies?: Record<string, string>;
-				dependencies?: Record<string, string>;
-			};
-			const all = { ...(pkg.dependencies ?? {}), ...(pkg.devDependencies ?? {}) };
-			if ("vitest" in all) {
-				indicators.push("vitest in dependencies");
-				return "vitest";
+	if (!existsSync(pkgPath)) return null;
+	try {
+		const pkg = JSON.parse(require("node:fs").readFileSync(pkgPath, "utf-8")) as {
+			devDependencies?: Record<string, string>;
+			dependencies?: Record<string, string>;
+		};
+		const all = { ...(pkg.dependencies ?? {}), ...(pkg.devDependencies ?? {}) };
+		for (const entry of JS_TEST_RUNNER_KEYS) {
+			if (entry.key in all) {
+				indicators.push(entry.indicator);
+				return entry.runner;
 			}
-			if ("jest" in all) {
-				indicators.push("jest in dependencies");
-				return "jest";
-			}
-			if ("mocha" in all) {
-				indicators.push("mocha in dependencies");
-				return "mocha";
-			}
-		} catch {
-			// ignore
 		}
+	} catch {
+		// ignore
 	}
-	if (existsSync(`${repoRoot}/pyproject.toml`)) {
-		try {
-			const content = require("node:fs").readFileSync(`${repoRoot}/pyproject.toml`, "utf-8");
-			if (/pytest/.test(content)) {
-				indicators.push("pytest in pyproject.toml");
-				return "pytest";
-			}
-		} catch {
-			// ignore
+	return null;
+}
+
+function detectPytestFromFile(
+	repoRoot: string,
+	relativePath: string,
+	indicator: string,
+	indicators: string[],
+): boolean {
+	const fullPath = `${repoRoot}/${relativePath}`;
+	if (!existsSync(fullPath)) return false;
+	try {
+		const content = require("node:fs").readFileSync(fullPath, "utf-8");
+		if (/pytest/.test(content)) {
+			indicators.push(indicator);
+			return true;
 		}
+	} catch {
+		// ignore
 	}
-	if (existsSync(`${repoRoot}/requirements.txt`)) {
-		try {
-			const content = require("node:fs").readFileSync(`${repoRoot}/requirements.txt`, "utf-8");
-			if (/pytest/.test(content)) {
-				indicators.push("pytest in requirements.txt");
-				return "pytest";
-			}
-		} catch {
-			// ignore
-		}
-	}
+	return false;
+}
+
+function detectTestRunner(repoRoot: string, indicators: string[]): PawProjectDetection["hasTestRunner"] {
+	const fromJs = detectJsTestRunnerFromPackage(repoRoot, indicators);
+	if (fromJs !== null) return fromJs;
+	if (detectPytestFromFile(repoRoot, "pyproject.toml", "pytest in pyproject.toml", indicators)) return "pytest";
+	if (detectPytestFromFile(repoRoot, "requirements.txt", "pytest in requirements.txt", indicators)) return "pytest";
 	if (existsSync(`${repoRoot}/Cargo.toml`)) {
 		indicators.push("Cargo.toml present (cargo test)");
 		return "cargo";

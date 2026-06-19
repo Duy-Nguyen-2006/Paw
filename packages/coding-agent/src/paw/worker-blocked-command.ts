@@ -1,7 +1,14 @@
-import { readFile, stat } from "node:fs/promises";
 import { relative } from "node:path";
 import { APP_NAME } from "../config.ts";
+import {
+	type PawCliScalarFieldBinding,
+	pawCliArgsShowHelp,
+	pawCliParseRequiredSessionId,
+	pawCliParseScalarFieldsFromArgs,
+} from "./cli-arg-parsing.ts";
+import { formatPawCliValidationIssues, pawCliIsDirectory, pawCliIsFile } from "./cli-fs.ts";
 import type { PawSubAgentOutput, PawValidationIssue } from "./contracts.ts";
+import { mapPawNotLockedCommandFields } from "./lock-result-mapping.ts";
 import { resolvePawProjectPaths } from "./persistence.ts";
 import {
 	acquirePawSessionLock,
@@ -12,7 +19,7 @@ import {
 	resolvePawSessionPaths,
 } from "./session-store.ts";
 import type { PawSessionStateName } from "./state.ts";
-import { parsePawSubAgentOutputJson } from "./subagent.ts";
+import { readPawSubAgentOutputFile } from "./subagent-output-file.ts";
 import { blockPawWorkerResult, type PawWorkerBlockedResult } from "./worker-blocked-result.ts";
 
 export type PawBlockWorkerCommandResult =
@@ -141,10 +148,6 @@ export interface PawBlockWorkerCommandLockedByOtherResult {
 	lockReleased: boolean;
 }
 
-interface FileSystemError extends Error {
-	code?: string;
-}
-
 export interface PawBlockWorkerParsedInput {
 	outputFile: string;
 }
@@ -155,23 +158,43 @@ export type PawBlockWorkerParsedArgs =
 	| { kind: "ok"; sessionId: string; input: PawBlockWorkerParsedInput };
 
 const BLOCK_WORKER_COMMAND_LABEL = "paw block-worker";
+const BLOCK_WORKER_SCALAR_OPTIONS = new Set(["--output-file"]);
 
 export function parsePawBlockWorkerArgs(args: string[]): PawBlockWorkerParsedArgs {
-	if (args.some((arg) => arg === "--help" || arg === "-h")) {
+	if (pawCliArgsShowHelp(args)) {
 		return { kind: "help" };
 	}
 
-	const sessionIdResult = readPawBlockWorkerSessionId(args);
+	const sessionIdResult = pawCliParseRequiredSessionId(args, BLOCK_WORKER_COMMAND_LABEL);
 	if ("kind" in sessionIdResult) {
 		return sessionIdResult;
 	}
 
-	const outputFileResult = parsePawBlockWorkerOutputFile(args);
-	if ("kind" in outputFileResult) {
-		return outputFileResult;
+	let outputFile: string | undefined;
+	const bindings: PawCliScalarFieldBinding[] = [
+		{
+			option: "--output-file",
+			set: (value) => {
+				outputFile = value;
+			},
+		},
+	];
+	const fields = pawCliParseScalarFieldsFromArgs(
+		BLOCK_WORKER_COMMAND_LABEL,
+		args,
+		1,
+		BLOCK_WORKER_SCALAR_OPTIONS,
+		bindings,
+	);
+	if ("kind" in fields) {
+		return fields;
 	}
 
-	return { kind: "ok", sessionId: sessionIdResult.sessionId, input: { outputFile: outputFileResult.outputFile } };
+	if (outputFile === undefined) {
+		return { kind: "error", message: `Missing required option for "${BLOCK_WORKER_COMMAND_LABEL}": --output-file` };
+	}
+
+	return { kind: "ok", sessionId: sessionIdResult.sessionId, input: { outputFile } };
 }
 
 export async function createPawBlockWorkerCommandResult(
@@ -183,7 +206,7 @@ export async function createPawBlockWorkerCommandResult(
 	const relativeOutputFile = relative(repoRoot, input.outputFile) || input.outputFile;
 	const projectPaths = resolvePawProjectPaths(repoRoot);
 	const pawDir = relative(projectPaths.repoRoot, projectPaths.pawDir) || ".paw";
-	if (!(await isDirectory(projectPaths.pawDir))) {
+	if (!(await pawCliIsDirectory(projectPaths.pawDir))) {
 		return {
 			status: "missing_project",
 			pawDir,
@@ -192,7 +215,7 @@ export async function createPawBlockWorkerCommandResult(
 
 	const sessionPaths = resolvePawSessionPaths(repoRoot, sessionId);
 	const relativeStateFile = relative(projectPaths.repoRoot, sessionPaths.stateFile);
-	if (!(await isFile(sessionPaths.stateFile))) {
+	if (!(await pawCliIsFile(sessionPaths.stateFile))) {
 		return {
 			status: "missing_session",
 			sessionId,
@@ -200,7 +223,7 @@ export async function createPawBlockWorkerCommandResult(
 		};
 	}
 
-	const outputRead = await readWorkerOutputFile(input.outputFile);
+	const outputRead = await readPawSubAgentOutputFile(input.outputFile);
 	if (outputRead.kind === "missing") {
 		return {
 			status: "missing_output_file",
@@ -249,7 +272,7 @@ export function formatPawBlockWorkerCommandResult(result: PawBlockWorkerCommandR
 				`lock released: ${result.lockReleased ? "yes" : "no"}`,
 			].join("\n");
 		case "invalid_output_file":
-			return `Cannot block worker for session ${result.sessionId}: invalid worker output at ${result.outputFile}: ${formatIssues(result.issues)}`;
+			return `Cannot block worker for session ${result.sessionId}: invalid worker output at ${result.outputFile}: ${formatPawCliValidationIssues(result.issues)}`;
 		case "missing_output_file":
 			return `Cannot block worker for session ${result.sessionId}: worker output file not found at ${result.outputFile}.`;
 		case "missing_project":
@@ -259,17 +282,17 @@ export function formatPawBlockWorkerCommandResult(result: PawBlockWorkerCommandR
 		case "locked":
 			return `Paw session ${result.sessionId} is locked by pid ${result.lock.pid} on ${result.lock.host}.`;
 		case "invalid_state":
-			return `Cannot block worker for session ${result.sessionId} from ${result.previousStateName}: ${formatIssues(result.issues)}`;
+			return `Cannot block worker for session ${result.sessionId} from ${result.previousStateName}: ${formatPawCliValidationIssues(result.issues)}`;
 		case "no_selected_slice":
 			return `Cannot block worker for session ${result.sessionId}: no selected slice in ${result.previousStateName}.`;
 		case "invalid_worker_output":
-			return `Cannot block worker for session ${result.sessionId}: ${formatIssues(result.issues)}`;
+			return `Cannot block worker for session ${result.sessionId}: ${formatPawCliValidationIssues(result.issues)}`;
 		case "worker_not_blocked":
 			return `Cannot block worker for session ${result.sessionId}: worker output status is ${result.workerStatus}, expected blocked or needs_user_decision.`;
 		case "invalid_blocked_reason":
-			return `Cannot block worker for session ${result.sessionId}: ${formatIssues(result.issues)}`;
+			return `Cannot block worker for session ${result.sessionId}: ${formatPawCliValidationIssues(result.issues)}`;
 		case "invalid_transition":
-			return `Cannot block worker for session ${result.sessionId} from ${result.previousStateName}: ${formatIssues(result.issues)}`;
+			return `Cannot block worker for session ${result.sessionId} from ${result.previousStateName}: ${formatPawCliValidationIssues(result.issues)}`;
 		case "not_locked":
 			return result.reason === "stale"
 				? `Cannot block worker for session ${result.sessionId}: session lock is stale (${result.staleReason ?? "unknown"}).`
@@ -374,20 +397,7 @@ function mapPawBlockWorkerResult(
 				lockReleased,
 			};
 		case "not_locked":
-			return blocked.reason === "stale"
-				? {
-						status: "not_locked",
-						sessionId,
-						reason: "stale",
-						staleReason: blocked.staleReason,
-						lockReleased,
-					}
-				: {
-						status: "not_locked",
-						sessionId,
-						reason: "unlocked",
-						lockReleased,
-					};
+			return mapPawNotLockedCommandFields(sessionId, blocked.reason, lockReleased, blocked.staleReason);
 		case "locked_by_other":
 			return {
 				status: "locked_by_other",
@@ -396,53 +406,6 @@ function mapPawBlockWorkerResult(
 				lockReleased,
 			};
 	}
-}
-
-type WorkerOutputReadResult =
-	| { kind: "missing" }
-	| { kind: "invalid"; issues: readonly PawValidationIssue[] }
-	| { kind: "ok"; value: PawSubAgentOutput };
-
-async function readWorkerOutputFile(outputFile: string): Promise<WorkerOutputReadResult> {
-	try {
-		const content = await readFile(outputFile, "utf-8");
-		const parsed = parsePawSubAgentOutputJson(content);
-		if (!parsed.ok) {
-			return { kind: "invalid", issues: parsed.issues };
-		}
-		return { kind: "ok", value: parsed.value };
-	} catch (error) {
-		if (isFileSystemError(error) && error.code === "ENOENT") {
-			return { kind: "missing" };
-		}
-		throw error;
-	}
-}
-
-async function isDirectory(path: string): Promise<boolean> {
-	try {
-		return (await stat(path)).isDirectory();
-	} catch (error) {
-		if (isFileSystemError(error) && error.code === "ENOENT") {
-			return false;
-		}
-		throw error;
-	}
-}
-
-async function isFile(path: string): Promise<boolean> {
-	try {
-		return (await stat(path)).isFile();
-	} catch (error) {
-		if (isFileSystemError(error) && error.code === "ENOENT") {
-			return false;
-		}
-		throw error;
-	}
-}
-
-function formatIssues(issues: readonly PawValidationIssue[]): string {
-	return issues.map((issue) => `${issue.path} ${issue.message}`).join("; ");
 }
 
 function printPawBlockWorkerHelp(): void {
@@ -463,76 +426,4 @@ Commands:
 function printPawBlockWorkerCommandError(message: string): void {
 	console.error(`Error: ${message}`);
 	process.exitCode = 1;
-}
-
-function readPawBlockWorkerSessionId(args: string[]): PawBlockWorkerParsedArgs | { sessionId: string } {
-	if (args.length === 0) {
-		return { kind: "error", message: `Missing required session id for "${BLOCK_WORKER_COMMAND_LABEL}".` };
-	}
-
-	const sessionId = args[0];
-	if (sessionId.startsWith("-")) {
-		return { kind: "error", message: `Missing required session id for "${BLOCK_WORKER_COMMAND_LABEL}".` };
-	}
-
-	return { sessionId };
-}
-
-function parsePawBlockWorkerOutputFile(args: string[]): PawBlockWorkerParsedArgs | { outputFile: string } {
-	let outputFile: string | undefined;
-	const seenScalarOptions = new Set<string>();
-
-	for (let index = 1; index < args.length; ) {
-		const arg = args[index];
-		if (arg === "--output-file") {
-			const scalarResult = readPawBlockWorkerScalarOption(arg, args, index, seenScalarOptions);
-			if ("kind" in scalarResult) {
-				return scalarResult;
-			}
-			outputFile = scalarResult.value;
-			index = scalarResult.nextIndex;
-			continue;
-		}
-
-		if (arg.startsWith("-")) {
-			return { kind: "error", message: `Unknown option for "${BLOCK_WORKER_COMMAND_LABEL}": ${arg}` };
-		}
-
-		return { kind: "error", message: `Unknown option for "${BLOCK_WORKER_COMMAND_LABEL}": ${arg}` };
-	}
-
-	if (outputFile === undefined) {
-		return { kind: "error", message: `Missing required option for "${BLOCK_WORKER_COMMAND_LABEL}": --output-file` };
-	}
-
-	return { outputFile };
-}
-
-function readPawBlockWorkerScalarOption(
-	optionName: string,
-	args: string[],
-	index: number,
-	seenScalarOptions: Set<string>,
-): PawBlockWorkerParsedArgs | { value: string; nextIndex: number } {
-	if (seenScalarOptions.has(optionName)) {
-		return { kind: "error", message: `Duplicate option for "${BLOCK_WORKER_COMMAND_LABEL}": ${optionName}` };
-	}
-	seenScalarOptions.add(optionName);
-	if (index + 1 >= args.length) {
-		return { kind: "error", message: `Missing value for "${BLOCK_WORKER_COMMAND_LABEL}" option: ${optionName}` };
-	}
-
-	const value = args[index + 1];
-	if (value.trim().length === 0) {
-		return {
-			kind: "error",
-			message: `Option ${optionName} for "${BLOCK_WORKER_COMMAND_LABEL}" must be a non-empty string.`,
-		};
-	}
-
-	return { value, nextIndex: index + 2 };
-}
-
-function isFileSystemError(error: unknown): error is FileSystemError {
-	return error instanceof Error;
 }
