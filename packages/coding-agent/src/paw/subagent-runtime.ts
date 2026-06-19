@@ -326,8 +326,19 @@ function createPawProviderSubAgentCompletionInput(
 }
 
 function createPawProviderSubAgentPrompt(invocation: PawSubAgentRuntimeInvocation): PawProviderSubAgentPrompt {
+	const skeleton = createPawProviderSubAgentOutputSkeleton(invocation);
 	return {
-		systemPrompt: `You are the Paw ${invocation.role} sub-agent. Return exactly one JSON object that satisfies the Paw sub-agent output contract.`,
+		systemPrompt: [
+			`You are the Paw ${invocation.role} sub-agent. Return exactly one JSON object that satisfies the Paw sub-agent output contract.`,
+			"Do not wrap the JSON in Markdown. Do not include reasoning, prose, comments, or code fences.",
+			"Required top-level fields: status, confidence, agent, session_id, slice_id, artifact_ref, changed_files, inspected_files, risks, next_actions, tokens_used, usd_cost, degraded, model_used.",
+			`For pass outputs, set agent exactly to ${JSON.stringify(invocation.role)}, confidence to one of "low", "medium", or "high", and use session_id/slice_id/artifact_ref exactly as provided.`,
+			"If no file was changed, return changed_files as an empty array rather than inventing edits.",
+			'When editing files, changed_files may include apply_method "full_file", base_content_hash, new_content, and content_hash. content_hash must be sha256:<hex> of new_content. Keep full_file rewrites within configured limits.',
+			'risks must be an array of objects shaped {"description": string, "severity": "low"|"medium"|"high"|"critical"}; never use strings in risks.',
+			"Use this exact JSON skeleton shape; update only arrays and explanatory strings when useful:",
+			JSON.stringify(skeleton),
+		].join("\n"),
 		userPrompt: [
 			`session_id: ${invocation.session_id}`,
 			`slice_id: ${invocation.slice_id ?? "null"}`,
@@ -336,6 +347,25 @@ function createPawProviderSubAgentPrompt(invocation: PawSubAgentRuntimeInvocatio
 			"handoff:",
 			invocation.handoff,
 		].join("\n"),
+	};
+}
+
+function createPawProviderSubAgentOutputSkeleton(invocation: PawSubAgentRuntimeInvocation): PawSubAgentOutput {
+	return {
+		status: "pass",
+		confidence: "medium",
+		agent: invocation.role,
+		session_id: invocation.session_id,
+		slice_id: invocation.slice_id,
+		artifact_ref: invocation.artifact_ref,
+		changed_files: [],
+		inspected_files: [],
+		risks: [],
+		next_actions: [],
+		tokens_used: 0,
+		usd_cost: 0,
+		degraded: false,
+		model_used: null,
 	};
 }
 

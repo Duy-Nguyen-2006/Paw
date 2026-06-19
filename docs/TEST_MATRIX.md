@@ -1,4 +1,3 @@
-
 # Test Matrix
 
 This file maps product behavior to proof. Do not mark a row implemented until

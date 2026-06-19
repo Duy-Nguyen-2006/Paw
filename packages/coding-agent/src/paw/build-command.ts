@@ -5,9 +5,15 @@ import { loadDefaultPawRuntimeConfig } from "./config.ts";
 import type { PawRuntimeConfig, PawValidationIssue } from "./contracts.ts";
 import { emitPawFinalReport } from "./final-report-emission.ts";
 import { getPawFailoverRoutes, resolvePawModelRoute } from "./model-routing.ts";
+import { createPawNativeVerificationEnvironment } from "./native-verification-env.ts";
 import type { PawVerifyGateDecision } from "./resilience-policy.ts";
 import { type PawReviewerOnceResult, runPawReviewerOnce } from "./reviewer-orchestrator.ts";
-import { acquirePawSessionLock, readPawSessionState, releasePawSessionLock } from "./session-store.ts";
+import {
+	acquirePawSessionLock,
+	readPawSessionState,
+	readPawVerificationEvidence,
+	releasePawSessionLock,
+} from "./session-store.ts";
 import {
 	createPawBeginImplementationCommandResult,
 	type PawBeginImplementationCommandResult,
@@ -28,6 +34,7 @@ import {
 import { createPawNativeSubprocessExecutor } from "./verification-executor.ts";
 import { createPawNativeVerificationPlan, type PawNativeVerificationPlanEntry } from "./verification-plan.ts";
 import type { PawNativeVerificationExecutor, PawNativeVerificationRunResult } from "./verification-runner.ts";
+import { mapPawNativeVerificationRunResults } from "./verification-runner.ts";
 import { createPawVerifyCommandResult, type PawVerifyCommandResult } from "./verify-command.ts";
 import { type PawWorkerOnceResult, runPawWorkerOnce } from "./worker-orchestrator.ts";
 
@@ -275,7 +282,12 @@ async function emitPawBuildLoopFinalReport(
 
 	let lockReleased = false;
 	try {
-		const verifyDecisions = collectPawBuildLoopVerifyDecisions(stepResults);
+		const persistedNativeVerificationRunResults = await readPawVerificationEvidence(repoRoot, sessionId);
+		const verifyDecisions = resolvePawBuildLoopVerifyDecisions(
+			stepResults,
+			loadDefaultPawRuntimeConfig(repoRoot),
+			persistedNativeVerificationRunResults,
+		);
 		const emission = await emitPawFinalReport({
 			repoRoot,
 			sessionId,
@@ -283,6 +295,7 @@ async function emitPawBuildLoopFinalReport(
 				summary: `Paw build completed ${stepResults.length} step(s) within max ${maxSteps}.`,
 				evidence: [`steps_run=${stepResults.length}`, `max_steps=${maxSteps}`, "stop_reason=no_pending_slices"],
 				verifyDecisions,
+				nativeVerificationRunResults: persistedNativeVerificationRunResults,
 			},
 			lockOptions: commandInput.lockOptions,
 		});
@@ -333,6 +346,18 @@ function formatPawBuildLoopResult(result: PawBuildLoopResult): string {
 		);
 	}
 	return lines.join("\n");
+}
+
+function resolvePawBuildLoopVerifyDecisions(
+	stepResults: readonly PawBuildStepResult[],
+	config: PawRuntimeConfig,
+	persistedNativeVerificationRunResults: readonly PawNativeVerificationRunResult[],
+): PawVerifyGateDecision[] {
+	const stepDecisions = collectPawBuildLoopVerifyDecisions(stepResults);
+	if (stepDecisions.length > 0 || persistedNativeVerificationRunResults.length === 0) {
+		return stepDecisions;
+	}
+	return mapPawNativeVerificationRunResults(persistedNativeVerificationRunResults, config.verify);
 }
 
 function formatPawBuildVerifyCompletedResult(
@@ -587,10 +612,13 @@ function resolvePawBuildNativeVerificationExecutor(
 	if (input.native !== true) {
 		return undefined;
 	}
-	const plan = createPawNativeVerificationPlan(config.verify.v1_gates);
+	const plan = createPawNativeVerificationPlan(config.verify.v1_gates, { repoRoot });
 	const policy = createPawNativeVerificationCommandPolicy(plan);
 	return createPawPolicyCheckedNativeVerificationExecutor(
-		createPawNativeSubprocessExecutor({ cwd: repoRoot }),
+		createPawNativeSubprocessExecutor({
+			cwd: repoRoot,
+			env: createPawNativeVerificationEnvironment(process.env, repoRoot),
+		}),
 		policy,
 	);
 }

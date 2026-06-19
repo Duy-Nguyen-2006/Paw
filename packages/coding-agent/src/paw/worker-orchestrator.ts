@@ -228,6 +228,7 @@ export async function runPawWorkerOnce(input: PawWorkerOnceInput): Promise<PawWo
 				repoRoot: input.repoRoot,
 				sessionId: input.sessionId,
 				workerOutput: output,
+				config: input.config,
 				lockOptions: input.lockOptions,
 				timestamp: input.timestamp,
 			});

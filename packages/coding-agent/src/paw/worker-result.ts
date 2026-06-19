@@ -1,5 +1,6 @@
 import { hostname } from "node:os";
-import type { PawSubAgentOutput, PawValidationIssue } from "./contracts.ts";
+import type { PawRuntimeConfig, PawSubAgentOutput, PawValidationIssue } from "./contracts.ts";
+import { applyPawWorkerOutputPatches, type PawAppliedPatchChange } from "./patch-apply.ts";
 import type { PawSessionLock, PawSessionLockOptions, PawSessionLockStaleReason } from "./session-store.ts";
 import { getPawSessionLockStatus, readPawSessionState, writePawSessionState } from "./session-store.ts";
 import { appendPawSliceJournalEntry, type PawSliceJournalEntry } from "./slice-journal.ts";
@@ -10,6 +11,7 @@ export interface PawWorkerPassInput {
 	repoRoot: string;
 	sessionId: string;
 	workerOutput: PawSubAgentOutput;
+	config?: PawRuntimeConfig;
 	lockOptions?: PawSessionLockOptions;
 	timestamp?: string;
 }
@@ -31,6 +33,7 @@ export interface PawWorkerPassCompletedResult {
 	nextState: PawSessionState;
 	workerOutput: PawSubAgentOutput;
 	journalEntries: PawSliceJournalEntry[];
+	appliedChanges: PawAppliedPatchChange[];
 }
 
 export type PawWorkerPassNotLockedResult =
@@ -158,6 +161,24 @@ export async function completePawWorkerPass(input: PawWorkerPassInput): Promise<
 		};
 	}
 
+	let appliedChanges: PawAppliedPatchChange[] = [];
+	if (input.config !== undefined) {
+		const patchResult = await applyPawWorkerOutputPatches({
+			repoRoot: input.repoRoot,
+			config: input.config,
+			workerOutput: input.workerOutput,
+		});
+		appliedChanges = patchResult.appliedChanges;
+		if (patchResult.status === "blocked") {
+			return {
+				status: "invalid_worker_output",
+				previousState,
+				workerOutput: input.workerOutput,
+				issues: patchResult.issues,
+			};
+		}
+	}
+
 	const transitioned = transitionPawSessionState(previousState, { to: "REVIEWING" });
 	if (!transitioned.ok) {
 		return {
@@ -195,6 +216,7 @@ export async function completePawWorkerPass(input: PawWorkerPassInput): Promise<
 		nextState: transitioned.value,
 		workerOutput: input.workerOutput,
 		journalEntries,
+		appliedChanges,
 	};
 }
 

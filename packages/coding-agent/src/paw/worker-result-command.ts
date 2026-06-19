@@ -1,7 +1,7 @@
 import { readFile, stat } from "node:fs/promises";
 import { relative } from "node:path";
 import { APP_NAME } from "../config.ts";
-import type { PawSubAgentOutput, PawValidationIssue } from "./contracts.ts";
+import type { PawRuntimeConfig, PawSubAgentOutput, PawValidationIssue } from "./contracts.ts";
 import { resolvePawProjectPaths } from "./persistence.ts";
 import {
 	acquirePawSessionLock,
@@ -31,6 +31,7 @@ export type PawCompleteWorkerCommandResult =
 	| PawCompleteWorkerCommandLockedByOtherResult;
 
 export interface PawCompleteWorkerCommandInput {
+	config?: PawRuntimeConfig;
 	lockOptions?: PawSessionLockOptions;
 }
 
@@ -273,6 +274,7 @@ export async function createPawCompleteWorkerCommandResult(
 		repoRoot,
 		sessionId,
 		workerOutput: outputRead.value,
+		config: commandInput.config,
 		lockOptions: commandInput.lockOptions,
 		timestamp: input.timestamp,
 	});

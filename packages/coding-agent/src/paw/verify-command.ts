@@ -3,6 +3,7 @@ import { relative } from "node:path";
 import { APP_NAME } from "../config.ts";
 import { loadDefaultPawRuntimeConfig } from "./config.ts";
 import type { PawValidationIssue } from "./contracts.ts";
+import { createPawNativeVerificationEnvironment } from "./native-verification-env.ts";
 import { resolvePawProjectPaths } from "./persistence.ts";
 import { evaluatePawVerifyGate, type PawVerifyGateDecision } from "./resilience-policy.ts";
 import {
@@ -120,7 +121,7 @@ export async function createPawVerifyCommandResult(
 	}
 
 	const runtimeConfig = loadDefaultPawRuntimeConfig(repoRoot);
-	const nativeVerificationPlan = createPawNativeVerificationPlan(runtimeConfig.verify.v1_gates);
+	const nativeVerificationPlan = createPawNativeVerificationPlan(runtimeConfig.verify.v1_gates, { repoRoot });
 
 	let lockReleased = false;
 	try {
@@ -292,10 +293,13 @@ export async function runPawVerifyCommand(args: string[]): Promise<void> {
 		? (() => {
 				const repoRoot = process.cwd();
 				const runtimeConfig = loadDefaultPawRuntimeConfig(repoRoot);
-				const plan = createPawNativeVerificationPlan(runtimeConfig.verify.v1_gates);
+				const plan = createPawNativeVerificationPlan(runtimeConfig.verify.v1_gates, { repoRoot });
 				const policy = createPawNativeVerificationCommandPolicy(plan);
 				return createPawPolicyCheckedNativeVerificationExecutor(
-					createPawNativeSubprocessExecutor({ cwd: repoRoot }),
+					createPawNativeSubprocessExecutor({
+						cwd: repoRoot,
+						env: createPawNativeVerificationEnvironment(process.env, repoRoot),
+					}),
 					policy,
 				);
 			})()

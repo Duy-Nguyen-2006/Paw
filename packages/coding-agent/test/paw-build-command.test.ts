@@ -270,11 +270,7 @@ async function createTempAgentDir(): Promise<string> {
 	return agentDir;
 }
 
-async function writeModelsJson(
-	agentDir: string,
-	provider = "primary",
-	models = ["<configured-mid-model>", "<configured-strong-model>"],
-): Promise<void> {
+async function writeModelsJson(agentDir: string, provider = "primary", models = ["MiniMax-M3"]): Promise<void> {
 	await writeFile(
 		join(agentDir, "models.json"),
 		JSON.stringify(
@@ -955,7 +951,9 @@ describe("Paw build command", () => {
 			native: true,
 		});
 
-		expect(verificationExecutorModule.createPawNativeSubprocessExecutor).toHaveBeenCalledWith({ cwd: projectRoot });
+		expect(verificationExecutorModule.createPawNativeSubprocessExecutor).toHaveBeenCalledWith(
+			expect.objectContaining({ cwd: projectRoot }),
+		);
 		expect(subprocessCalls.length).toBeGreaterThan(0);
 		expect(result.status).toBe("completed");
 		if (result.status !== "completed" || !("verifyDecisions" in result)) return;
@@ -1089,7 +1087,7 @@ describe("Paw build command", () => {
 		expect(result.previousStateName).toBe("IMPLEMENTING");
 		expect(result.nextStateName).toBe("REVIEWING");
 		expect(completeCalls).toHaveLength(1);
-		expect(completeCalls[0]?.modelId).toBe("<configured-mid-model>");
+		expect(completeCalls[0]?.modelId).toBe("MiniMax-M3");
 		expect(completeCalls[0]?.context.systemPrompt).toContain("Paw worker sub-agent");
 		expect(completeCalls[0]?.context.messages[0]?.content).toContain("session_id: session-1");
 		expect(completeCalls[0]?.options).toEqual({
@@ -1133,7 +1131,7 @@ describe("Paw build command", () => {
 		expect(result.previousStateName).toBe("REVIEWING");
 		expect(result.nextStateName).toBe("VERIFYING");
 		expect(completeCalls).toHaveLength(1);
-		expect(completeCalls[0]?.modelId).toBe("<configured-strong-model>");
+		expect(completeCalls[0]?.modelId).toBe("MiniMax-M3");
 		expect(completeCalls[0]?.context.systemPrompt).toContain("Paw reviewer sub-agent");
 		await expect(readPawSessionState(projectRoot, "session-1")).resolves.toMatchObject({ name: "VERIFYING" });
 	});
@@ -1353,7 +1351,7 @@ describe("Paw build command", () => {
 		expect(result.status).toBe("blocked");
 		if (result.status !== "blocked") return;
 		expect(result.blockedReasonCode).toBe("PROVIDER_UNAVAILABLE");
-		expect(result.blockedReasonMessage).toContain("secondary/<configured-mid-model>");
+		expect(result.blockedReasonMessage).toContain("secondary/MiniMax-M3");
 	});
 
 	test("default build executor selects failover provider after provider failure", async () => {
@@ -1396,7 +1394,7 @@ describe("Paw build command", () => {
 		);
 
 		expect(result.status).toBe("completed");
-		expect(seenModels).toEqual(["primary/<configured-mid-model>", "secondary/<configured-mid-model>"]);
+		expect(seenModels).toEqual(["primary/MiniMax-M3", "secondary/MiniMax-M3"]);
 	});
 
 	test("routes paw build and validates command arguments", async () => {

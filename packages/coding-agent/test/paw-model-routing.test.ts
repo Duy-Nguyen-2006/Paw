@@ -26,7 +26,7 @@ describe("Paw model routing policy", () => {
 			tierName: "cheap",
 			providerName: "primary",
 			provider: config.providers.primary,
-			model: "<configured-fast-model>",
+			model: "MiniMax-M3",
 			thinking: false,
 		});
 	});
@@ -40,7 +40,7 @@ describe("Paw model routing policy", () => {
 			tierName: "mid",
 			providerName: "primary",
 			provider: config.providers.primary,
-			model: "<configured-mid-model>",
+			model: "MiniMax-M3",
 			thinking: false,
 		});
 	});
@@ -50,7 +50,7 @@ describe("Paw model routing policy", () => {
 
 		expect(resolvePawModelRoute(config, "planner", "high_risk")).toMatchObject({
 			tierName: "strong",
-			model: "<configured-strong-model>",
+			model: "MiniMax-M3",
 			thinking: true,
 		});
 	});

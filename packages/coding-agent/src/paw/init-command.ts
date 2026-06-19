@@ -4,6 +4,7 @@ import { runPawBuildCommand } from "./build-command.ts";
 import { runPawCleanCommand } from "./clean-command.ts";
 import { loadDefaultPawRuntimeConfig } from "./config.ts";
 import { runPawDoctorCommand } from "./doctor-command.ts";
+import { runPawEvalLiveCommand } from "./eval-live-command.ts";
 import { runPawFinalizeCommand } from "./finalize-command.ts";
 import { initializePawProject } from "./persistence.ts";
 import { runPawApprovePlanCommand } from "./plan-approval-command.ts";
@@ -46,6 +47,7 @@ function printPawHelp(): void {
   ${APP_NAME} paw report <session-id>
   ${APP_NAME} paw clean --dry-run
   ${APP_NAME} paw doctor
+  ${APP_NAME} paw eval-live --repo <url-or-path> [--repo <url-or-path>...] [--install]
 
 Run bounded Paw project commands.
 
@@ -93,6 +95,7 @@ Commands:
   ${APP_NAME} paw clean --help  Show clean help
   ${APP_NAME} paw doctor        Show read-only sandbox diagnostics
   ${APP_NAME} paw doctor --help Show doctor help
+  ${APP_NAME} paw eval-live --repo <url-or-path> Run live full-slice validation on real repos
 `);
 }
 
@@ -161,6 +164,9 @@ type PawSubcommandHandler = (rest: string[]) => Promise<void>;
 const PAW_SUBCOMMAND_HANDLERS: Record<string, PawSubcommandHandler> = {
 	init: handlePawInit,
 	doctor: handlePawDoctor,
+	"eval-live": async (rest) => {
+		await runPawEvalLiveCommand(rest);
+	},
 	status: handlePawStatus,
 	report: async (rest) => {
 		await runPawReportCommand(rest);

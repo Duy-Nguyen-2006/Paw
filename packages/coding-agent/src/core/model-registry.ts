@@ -259,6 +259,18 @@ function emptyCustomModelsResult(error?: string): CustomModelsResult {
 	return { models: [], overrides: new Map(), modelOverrides: new Map(), error };
 }
 
+const PAW_PROVIDER_A_NAME = "primary";
+const PAW_PROVIDER_A_KEY_CONFIG = "$" + "{PAW_PROVIDER_A_KEY}";
+
+function createPawProviderABuiltInModels(): Model<Api>[] {
+	const minimaxModels = getModels("minimax" as KnownProvider) as Model<Api>[];
+	return minimaxModels.map((model) => ({
+		...model,
+		provider: PAW_PROVIDER_A_NAME,
+		baseUrl: process.env.PAW_PROVIDER_A_URL ?? model.baseUrl,
+	}));
+}
+
 function mergeCompat(
 	baseCompat: Model<Api>["compat"],
 	overrideCompat: ModelOverride["compat"],
@@ -394,6 +406,11 @@ export class ModelRegistry {
 
 		const builtInModels = this.loadBuiltInModels(overrides, modelOverrides);
 		let combined = this.mergeCustomModels(builtInModels, customModels);
+		combined = this.mergeCustomModels(combined, createPawProviderABuiltInModels());
+
+		this.storeProviderRequestConfig(PAW_PROVIDER_A_NAME, {
+			apiKey: PAW_PROVIDER_A_KEY_CONFIG,
+		});
 
 		// Let OAuth providers modify their models (e.g., update baseUrl)
 		for (const oauthProvider of this.authStorage.getOAuthProviders()) {

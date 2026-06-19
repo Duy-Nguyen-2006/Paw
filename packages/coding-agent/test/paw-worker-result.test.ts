@@ -1,10 +1,12 @@
 import { existsSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 import {
 	completePawWorkerPass,
+	hashPawPatchContent,
+	loadDefaultPawRuntimeConfig,
 	type PawSessionLock,
 	type PawSessionState,
 	type PawSubAgentOutput,
@@ -16,6 +18,7 @@ import {
 } from "../src/paw/index.ts";
 
 const tempRoots: string[] = [];
+const sourceRoot = join(import.meta.dirname, "..", "..", "..");
 
 async function createTempRepo(): Promise<string> {
 	const root = await mkdtemp(join(tmpdir(), "paw-worker-result-"));
@@ -154,6 +157,41 @@ describe("completePawWorkerPass", () => {
 		expect(existsSync(paths.sliceJournalFile)).toBe(false);
 		await expect(readPawSliceJournal(repoRoot, "session-1")).resolves.toEqual([]);
 		await expect(readPawSessionState(repoRoot, "session-1")).resolves.toEqual(result.nextState);
+	});
+
+	test("applies declared full-file worker patches before advancing to REVIEWING", async () => {
+		const repoRoot = await createTempRepo();
+		await mkdir(join(repoRoot, "src"), { recursive: true });
+		await writeFile(join(repoRoot, "src/a.ts"), "before\n", "utf-8");
+		const state = createImplementingState("session-1", "slice-1");
+		await writePawSessionState(repoRoot, state);
+		await writeCurrentLock(repoRoot, "session-1", 1_000);
+		const next = "after\n";
+
+		const result = await completePawWorkerPass({
+			repoRoot,
+			sessionId: "session-1",
+			config: loadDefaultPawRuntimeConfig(sourceRoot),
+			workerOutput: createWorkerOutput({
+				changed_files: [
+					{
+						path: "src/a.ts",
+						change_type: "modify",
+						apply_method: "full_file",
+						base_content_hash: hashPawPatchContent("before\n"),
+						content_hash: hashPawPatchContent(next),
+						new_content: next,
+					},
+				],
+			}),
+			lockOptions: { nowMs: 2_000, ttlSec: 120 },
+			timestamp: "2026-06-16T00:00:00.000Z",
+		});
+
+		expect(result.status).toBe("completed");
+		if (result.status !== "completed") return;
+		expect(result.appliedChanges).toHaveLength(1);
+		expect(await readFile(join(repoRoot, "src/a.ts"), "utf-8")).toBe(next);
 	});
 
 	test("returns not_locked for missing and stale locks without writing state or journal", async () => {

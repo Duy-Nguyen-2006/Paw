@@ -27,7 +27,6 @@ harness.db
 test_reports/
 
 # --- generated review packs ---
-repomix-output*.xml
 docs/repomix-senior-review*.md
 repo.xml
 

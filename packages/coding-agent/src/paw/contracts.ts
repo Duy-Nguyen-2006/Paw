@@ -384,6 +384,9 @@ const ChangedFileSchema = Type.Object(
 		apply_method: Type.Optional(
 			Type.Union([Type.Literal("diff"), Type.Literal("fuzzy_diff"), Type.Literal("full_file")]),
 		),
+		base_content_hash: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+		new_content: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+		unified_diff: Type.Optional(Type.String()),
 	},
 	{ additionalProperties: false },
 );

@@ -1,4 +1,3 @@
-
 # Paw — default runtime configuration (v0.4 FINAL)
 # Single source of runtime defaults. Numbers are adaptive starting defaults
 # tuned by the eval harness (SPEC §19). Model names are NEVER hardcoded in code;
@@ -16,9 +15,9 @@ providers:
   local:     { adapter: ollama, base_url: "http://localhost:11434", optional: true }
 
 model_tiers:
-  cheap:  { provider: primary,   model: "<configured-fast-model>",     thinking: false }
-  mid:    { provider: primary,   model: "<configured-mid-model>",      thinking: false }
-  strong: { provider: primary,   model: "<configured-strong-model>",   thinking: true  }
+  cheap:  { provider: primary,   model: "MiniMax-M3", thinking: false }
+  mid:    { provider: primary,   model: "MiniMax-M3", thinking: false }
+  strong: { provider: primary,   model: "MiniMax-M3", thinking: true  }
   # failover targets, tried in order on 429/5xx after retries (sets degraded=true on lower tier)
   failover_order: [ secondary, local ]
 

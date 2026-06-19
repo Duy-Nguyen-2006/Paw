@@ -133,6 +133,20 @@ export type {
 } from "./edit-policy.ts";
 export { evaluatePawEditIdempotency, evaluatePawNextEditAttempt } from "./edit-policy.ts";
 export type {
+	PawEvalLiveCommandInput,
+	PawEvalLiveCommandResult,
+	PawEvalLiveCommandRunner,
+	PawEvalLiveParsedArgs,
+	PawEvalLiveParsedInput,
+	PawEvalLiveRepoResult,
+} from "./eval-live-command.ts";
+export {
+	createPawEvalLiveCommandResult,
+	formatPawEvalLiveCommandResult,
+	parsePawEvalLiveArgs,
+	runPawEvalLiveCommand,
+} from "./eval-live-command.ts";
+export type {
 	PawFinalReport,
 	PawFinalReportInput,
 	PawFinalReportRisk,
@@ -187,6 +201,8 @@ export {
 	isPawThinkingEnabled,
 	resolvePawModelRoute,
 } from "./model-routing.ts";
+export type { PawAppliedPatchChange, PawPatchApplyInput, PawPatchApplyResult } from "./patch-apply.ts";
+export { applyPawWorkerOutputPatches, hashPawPatchContent } from "./patch-apply.ts";
 export type { PawAtomicWriteOptions, PawInitResult, PawProjectPaths } from "./persistence.ts";
 export {
 	initializePawProject,

@@ -40,14 +40,37 @@ function getSubAgentConditionalIssues(input: unknown): PawValidationIssue[] {
 }
 
 export function validatePawSubAgentOutput(input: unknown): PawValidationResult<PawSubAgentOutput> {
-	const issues = validateSubAgentOutput.Check(input) ? [] : formatTypeboxIssues(validateSubAgentOutput.Errors(input));
+	const normalized = normalizePawSubAgentOutputCandidate(input);
+	const issues = validateSubAgentOutput.Check(normalized)
+		? []
+		: formatTypeboxIssues(validateSubAgentOutput.Errors(normalized));
 	issues.push(...getSubAgentConditionalIssues(input));
 
 	if (issues.length > 0) {
 		return { ok: false, issues };
 	}
 
-	return { ok: true, value: input as PawSubAgentOutput };
+	return { ok: true, value: normalized as PawSubAgentOutput };
+}
+
+function normalizePawSubAgentOutputCandidate(input: unknown): unknown {
+	if (!isRecord(input)) {
+		return input;
+	}
+	const normalized: Record<string, unknown> = { ...input };
+	if (typeof normalized.confidence === "number") {
+		const confidence = normalized.confidence;
+		normalized.confidence = confidence >= 0.75 ? "high" : confidence >= 0.4 ? "medium" : "low";
+	}
+	if (Array.isArray(normalized.risks)) {
+		normalized.risks = normalized.risks.map((risk) => {
+			if (typeof risk === "string") {
+				return { description: risk, severity: "medium" };
+			}
+			return risk;
+		});
+	}
+	return normalized;
 }
 
 export function parsePawSubAgentOutputJson(content: string): PawValidationResult<PawSubAgentOutput> {

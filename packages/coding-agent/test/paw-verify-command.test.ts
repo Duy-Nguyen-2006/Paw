@@ -90,14 +90,16 @@ describe("Paw verify command", () => {
 		expect(result.currentSliceId).toBe("slice-1");
 		expect(result.nativeVerificationPlan.find((entry) => entry.gate === "unit_tests")).toMatchObject({
 			status: "planned",
-			command: ["./test.sh"],
+			command: ["node", "-e", expect.any(String)],
 			executed: false,
 		});
 		expect(result.verifyDecisions.length).toBeGreaterThan(0);
 		expect(result.verifyDecisions.every((decision) => decision.status === "unverified")).toBe(true);
 		expect(result.unverifiedDecisions.map((decision) => decision.gate)).toContain("unit_tests");
 		expect(result.unverifiedDecisions.find((decision) => decision.gate === "unit_tests")).toMatchObject({
-			reason: "Native verification command is planned but not executed in this foundation slice: ./test.sh.",
+			reason: expect.stringContaining(
+				"Native verification command will execute through the native subprocess runner",
+			),
 		});
 		expect(result.lockReleased).toBe(true);
 		expect(formatPawVerifyCommandResult(result)).toContain("status: completed_with_unverified");
@@ -478,7 +480,9 @@ describe("runPawVerifyCommand --native wiring", () => {
 
 		await runPawVerifyCommand(["session-wired", "--native"]);
 
-		expect(verificationExecutorModule.createPawNativeSubprocessExecutor).toHaveBeenCalledWith({ cwd: projectRoot });
+		expect(verificationExecutorModule.createPawNativeSubprocessExecutor).toHaveBeenCalledWith(
+			expect.objectContaining({ cwd: projectRoot }),
+		);
 		expect(policySpy).toHaveBeenCalledOnce();
 		// Policy is derived from a plan with at least one planned entry
 		const planArg = policySpy.mock.calls[0][0];
