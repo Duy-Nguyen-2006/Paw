@@ -59,7 +59,7 @@ import {
 	getShareViewerUrl,
 	VERSION,
 } from "../../config.ts";
-import { type AgentSession, type AgentSessionEvent, parseSkillBlock } from "../../core/agent-session.ts";
+import type { AgentSession, AgentSessionEvent } from "../../core/agent-session.ts";
 import { type AgentSessionRuntime, SessionImportFileNotFoundError } from "../../core/agent-session-runtime.ts";
 import type {
 	AutocompleteProviderFactory,
@@ -100,11 +100,9 @@ import { ArminComponent } from "./components/armin.ts";
 import { AssistantMessageComponent } from "./components/assistant-message.ts";
 import { BashExecutionComponent } from "./components/bash-execution.ts";
 import { BorderedLoader } from "./components/bordered-loader.ts";
-import { BranchSummaryMessageComponent } from "./components/branch-summary-message.ts";
-import { CompactionSummaryMessageComponent } from "./components/compaction-summary-message.ts";
+
 import { CountdownTimer } from "./components/countdown-timer.ts";
 import { CustomEditor } from "./components/custom-editor.ts";
-import { CustomMessageComponent } from "./components/custom-message.ts";
 import { DaxnutsComponent } from "./components/daxnuts.ts";
 import { DynamicBorder } from "./components/dynamic-border.ts";
 import { EarendilAnnouncementComponent } from "./components/earendil-announcement.ts";
@@ -119,13 +117,13 @@ import { type AuthSelectorProvider, OAuthSelectorComponent } from "./components/
 import { ScopedModelsSelectorComponent } from "./components/scoped-models-selector.ts";
 import { SessionSelectorComponent } from "./components/session-selector.ts";
 import { SettingsSelectorComponent } from "./components/settings-selector.ts";
-import { SkillInvocationMessageComponent } from "./components/skill-invocation-message.ts";
 import { ToolExecutionComponent } from "./components/tool-execution.ts";
 import { TreeSelectorComponent } from "./components/tree-selector.ts";
 import { TrustSelectorComponent } from "./components/trust-selector.ts";
-import { UserMessageComponent } from "./components/user-message.ts";
 import { UserMessageSelectorComponent } from "./components/user-message-selector.ts";
+import { dispatchInteractiveAgentEvent } from "./interactive-agent-events.ts";
 import { buildInteractiveBuiltinSlashActions } from "./interactive-builtin-slash-actions.ts";
+import { addAgentMessageToChat } from "./interactive-chat-messages.ts";
 import { showLoadedResourcesInChat } from "./interactive-loaded-resources.ts";
 import {
 	buildScopeGroups,
@@ -145,9 +143,10 @@ import {
 	isPackageSource,
 	resolveLocalSourceInfo,
 } from "./interactive-resource-display.ts";
+import { renderInteractiveSessionContext } from "./interactive-session-context-render.ts";
 import { buildSettingsSelectorCallbacks, buildSettingsSelectorConfig } from "./interactive-settings-selector.ts";
 import { matchBuiltinSlashCommand, runSlashCommandAction } from "./interactive-slash-dispatch.ts";
-import { resolveTreeNavigationSummary } from "./interactive-tree-navigation.ts";
+import { runInteractiveTreeNavigation, treeNavigationNoOpStatus } from "./interactive-tree-selector.ts";
 import {
 	detectTerminalBackgroundTheme,
 	getAvailableThemesWithPaths,
@@ -2502,78 +2501,59 @@ export class InteractiveMode {
 
 		this.footer.invalidate();
 
-		switch (event.type) {
-			case "agent_start":
-				this.onAgentEventAgentStart();
-				break;
-			case "queue_update":
+		await dispatchInteractiveAgentEvent(event, {
+			onAgentStart: () => this.onAgentEventAgentStart(),
+			onQueueUpdate: () => {
 				this.updatePendingMessagesDisplay();
 				this.ui.requestRender();
-				break;
-			case "session_info_changed":
+			},
+			onSessionInfoChanged: () => {
 				this.updateTerminalTitle();
 				this.footer.invalidate();
 				this.ui.requestRender();
-				break;
-			case "thinking_level_changed":
+			},
+			onThinkingLevelChanged: () => {
 				this.footer.invalidate();
 				this.updateEditorBorderColor();
-				break;
-			case "message_start":
-				this.onAgentEventMessageStart(event);
-				break;
-			case "message_update":
-				this.onAgentEventMessageUpdate(event);
-				break;
-			case "message_end":
-				this.onAgentEventMessageEnd(event);
-				break;
-			case "tool_execution_start":
-				this.onAgentEventToolExecutionStart(event);
-				break;
-			case "tool_execution_update": {
-				const component = this.pendingTools.get(event.toolCallId);
+			},
+			onMessageStart: (e) => this.onAgentEventMessageStart(e),
+			onMessageUpdate: (e) => this.onAgentEventMessageUpdate(e),
+			onMessageEnd: (e) => this.onAgentEventMessageEnd(e),
+			onToolExecutionStart: (e) => this.onAgentEventToolExecutionStart(e),
+			onToolExecutionUpdate: (e) => {
+				const component = this.pendingTools.get(e.toolCallId);
 				if (component) {
-					component.updateResult({ ...event.partialResult, isError: false }, true);
+					component.updateResult({ ...e.partialResult, isError: false }, true);
 					this.ui.requestRender();
 				}
-				break;
-			}
-			case "tool_execution_end": {
-				const component = this.pendingTools.get(event.toolCallId);
+			},
+			onToolExecutionEnd: (e) => {
+				const component = this.pendingTools.get(e.toolCallId);
 				if (component) {
-					component.updateResult({ ...event.result, isError: event.isError });
-					this.pendingTools.delete(event.toolCallId);
+					component.updateResult({ ...e.result, isError: e.isError });
+					this.pendingTools.delete(e.toolCallId);
 					this.ui.requestRender();
 				}
-				break;
-			}
-			case "agent_end":
-				await this.onAgentEventAgentEnd();
-				break;
-			case "compaction_start":
-				this.onAgentEventCompactionStart(event);
-				break;
-			case "compaction_end":
-				this.onAgentEventCompactionEnd(event);
-				break;
-			case "auto_retry_start":
-				this.onAgentEventAutoRetryStart(event);
-				break;
-			case "auto_retry_end":
-				this.onAgentEventAutoRetryEnd(event);
-				break;
-		}
+			},
+			onAgentEnd: () => this.onAgentEventAgentEnd(),
+			onCompactionStart: (e) => this.onAgentEventCompactionStart(e),
+			onCompactionEnd: (e) => this.onAgentEventCompactionEnd(e),
+			onAutoRetryStart: (e) => this.onAgentEventAutoRetryStart(e),
+			onAutoRetryEnd: (e) => this.onAgentEventAutoRetryEnd(e),
+		});
 	}
 
-	/** Extract text content from a user message */
-	private getUserMessageText(message: Message): string {
-		if (message.role !== "user") return "";
-		const textBlocks =
-			typeof message.content === "string"
-				? [{ type: "text", text: message.content }]
-				: message.content.filter((c: { type: string }) => c.type === "text");
-		return textBlocks.map((c) => (c as { text: string }).text).join("");
+	private buildAddMessageToChatDeps() {
+		return {
+			chatContainer: this.chatContainer,
+			session: this.session,
+			editor: this.editor,
+			toolOutputExpanded: this.toolOutputExpanded,
+			hideThinkingBlock: this.hideThinkingBlock,
+			hiddenThinkingLabel: this.hiddenThinkingLabel,
+			getMarkdownTheme: () => this.getMarkdownThemeWithSettings(),
+			ui: this.ui,
+		};
 	}
 
 	/**
@@ -2602,94 +2582,8 @@ export class InteractiveMode {
 		this.ui.requestRender();
 	}
 
-	private addBashExecutionMessageToChat(message: Extract<AgentMessage, { role: "bashExecution" }>): void {
-		const component = new BashExecutionComponent(message.command, this.ui, message.excludeFromContext);
-		if (message.output) {
-			component.appendOutput(message.output);
-		}
-		component.setComplete(
-			message.exitCode,
-			message.cancelled,
-			message.truncated ? ({ truncated: true } as TruncationResult) : undefined,
-			message.fullOutputPath,
-		);
-		this.chatContainer.addChild(component);
-	}
-
-	private addUserMessageToChat(message: Extract<AgentMessage, { role: "user" }>, populateHistory?: boolean): void {
-		const textContent = this.getUserMessageText(message);
-		if (!textContent) {
-			return;
-		}
-		if (this.chatContainer.children.length > 0) {
-			this.chatContainer.addChild(new Spacer(1));
-		}
-		const skillBlock = parseSkillBlock(textContent);
-		if (skillBlock) {
-			const component = new SkillInvocationMessageComponent(skillBlock, this.getMarkdownThemeWithSettings());
-			component.setExpanded(this.toolOutputExpanded);
-			this.chatContainer.addChild(component);
-			if (skillBlock.userMessage) {
-				this.chatContainer.addChild(new Spacer(1));
-				const userComponent = new UserMessageComponent(skillBlock.userMessage, this.getMarkdownThemeWithSettings());
-				this.chatContainer.addChild(userComponent);
-			}
-		} else {
-			const userComponent = new UserMessageComponent(textContent, this.getMarkdownThemeWithSettings());
-			this.chatContainer.addChild(userComponent);
-		}
-		if (populateHistory) {
-			this.editor.addToHistory?.(textContent);
-		}
-	}
-
 	private addMessageToChat(message: AgentMessage, options?: { populateHistory?: boolean }): void {
-		switch (message.role) {
-			case "bashExecution":
-				this.addBashExecutionMessageToChat(message);
-				break;
-			case "custom": {
-				if (message.display) {
-					const renderer = this.session.extensionRunner.getMessageRenderer(message.customType);
-					const component = new CustomMessageComponent(message, renderer, this.getMarkdownThemeWithSettings());
-					component.setExpanded(this.toolOutputExpanded);
-					this.chatContainer.addChild(component);
-				}
-				break;
-			}
-			case "compactionSummary": {
-				this.chatContainer.addChild(new Spacer(1));
-				const component = new CompactionSummaryMessageComponent(message, this.getMarkdownThemeWithSettings());
-				component.setExpanded(this.toolOutputExpanded);
-				this.chatContainer.addChild(component);
-				break;
-			}
-			case "branchSummary": {
-				this.chatContainer.addChild(new Spacer(1));
-				const component = new BranchSummaryMessageComponent(message, this.getMarkdownThemeWithSettings());
-				component.setExpanded(this.toolOutputExpanded);
-				this.chatContainer.addChild(component);
-				break;
-			}
-			case "user":
-				this.addUserMessageToChat(message, options?.populateHistory);
-				break;
-			case "assistant": {
-				const assistantComponent = new AssistantMessageComponent(
-					message,
-					this.hideThinkingBlock,
-					this.getMarkdownThemeWithSettings(),
-					this.hiddenThinkingLabel,
-				);
-				this.chatContainer.addChild(assistantComponent);
-				break;
-			}
-			case "toolResult":
-				break;
-			default: {
-				const _exhaustive: never = message;
-			}
-		}
+		addAgentMessageToChat(message, this.buildAddMessageToChatDeps(), options);
 	}
 
 	/**
@@ -2702,70 +2596,22 @@ export class InteractiveMode {
 		sessionContext: SessionContext,
 		options: { updateFooter?: boolean; populateHistory?: boolean } = {},
 	): void {
-		this.pendingTools.clear();
-		const renderedPendingTools = new Map<string, ToolExecutionComponent>();
-
-		if (options.updateFooter) {
-			this.footer.invalidate();
-			this.updateEditorBorderColor();
-		}
-
-		for (const message of sessionContext.messages) {
-			// Assistant messages need special handling for tool calls
-			if (message.role === "assistant") {
-				this.addMessageToChat(message);
-				// Render tool call components
-				for (const content of message.content) {
-					if (content.type === "toolCall") {
-						const component = new ToolExecutionComponent(
-							content.name,
-							content.id,
-							content.arguments,
-							{
-								showImages: this.settingsManager.getShowImages(),
-								imageWidthCells: this.settingsManager.getImageWidthCells(),
-							},
-							this.getRegisteredToolDefinition(content.name),
-							this.ui,
-							this.sessionManager.getCwd(),
-						);
-						component.setExpanded(this.toolOutputExpanded);
-						this.chatContainer.addChild(component);
-
-						if (message.stopReason === "aborted" || message.stopReason === "error") {
-							let errorMessage: string;
-							if (message.stopReason === "aborted") {
-								const retryAttempt = this.session.retryAttempt;
-								errorMessage =
-									retryAttempt > 0
-										? `Aborted after ${retryAttempt} retry attempt${retryAttempt > 1 ? "s" : ""}`
-										: "Operation aborted";
-							} else {
-								errorMessage = message.errorMessage || "Error";
-							}
-							component.updateResult({ content: [{ type: "text", text: errorMessage }], isError: true });
-						} else {
-							renderedPendingTools.set(content.id, component);
-						}
-					}
-				}
-			} else if (message.role === "toolResult") {
-				// Match tool results to pending tool components
-				const component = renderedPendingTools.get(message.toolCallId);
-				if (component) {
-					component.updateResult(message);
-					renderedPendingTools.delete(message.toolCallId);
-				}
-			} else {
-				// All other messages use standard rendering
-				this.addMessageToChat(message, options);
-			}
-		}
-
-		for (const [toolCallId, component] of renderedPendingTools) {
-			this.pendingTools.set(toolCallId, component);
-		}
-		this.ui.requestRender();
+		renderInteractiveSessionContext(
+			sessionContext,
+			{
+				...this.buildAddMessageToChatDeps(),
+				settingsManager: this.settingsManager,
+				pendingTools: this.pendingTools,
+				getRegisteredToolDefinition: (toolName) => this.getRegisteredToolDefinition(toolName),
+				getSessionCwd: () => this.sessionManager.getCwd(),
+				getRetryAttempt: () => this.session.retryAttempt,
+				onUpdateFooter: () => {
+					this.footer.invalidate();
+					this.updateEditorBorderColor();
+				},
+			},
+			options,
+		);
 	}
 
 	renderInitialMessages(): void {
@@ -3838,8 +3684,7 @@ export class InteractiveMode {
 				realLeafId,
 				this.ui.terminal.rows,
 				async (entryId) => {
-					// Selecting the current leaf is a no-op (already there)
-					if (entryId === realLeafId) {
+					if (treeNavigationNoOpStatus(entryId, realLeafId) === "already-here") {
 						done();
 						this.showStatus("Already at this point");
 						return;
@@ -3847,76 +3692,22 @@ export class InteractiveMode {
 
 					done();
 
-					const summary = await resolveTreeNavigationSummary(entryId, {
-						getBranchSummarySkipPrompt: () => this.settingsManager.getBranchSummarySkipPrompt(),
-						showSummarySelector: () =>
-							this.showExtensionSelector("Summarize branch?", [
-								"No summary",
-								"Summarize",
-								"Summarize with custom prompt",
-							]),
-						showCustomInstructionsEditor: () => this.showExtensionEditor("Custom summarization instructions"),
-						onReturnToTree: (id) => this.showTreeSelector(id),
+					await runInteractiveTreeNavigation(entryId, {
+						session: this.session,
+						settingsManager: this.settingsManager,
+						chatContainer: this.chatContainer,
+						statusContainer: this.statusContainer,
+						defaultEditor: this.defaultEditor,
+						ui: this.ui,
+						editor: this.editor,
+						showStatus: (message) => this.showStatus(message),
+						showError: (message) => this.showError(message),
+						showExtensionSelector: (title, options) => this.showExtensionSelector(title, options),
+						showExtensionEditor: (title) => this.showExtensionEditor(title),
+						showTreeSelector: (id) => this.showTreeSelector(id),
+						renderInitialMessages: () => this.renderInitialMessages(),
+						flushCompactionQueue: (opts) => this.flushCompactionQueue(opts),
 					});
-					if (summary.cancelledToTree) {
-						return;
-					}
-					const wantsSummary = summary.wantsSummary;
-					const customInstructions = summary.customInstructions;
-
-					// Set up escape handler and loader if summarizing
-					let summaryLoader: Loader | undefined;
-					const originalOnEscape = this.defaultEditor.onEscape;
-
-					if (wantsSummary) {
-						this.defaultEditor.onEscape = () => {
-							this.session.abortBranchSummary();
-						};
-						this.chatContainer.addChild(new Spacer(1));
-						summaryLoader = new Loader(
-							this.ui,
-							(spinner) => theme.fg("accent", spinner),
-							(text) => theme.fg("muted", text),
-							`Summarizing branch... (${keyText("app.interrupt")} to cancel)`,
-						);
-						this.statusContainer.addChild(summaryLoader);
-						this.ui.requestRender();
-					}
-
-					try {
-						const result = await this.session.navigateTree(entryId, {
-							summarize: wantsSummary,
-							customInstructions,
-						});
-
-						if (result.aborted) {
-							// Summarization aborted - re-show tree selector with same selection
-							this.showStatus("Branch summarization cancelled");
-							this.showTreeSelector(entryId);
-							return;
-						}
-						if (result.cancelled) {
-							this.showStatus("Navigation cancelled");
-							return;
-						}
-
-						// Update UI
-						this.chatContainer.clear();
-						this.renderInitialMessages();
-						if (result.editorText && !this.editor.getText().trim()) {
-							this.editor.setText(result.editorText);
-						}
-						this.showStatus("Navigated to selected point");
-						void this.flushCompactionQueue({ willRetry: false });
-					} catch (error) {
-						this.showError(error instanceof Error ? error.message : String(error));
-					} finally {
-						if (summaryLoader) {
-							summaryLoader.stop();
-							this.statusContainer.clear();
-						}
-						this.defaultEditor.onEscape = originalOnEscape;
-					}
 				},
 				() => {
 					done();
