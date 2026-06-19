@@ -144,7 +144,9 @@ import {
 	formatScopeGroups,
 	formatDiagnostics,
 } from "./interactive-resource-display.ts";
-import { matchBuiltinSlashCommand, runSlashCommandAction, type SlashCommandAction } from "./interactive-slash-dispatch.ts";
+import { buildInteractiveBuiltinSlashActions } from "./interactive-builtin-slash-actions.ts";
+import { matchBuiltinSlashCommand, runSlashCommandAction } from "./interactive-slash-dispatch.ts";
+import { resolveTreeNavigationSummary } from "./interactive-tree-navigation.ts";
 import {
 	detectTerminalBackgroundTheme,
 	getAvailableThemes,
@@ -2080,63 +2082,33 @@ export class InteractiveMode {
 		};
 	}
 
-	private buildBuiltinSlashActions(): {
-		exact: Record<string, SlashCommandAction>;
-		prefix: Array<{ prefix: string; action: SlashCommandAction }>;
-	} {
-		const exact: Record<string, SlashCommandAction> = {
-			"/settings": { kind: "sync", run: () => this.showSettingsSelector() },
-			"/share": { kind: "async", run: () => this.handleShareCommand() },
-			"/copy": { kind: "async", run: () => this.handleCopyCommand() },
-			"/session": { kind: "sync", run: () => this.handleSessionCommand() },
-			"/changelog": { kind: "sync", run: () => this.handleChangelogCommand() },
-			"/hotkeys": { kind: "sync", run: () => this.handleHotkeysCommand() },
-			"/fork": { kind: "sync", run: () => this.showUserMessageSelector() },
-			"/tree": { kind: "sync", run: () => this.showTreeSelector() },
-			"/trust": { kind: "sync", run: () => this.showTrustSelector() },
-			"/login": { kind: "sync", run: () => this.showOAuthSelector("login") },
-			"/logout": { kind: "sync", run: () => this.showOAuthSelector("logout") },
-			"/debug": { kind: "sync", run: () => this.handleDebugCommand() },
-			"/arminsayshi": { kind: "sync", run: () => this.handleArminSaysHi() },
-			"/dementedelves": { kind: "sync", run: () => this.handleDementedDelves() },
-			"/resume": { kind: "sync", run: () => this.showSessionSelector() },
-			"/scoped-models": { kind: "async", run: () => this.showModelsSelector() },
-			"/clone": { kind: "async", run: () => this.handleCloneCommand() },
-			"/new": { kind: "async", run: () => this.handleClearCommand() },
-			"/reload": { kind: "async", run: () => this.handleReloadCommand() },
-			"/quit": { kind: "async", run: () => this.shutdown() },
-		};
-		const prefix: Array<{ prefix: string; action: SlashCommandAction }> = [
-			{
-				prefix: "/model",
-				action: {
-					kind: "prefix",
-					prefix: "/model",
-					run: (arg) => this.handleModelCommand(arg || undefined),
-				},
-			},
-			{
-				prefix: "/export",
-				action: { kind: "asyncWithText", run: (t) => this.handleExportCommand(t) },
-			},
-			{
-				prefix: "/import",
-				action: { kind: "asyncWithText", run: (t) => this.handleImportCommand(t) },
-			},
-			{
-				prefix: "/name",
-				action: { kind: "syncWithText", run: (t) => this.handleNameCommand(t) },
-			},
-			{
-				prefix: "/compact",
-				action: {
-					kind: "prefix",
-					prefix: "/compact",
-					run: (arg) => this.handleCompactCommand(arg || undefined),
-				},
-			},
-		];
-		return { exact, prefix };
+	private buildBuiltinSlashActions() {
+		return buildInteractiveBuiltinSlashActions({
+			showSettingsSelector: () => this.showSettingsSelector(),
+			handleShareCommand: () => this.handleShareCommand(),
+			handleCopyCommand: () => this.handleCopyCommand(),
+			handleSessionCommand: () => this.handleSessionCommand(),
+			handleChangelogCommand: () => this.handleChangelogCommand(),
+			handleHotkeysCommand: () => this.handleHotkeysCommand(),
+			showUserMessageSelector: () => this.showUserMessageSelector(),
+			showTreeSelector: (id) => this.showTreeSelector(id),
+			showTrustSelector: () => this.showTrustSelector(),
+			showOAuthSelector: (mode) => this.showOAuthSelector(mode),
+			handleDebugCommand: () => this.handleDebugCommand(),
+			handleArminSaysHi: () => this.handleArminSaysHi(),
+			handleDementedDelves: () => this.handleDementedDelves(),
+			showSessionSelector: () => this.showSessionSelector(),
+			showModelsSelector: () => this.showModelsSelector(),
+			handleCloneCommand: () => this.handleCloneCommand(),
+			handleClearCommand: () => this.handleClearCommand(),
+			handleReloadCommand: () => this.handleReloadCommand(),
+			shutdown: () => this.shutdown(),
+			handleModelCommand: (term) => this.handleModelCommand(term),
+			handleExportCommand: (t) => this.handleExportCommand(t),
+			handleImportCommand: (t) => this.handleImportCommand(t),
+			handleNameCommand: (t) => this.handleNameCommand(t),
+			handleCompactCommand: (arg) => this.handleCompactCommand(arg),
+		});
 	}
 
 	private async tryDispatchBuiltinSlashCommand(text: string): Promise<boolean> {
@@ -3959,42 +3931,25 @@ export class InteractiveMode {
 						return;
 					}
 
-					// Ask about summarization
-					done(); // Close selector first
+					done();
 
-					// Loop until user makes a complete choice or cancels to tree
-					let wantsSummary = false;
-					let customInstructions: string | undefined;
-
-					// Check if we should skip the prompt (user preference to always default to no summary)
-					if (!this.settingsManager.getBranchSummarySkipPrompt()) {
-						while (true) {
-							const summaryChoice = await this.showExtensionSelector("Summarize branch?", [
+					const summary = await resolveTreeNavigationSummary(entryId, {
+						getBranchSummarySkipPrompt: () => this.settingsManager.getBranchSummarySkipPrompt(),
+						showSummarySelector: () =>
+							this.showExtensionSelector("Summarize branch?", [
 								"No summary",
 								"Summarize",
 								"Summarize with custom prompt",
-							]);
-
-							if (summaryChoice === undefined) {
-								// User pressed escape - re-show tree selector with same selection
-								this.showTreeSelector(entryId);
-								return;
-							}
-
-							wantsSummary = summaryChoice !== "No summary";
-
-							if (summaryChoice === "Summarize with custom prompt") {
-								customInstructions = await this.showExtensionEditor("Custom summarization instructions");
-								if (customInstructions === undefined) {
-									// User cancelled - loop back to summary selector
-									continue;
-								}
-							}
-
-							// User made a complete choice
-							break;
-						}
+							]),
+						showCustomInstructionsEditor: () =>
+							this.showExtensionEditor("Custom summarization instructions"),
+						onReturnToTree: (id) => this.showTreeSelector(id),
+					});
+					if (summary.cancelledToTree) {
+						return;
 					}
+					const wantsSummary = summary.wantsSummary;
+					const customInstructions = summary.customInstructions;
 
 					// Set up escape handler and loader if summarizing
 					let summaryLoader: Loader | undefined;
