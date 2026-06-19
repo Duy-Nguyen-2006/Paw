@@ -40,6 +40,7 @@ import { sleep } from "../utils/sleep.ts";
 import {
 	compactionAutoErrorMessage,
 	compactionOverflowErrorMessage,
+	hasPostCompactionUsage,
 	persistCompactionAndNotifyExtensions,
 	resolveAutoCompactionAuth,
 	resolveCompactionContent,
@@ -2716,24 +2717,8 @@ export class AgentSession {
 		const latestCompaction = getLatestCompactionEntry(branchEntries);
 
 		if (latestCompaction) {
-			// Check if there's a valid assistant usage after the compaction boundary
 			const compactionIndex = branchEntries.lastIndexOf(latestCompaction);
-			let hasPostCompactionUsage = false;
-			for (let i = branchEntries.length - 1; i > compactionIndex; i--) {
-				const entry = branchEntries[i];
-				if (entry.type === "message" && entry.message.role === "assistant") {
-					const assistant = entry.message;
-					if (assistant.stopReason !== "aborted" && assistant.stopReason !== "error") {
-						const contextTokens = calculateContextTokens(assistant.usage);
-						if (contextTokens > 0) {
-							hasPostCompactionUsage = true;
-						}
-						break;
-					}
-				}
-			}
-
-			if (!hasPostCompactionUsage) {
+			if (!hasPostCompactionUsage(branchEntries, compactionIndex)) {
 				return { tokens: null, contextWindow, percent: null };
 			}
 		}

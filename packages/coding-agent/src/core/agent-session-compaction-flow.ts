@@ -3,11 +3,15 @@
  */
 
 import type { Agent, ThinkingLevel } from "@earendil-works/pi-agent-core";
-import type { Model, StreamFn } from "@earendil-works/pi-ai";
+import type { AssistantMessage, Model, StreamFn } from "@earendil-works/pi-ai";
 import { streamSimple } from "@earendil-works/pi-ai";
 import { applyCompactionToSession, emitCompactionExtensionEvents } from "./agent-session-compaction-apply.ts";
-import type { CompactionPreparation, CompactionResult } from "./compaction/index.ts";
-import { compact } from "./compaction/index.ts";
+import {
+	type CompactionPreparation,
+	type CompactionResult,
+	calculateContextTokens,
+	compact,
+} from "./compaction/index.ts";
 import type { ExtensionRunner, SessionBeforeCompactResult } from "./extensions/index.ts";
 import type { ModelRegistry } from "./model-registry.ts";
 import type { SessionEntry } from "./session-manager.ts";
@@ -151,4 +155,24 @@ export function stripLastAssistantFromAgent(agent: Agent): void {
 	if (messages.length > 0 && messages.at(-1)!.role === "assistant") {
 		agent.state.messages = messages.slice(0, -1);
 	}
+}
+
+/**
+ * Determine whether the most recent assistant message newer than `compactionIndex` produced
+ * a usable (non-zero) context token count.
+ *
+ * Returns false when no assistant message exists after the compaction boundary, the latest
+ * assistant message was aborted or errored, or its provider usage reports no tokens. Pre- and
+ * post-compaction usage must not be compared directly: only post-compaction assistant usage
+ * reflects the current context size.
+ */
+export function hasPostCompactionUsage(branchEntries: SessionEntry[], compactionIndex: number): boolean {
+	for (let i = branchEntries.length - 1; i > compactionIndex; i--) {
+		const entry = branchEntries[i];
+		if (entry.type !== "message" || entry.message.role !== "assistant") continue;
+		const assistant = entry.message as AssistantMessage;
+		if (assistant.stopReason === "aborted" || assistant.stopReason === "error") continue;
+		return calculateContextTokens(assistant.usage) > 0;
+	}
+	return false;
 }
