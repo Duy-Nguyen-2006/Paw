@@ -5,29 +5,27 @@ import { KillRing } from "../kill-ring.ts";
 import { type Component, CURSOR_MARKER, type Focusable, type TUI } from "../tui.ts";
 import { UndoStack } from "../undo-stack.ts";
 import {
-	cjkBreakRegex,
 	getGraphemeSegmenter,
 	getWordSegmenter,
 	isWhitespaceChar,
 	truncateToWidth,
 	visibleWidth,
 } from "../utils.ts";
+import {
+	buildDisplayLineWithCursor,
+	collectValidPasteMarkers,
+	isNewLineInput,
+	isPasteMarker,
+	mergeSegmentWithMarker,
+	recordWordWrapOpportunity,
+	resolveCursorInChunk,
+	resolveWordWrapOverflow,
+} from "../editor-helpers.ts";
 import { findWordBackward, findWordForward } from "../word-navigation.ts";
 import { SelectList, type SelectListLayoutOptions, type SelectListTheme } from "./select-list.ts";
 
 const graphemeSegmenter = getGraphemeSegmenter();
 const wordSegmenter = getWordSegmenter();
-
-/** Regex matching paste markers like `[paste #1 +123 lines]` or `[paste #2 1234 chars]`. */
-const PASTE_MARKER_REGEX = /\[paste #(\d+)( (\+\d+ lines|\d+ chars))?\]/g;
-
-/** Non-global version for single-segment testing. */
-const PASTE_MARKER_SINGLE = /^\[paste #(\d+)( (\+\d+ lines|\d+ chars))?\]$/;
-
-/** Check if a segment is a paste marker (i.e. was merged by segmentWithMarkers). */
-function isPasteMarker(segment: string): boolean {
-	return segment.length >= 10 && PASTE_MARKER_SINGLE.test(segment);
-}
 
 /**
  * A segmenter that wraps Intl.Segmenter and merges graphemes that fall
@@ -46,44 +44,23 @@ function segmentWithMarkers(
 		return baseSegmenter.segment(text);
 	}
 
-	// Find all marker spans with valid IDs.
-	const markers: Array<{ start: number; end: number }> = [];
-	for (const m of text.matchAll(PASTE_MARKER_REGEX)) {
-		const id = Number.parseInt(m[1]!, 10);
-		if (!validIds.has(id)) continue;
-		markers.push({ start: m.index, end: m.index + m[0].length });
-	}
+	const markers = collectValidPasteMarkers(text, validIds);
 	if (markers.length === 0) {
 		return baseSegmenter.segment(text);
 	}
 
-	// Build merged segment list.
 	const baseSegments = baseSegmenter.segment(text);
 	const result: Intl.SegmentData[] = [];
 	let markerIdx = 0;
 
 	for (const seg of baseSegments) {
-		// Skip past markers that are entirely before this segment.
 		while (markerIdx < markers.length && markers[markerIdx]!.end <= seg.index) {
 			markerIdx++;
 		}
-
 		const marker = markerIdx < markers.length ? markers[markerIdx]! : null;
-
-		if (marker && seg.index >= marker.start && seg.index < marker.end) {
-			// This segment falls inside a marker.
-			// If this is the first segment of the marker, emit a merged segment.
-			if (seg.index === marker.start) {
-				const markerText = text.slice(marker.start, marker.end);
-				result.push({
-					segment: markerText,
-					index: marker.start,
-					input: text,
-				});
-			}
-			// Otherwise skip (already merged into the first segment).
-		} else {
-			result.push(seg);
+		const merged = mergeSegmentWithMarker(seg, marker, text);
+		if (merged) {
+			result.push(merged);
 		}
 	}
 
@@ -139,25 +116,17 @@ export function wordWrapLine(line: string, maxWidth: number, preSegmented?: Intl
 		const charIndex = seg.index;
 		const isWs = !isPasteMarker(grapheme) && isWhitespaceChar(grapheme);
 
-		// Overflow check before advancing.
 		if (currentWidth + gWidth > maxWidth) {
-			if (wrapOppIndex >= 0 && currentWidth - wrapOppWidth + gWidth <= maxWidth) {
-				// Backtrack to last wrap opportunity (the remaining content
-				// plus the current grapheme still fits within maxWidth).
-				chunks.push({ text: line.slice(chunkStart, wrapOppIndex), startIndex: chunkStart, endIndex: wrapOppIndex });
-				chunkStart = wrapOppIndex;
-				currentWidth -= wrapOppWidth;
-			} else if (chunkStart < charIndex) {
-				// No viable wrap opportunity: force-break at current position.
-				// This also handles the case where backtracking to a word
-				// boundary wouldn't help because the remaining content plus
-				// the current grapheme (e.g. a wide character) still exceeds
-				// maxWidth.
-				chunks.push({ text: line.slice(chunkStart, charIndex), startIndex: chunkStart, endIndex: charIndex });
-				chunkStart = charIndex;
-				currentWidth = 0;
+			const overflow = resolveWordWrapOverflow(
+				{ line, chunkStart, charIndex, currentWidth, wrapOppIndex, wrapOppWidth, maxWidth },
+				gWidth,
+			);
+			if (overflow.newChunk) {
+				chunks.push(overflow.newChunk);
 			}
-			wrapOppIndex = -1;
+			chunkStart = overflow.chunkStart;
+			currentWidth = overflow.currentWidth;
+			wrapOppIndex = overflow.wrapOppIndex;
 		}
 
 		if (gWidth > maxWidth) {
@@ -181,21 +150,11 @@ export function wordWrapLine(line: string, maxWidth: number, preSegmented?: Intl
 		// Advance.
 		currentWidth += gWidth;
 
-		// Record wrap opportunity: whitespace followed by non-whitespace
-		// (multiple spaces join; the break point is after the last space),
-		// or at a boundary where either side is CJK (CJK allows breaking
-		// between any adjacent characters).
 		const next = segments[i + 1];
-		if (isWs && next && (isPasteMarker(next.segment) || !isWhitespaceChar(next.segment))) {
-			wrapOppIndex = next.index;
-			wrapOppWidth = currentWidth;
-		} else if (!isWs && next && !isWhitespaceChar(next.segment)) {
-			const isCjk = !isPasteMarker(grapheme) && cjkBreakRegex.test(grapheme);
-			const nextIsCjk = !isPasteMarker(next.segment) && cjkBreakRegex.test(next.segment);
-			if (isCjk || nextIsCjk) {
-				wrapOppIndex = next.index;
-				wrapOppWidth = currentWidth;
-			}
+		const opp = recordWordWrapOpportunity(grapheme, isWs, next, currentWidth);
+		if (opp) {
+			wrapOppIndex = opp.wrapOppIndex;
+			wrapOppWidth = opp.wrapOppWidth;
 		}
 	}
 
@@ -520,38 +479,18 @@ export class Editor implements Component, Focusable {
 		const emitCursorMarker = this.focused;
 
 		for (const layoutLine of visibleLines) {
-			let displayText = layoutLine.text;
-			let lineVisibleWidth = visibleWidth(layoutLine.text);
-			let cursorInPadding = false;
-
-			// Add cursor if this line has it
-			if (layoutLine.hasCursor && layoutLine.cursorPos !== undefined) {
-				const before = displayText.slice(0, layoutLine.cursorPos);
-				const after = displayText.slice(layoutLine.cursorPos);
-
-				// Hardware cursor marker (zero-width, emitted before fake cursor for IME positioning)
-				const marker = emitCursorMarker ? CURSOR_MARKER : "";
-
-				if (after.length > 0) {
-					// Cursor is on a character (grapheme) - replace it with highlighted version
-					// Get the first grapheme from 'after'
-					const afterGraphemes = [...this.segment(after, "grapheme")];
-					const firstGrapheme = afterGraphemes[0]?.segment || "";
-					const restAfter = after.slice(firstGrapheme.length);
-					const cursor = `\x1b[7m${firstGrapheme}\x1b[0m`;
-					displayText = before + marker + cursor + restAfter;
-					// lineVisibleWidth stays the same - we're replacing, not adding
-				} else {
-					// Cursor is at the end - add highlighted space
-					const cursor = "\x1b[7m \x1b[0m";
-					displayText = before + marker + cursor;
-					lineVisibleWidth = lineVisibleWidth + 1;
-					// If cursor overflows content width into the padding, flag it
-					if (lineVisibleWidth > contentWidth && paddingX > 0) {
-						cursorInPadding = true;
-					}
-				}
-			}
+			const cursorBuilt = buildDisplayLineWithCursor({
+				text: layoutLine.text,
+				cursorPos: layoutLine.hasCursor ? layoutLine.cursorPos : undefined,
+				emitCursorMarker,
+				cursorMarker: CURSOR_MARKER,
+				contentWidth,
+				paddingX,
+				segment: (t, m) => this.segment(t, m),
+			});
+			const displayText = cursorBuilt.displayText;
+			const lineVisibleWidth = cursorBuilt.lineVisibleWidth;
+			const cursorInPadding = cursorBuilt.cursorInPadding;
 
 			// Calculate padding based on actual visible width
 			const padding = " ".repeat(Math.max(0, contentWidth - lineVisibleWidth));
@@ -771,15 +710,7 @@ export class Editor implements Component, Focusable {
 			return;
 		}
 
-		// New line
-		if (
-			kb.matches(data, "tui.input.newLine") ||
-			(data.codePointAt(0)! === 10 && data.length > 1) ||
-			data === "\x1b\r" ||
-			data === "\x1b[13;2~" ||
-			(data.length > 1 && data.includes("\x1b") && data.includes("\r")) ||
-			(data === "\n" && data.length === 1)
-		) {
+		if (isNewLineInput(data, kb as { matches: (d: string, keybinding: string) => boolean })) {
 			if (this.shouldSubmitOnBackslashEnter(data, kb)) {
 				this.handleBackspace();
 				this.submitValue();
@@ -917,39 +848,20 @@ export class Editor implements Component, Focusable {
 					const chunk = chunks[chunkIndex];
 					if (!chunk) continue;
 
-					const cursorPos = this.state.cursorCol;
 					const isLastChunk = chunkIndex === chunks.length - 1;
+					const cursorInChunk = isCurrentLine
+						? resolveCursorInChunk({
+								cursorPos: this.state.cursorCol,
+								chunk,
+								isLastChunk,
+							})
+						: { hasCursor: false, adjustedPos: 0 };
 
-					// Determine if cursor is in this chunk
-					// For word-wrapped chunks, we need to handle the case where
-					// cursor might be in trimmed whitespace at end of chunk
-					let hasCursorInChunk = false;
-					let adjustedCursorPos = 0;
-
-					if (isCurrentLine) {
-						if (isLastChunk) {
-							// Last chunk: cursor belongs here if >= startIndex
-							hasCursorInChunk = cursorPos >= chunk.startIndex;
-							adjustedCursorPos = cursorPos - chunk.startIndex;
-						} else {
-							// Non-last chunk: cursor belongs here if in range [startIndex, endIndex)
-							// But we need to handle the visual position in the trimmed text
-							hasCursorInChunk = cursorPos >= chunk.startIndex && cursorPos < chunk.endIndex;
-							if (hasCursorInChunk) {
-								adjustedCursorPos = cursorPos - chunk.startIndex;
-								// Clamp to text length (in case cursor was in trimmed whitespace)
-								if (adjustedCursorPos > chunk.text.length) {
-									adjustedCursorPos = chunk.text.length;
-								}
-							}
-						}
-					}
-
-					if (hasCursorInChunk) {
+					if (cursorInChunk.hasCursor) {
 						layoutLines.push({
 							text: chunk.text,
 							hasCursor: true,
-							cursorPos: adjustedCursorPos,
+							cursorPos: cursorInChunk.adjustedPos,
 						});
 					} else {
 						layoutLines.push({
