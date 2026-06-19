@@ -37,15 +37,31 @@ import { getThemeByName, theme } from "../modes/interactive/theme/theme.ts";
 import { stripFrontmatter } from "../utils/frontmatter.ts";
 import { resolvePath } from "../utils/paths.ts";
 import { sleep } from "../utils/sleep.ts";
+import {
+	compactionAutoErrorMessage,
+	compactionOverflowErrorMessage,
+	persistCompactionAndNotifyExtensions,
+	resolveAutoCompactionAuth,
+	resolveCompactionContent,
+	runSessionBeforeCompact,
+	shouldStripErrorAssistantBeforeRetry,
+	stripLastAssistantFromAgent,
+} from "./agent-session-compaction-flow.ts";
+import { emitAgentEventToExtensions } from "./agent-session-extension-events.ts";
+import { rebuildToolRegistryStateWithActiveNames, type ToolDefinitionEntry } from "./agent-session-tool-registry.ts";
+import {
+	applyTreeLeafSwitch,
+	resolveDefaultBranchSummary,
+	resolveTreeNavigationTarget,
+	runSessionBeforeTree,
+} from "./agent-session-tree-navigation.ts";
 import { formatNoApiKeyFoundMessage, formatNoModelSelectedMessage } from "./auth-guidance.ts";
 import { type BashResult, executeBashWithOperations } from "./bash-executor.ts";
 import {
 	type CompactionResult,
 	calculateContextTokens,
 	collectEntriesForBranchSummary,
-	compact,
 	estimateContextTokens,
-	generateBranchSummary,
 	prepareCompaction,
 	shouldCompact,
 } from "./compaction/index.ts";
@@ -61,30 +77,24 @@ import {
 	type ExtensionUIContext,
 	type InputSource,
 	type ReplacedSessionContext,
-	type SessionBeforeCompactResult,
-	type SessionBeforeTreeResult,
 	type SessionStartEvent,
 	type ShutdownHandler,
 	type ToolDefinition,
 	type ToolInfo,
 	type TreePreparation,
-	wrapRegisteredTools,
 } from "./extensions/index.ts";
 import { emitSessionShutdownEvent } from "./extensions/runner.ts";
 import type { BashExecutionMessage, CustomMessage } from "./messages.ts";
 import type { ModelRegistry } from "./model-registry.ts";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.ts";
 import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.ts";
-import type { BranchSummaryEntry, CompactionEntry, SessionManager } from "./session-manager.ts";
+import type { BranchSummaryEntry, SessionManager } from "./session-manager.ts";
 import { CURRENT_SESSION_VERSION, getLatestCompactionEntry, type SessionHeader } from "./session-manager.ts";
 import type { SettingsManager } from "./settings-manager.ts";
 import type { SlashCommandInfo } from "./slash-commands.ts";
-import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.ts";
 import { type BuildSystemPromptOptions, buildSystemPrompt } from "./system-prompt.ts";
 import { type BashOperations, createLocalBashOperations } from "./tools/bash.ts";
 import { createAllToolDefinitions } from "./tools/index.ts";
-import { applyCompactionToSession, emitCompactionExtensionEvents } from "./agent-session-compaction-apply.ts";
-import { emitAgentEventToExtensions } from "./agent-session-extension-events.ts";
 import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.ts";
 
 // ============================================================================
@@ -229,11 +239,6 @@ export interface SessionStats {
 	};
 	cost: number;
 	contextUsage?: ContextUsage;
-}
-
-interface ToolDefinitionEntry {
-	definition: ToolDefinition;
-	sourceInfo: SourceInfo;
 }
 
 // ============================================================================
@@ -1619,71 +1624,38 @@ export class AgentSession {
 				throw new Error("Nothing to compact (session too small)");
 			}
 
-			let extensionCompaction: CompactionResult | undefined;
-			let fromExtension = false;
-
-			if (this._extensionRunner.hasHandlers("session_before_compact")) {
-				const result = (await this._extensionRunner.emit({
-					type: "session_before_compact",
-					preparation,
-					branchEntries: pathEntries,
-					customInstructions,
-					signal: this._compactionAbortController.signal,
-				})) as SessionBeforeCompactResult | undefined;
-
-				if (result?.cancel) {
-					throw new Error("Compaction cancelled");
-				}
-
-				if (result?.compaction) {
-					extensionCompaction = result.compaction;
-					fromExtension = true;
-				}
+			const beforeCompact = await runSessionBeforeCompact(
+				this._extensionRunner,
+				preparation,
+				pathEntries,
+				customInstructions,
+				this._compactionAbortController.signal,
+			);
+			if (beforeCompact.cancelled) {
+				throw new Error("Compaction cancelled");
 			}
 
-			let summary: string;
-			let firstKeptEntryId: string;
-			let tokensBefore: number;
-			let details: unknown;
-
-			if (extensionCompaction) {
-				// Extension provided compaction content
-				summary = extensionCompaction.summary;
-				firstKeptEntryId = extensionCompaction.firstKeptEntryId;
-				tokensBefore = extensionCompaction.tokensBefore;
-				details = extensionCompaction.details;
-			} else {
-				// Generate compaction result
-				const result = await compact(
-					preparation,
-					this.model,
-					apiKey,
-					headers,
-					customInstructions,
-					this._compactionAbortController.signal,
-					this.thinkingLevel,
-					this.agent.streamFn,
-				);
-				summary = result.summary;
-				firstKeptEntryId = result.firstKeptEntryId;
-				tokensBefore = result.tokensBefore;
-				details = result.details;
-			}
+			const content = await resolveCompactionContent(
+				beforeCompact.extensionCompaction,
+				preparation,
+				this.model,
+				{ apiKey, headers },
+				customInstructions,
+				this._compactionAbortController.signal,
+				this.thinkingLevel,
+				this.agent.streamFn,
+			);
 
 			if (this._compactionAbortController.signal.aborted) {
 				throw new Error("Compaction cancelled");
 			}
 
-			const { compactionResult, savedCompactionEntry } = applyCompactionToSession(
+			const compactionResult = await persistCompactionAndNotifyExtensions(
 				this.sessionManager,
 				this.agent,
-				summary,
-				firstKeptEntryId,
-				tokensBefore,
-				details,
-				fromExtension,
+				this._extensionRunner,
+				content,
 			);
-			await emitCompactionExtensionEvents(this._extensionRunner, savedCompactionEntry, fromExtension);
 			this._emit({
 				type: "compaction_end",
 				reason: "manual",
@@ -1799,10 +1771,7 @@ export class AgentSession {
 		this._overflowRecoveryAttempted = true;
 		// Remove the error message from agent state (it IS saved to session for history,
 		// but we don't want it in context for the retry)
-		const messages = this.agent.state.messages;
-		if (messages.length > 0 && messages.at(-1)!.role === "assistant") {
-			this.agent.state.messages = messages.slice(0, -1);
-		}
+		stripLastAssistantFromAgent(this.agent);
 		return await this._runAutoCompaction("overflow", true);
 	}
 
@@ -1863,24 +1832,16 @@ export class AgentSession {
 				return false;
 			}
 
-			let apiKey: string | undefined;
-			let headers: Record<string, string> | undefined;
-			if (this.agent.streamFn === streamSimple) {
-				const authResult = await this._modelRegistry.getApiKeyAndHeaders(this.model);
-				if (!authResult.ok || !authResult.apiKey) {
-					this._emit({
-						type: "compaction_end",
-						reason,
-						result: undefined,
-						aborted: false,
-						willRetry: false,
-					});
-					return false;
-				}
-				apiKey = authResult.apiKey;
-				headers = authResult.headers;
-			} else {
-				({ apiKey, headers } = await this._getCompactionRequestAuth(this.model));
+			const auth = await resolveAutoCompactionAuth(this._modelRegistry, this.model, this.agent.streamFn);
+			if (auth === null) {
+				this._emit({
+					type: "compaction_end",
+					reason,
+					result: undefined,
+					aborted: false,
+					willRetry: false,
+				});
+				return false;
 			}
 
 			const pathEntries = this.sessionManager.getBranch();
@@ -1897,65 +1858,15 @@ export class AgentSession {
 				return false;
 			}
 
-			let extensionCompaction: CompactionResult | undefined;
-			let fromExtension = false;
-
-			if (this._extensionRunner.hasHandlers("session_before_compact")) {
-				const extensionResult = (await this._extensionRunner.emit({
-					type: "session_before_compact",
-					preparation,
-					branchEntries: pathEntries,
-					customInstructions: undefined,
-					signal: this._autoCompactionAbortController.signal,
-				})) as SessionBeforeCompactResult | undefined;
-
-				if (extensionResult?.cancel) {
-					this._emit({
-						type: "compaction_end",
-						reason,
-						result: undefined,
-						aborted: true,
-						willRetry: false,
-					});
-					return false;
-				}
-
-				if (extensionResult?.compaction) {
-					extensionCompaction = extensionResult.compaction;
-					fromExtension = true;
-				}
-			}
-
-			let summary: string;
-			let firstKeptEntryId: string;
-			let tokensBefore: number;
-			let details: unknown;
-
-			if (extensionCompaction) {
-				// Extension provided compaction content
-				summary = extensionCompaction.summary;
-				firstKeptEntryId = extensionCompaction.firstKeptEntryId;
-				tokensBefore = extensionCompaction.tokensBefore;
-				details = extensionCompaction.details;
-			} else {
-				// Generate compaction result
-				const compactResult = await compact(
-					preparation,
-					this.model,
-					apiKey,
-					headers,
-					undefined,
-					this._autoCompactionAbortController.signal,
-					this.thinkingLevel,
-					this.agent.streamFn,
-				);
-				summary = compactResult.summary;
-				firstKeptEntryId = compactResult.firstKeptEntryId;
-				tokensBefore = compactResult.tokensBefore;
-				details = compactResult.details;
-			}
-
-			if (this._autoCompactionAbortController.signal.aborted) {
+			const signal = this._autoCompactionAbortController.signal;
+			const beforeCompact = await runSessionBeforeCompact(
+				this._extensionRunner,
+				preparation,
+				pathEntries,
+				undefined,
+				signal,
+			);
+			if (beforeCompact.cancelled) {
 				this._emit({
 					type: "compaction_end",
 					reason,
@@ -1966,29 +1877,43 @@ export class AgentSession {
 				return false;
 			}
 
-			const { compactionResult: result, savedCompactionEntry } = applyCompactionToSession(
+			const content = await resolveCompactionContent(
+				beforeCompact.extensionCompaction,
+				preparation,
+				this.model,
+				auth,
+				undefined,
+				signal,
+				this.thinkingLevel,
+				this.agent.streamFn,
+			);
+
+			if (signal.aborted) {
+				this._emit({
+					type: "compaction_end",
+					reason,
+					result: undefined,
+					aborted: true,
+					willRetry: false,
+				});
+				return false;
+			}
+
+			const result = await persistCompactionAndNotifyExtensions(
 				this.sessionManager,
 				this.agent,
-				summary,
-				firstKeptEntryId,
-				tokensBefore,
-				details,
-				fromExtension,
+				this._extensionRunner,
+				content,
 			);
-			await emitCompactionExtensionEvents(this._extensionRunner, savedCompactionEntry, fromExtension);
 			this._emit({ type: "compaction_end", reason, result, aborted: false, willRetry });
 
 			if (willRetry) {
-				const messages = this.agent.state.messages;
-				const lastMsg = messages.at(-1);
-				if (lastMsg?.role === "assistant" && (lastMsg as AssistantMessage).stopReason === "error") {
-					this.agent.state.messages = messages.slice(0, -1);
+				if (shouldStripErrorAssistantBeforeRetry(this.agent)) {
+					stripLastAssistantFromAgent(this.agent);
 				}
 				return true;
 			}
 
-			// Auto-compaction can complete while follow-up/steering/custom messages are waiting.
-			// Continue once so queued messages are delivered.
 			return this.agent.hasQueuedMessages();
 		} catch (error) {
 			const errorMessage = error instanceof Error ? error.message : "compaction failed";
@@ -2000,8 +1925,8 @@ export class AgentSession {
 				willRetry: false,
 				errorMessage:
 					reason === "overflow"
-						? `Context overflow recovery failed: ${errorMessage}`
-						: `Auto-compaction failed: ${errorMessage}`,
+						? compactionOverflowErrorMessage(errorMessage)
+						: compactionAutoErrorMessage(errorMessage),
 			});
 			return false;
 		} finally {
@@ -2239,96 +2164,29 @@ export class AgentSession {
 	}
 
 	private _refreshToolRegistry(options?: { activeToolNames?: string[]; includeAllExtensionTools?: boolean }): void {
-		const previousRegistryNames = new Set(this._toolRegistry.keys());
-		const previousActiveToolNames = this.getActiveToolNames();
-		const allowedToolNames = this._allowedToolNames;
-		const excludedToolNames = this._excludedToolNames;
-		const isAllowedTool = (name: string): boolean =>
-			(!allowedToolNames || allowedToolNames.has(name)) && !excludedToolNames?.has(name);
-
-		const registeredTools = this._extensionRunner.getAllRegisteredTools();
-		const allCustomTools = [
-			...registeredTools,
-			...this._customTools.map((definition) => ({
-				definition,
-				sourceInfo: createSyntheticSourceInfo(`<sdk:${definition.name}>`, { source: "sdk" }),
-			})),
-		].filter((tool) => isAllowedTool(tool.definition.name));
-		const definitionRegistry = new Map<string, ToolDefinitionEntry>(
-			Array.from(this._baseToolDefinitions.entries())
-				.filter(([name]) => isAllowedTool(name))
-				.map(([name, definition]) => [
-					name,
-					{
-						definition,
-						sourceInfo: createSyntheticSourceInfo(`<builtin:${name}>`, { source: "builtin" }),
-					},
-				]),
+		const rebuilt = rebuildToolRegistryStateWithActiveNames(
+			{
+				baseToolDefinitions: this._baseToolDefinitions,
+				customTools: this._customTools,
+				registeredTools: this._extensionRunner.getAllRegisteredTools(),
+				allowedToolNames: this._allowedToolNames,
+				excludedToolNames: this._excludedToolNames,
+				normalizePromptSnippet: (text) => this._normalizePromptSnippet(text),
+				normalizePromptGuidelines: (guidelines) => this._normalizePromptGuidelines(guidelines),
+				extensionRunner: this._extensionRunner,
+			},
+			{
+				activeToolNames: options?.activeToolNames,
+				previousActiveToolNames: this.getActiveToolNames(),
+				previousRegistryNames: new Set(this._toolRegistry.keys()),
+				includeAllExtensionTools: options?.includeAllExtensionTools,
+			},
 		);
-		for (const tool of allCustomTools) {
-			definitionRegistry.set(tool.definition.name, {
-				definition: tool.definition,
-				sourceInfo: tool.sourceInfo,
-			});
-		}
-		this._toolDefinitions = definitionRegistry;
-		this._toolPromptSnippets = new Map(
-			Array.from(definitionRegistry.values())
-				.map(({ definition }) => {
-					const snippet = this._normalizePromptSnippet(definition.promptSnippet);
-					return snippet ? ([definition.name, snippet] as const) : undefined;
-				})
-				.filter((entry): entry is readonly [string, string] => entry !== undefined),
-		);
-		this._toolPromptGuidelines = new Map(
-			Array.from(definitionRegistry.values())
-				.map(({ definition }) => {
-					const guidelines = this._normalizePromptGuidelines(definition.promptGuidelines);
-					return guidelines.length > 0 ? ([definition.name, guidelines] as const) : undefined;
-				})
-				.filter((entry): entry is readonly [string, string[]] => entry !== undefined),
-		);
-		const runner = this._extensionRunner;
-		const wrappedExtensionTools = wrapRegisteredTools(allCustomTools, runner);
-		const wrappedBuiltInTools = wrapRegisteredTools(
-			Array.from(this._baseToolDefinitions.values())
-				.filter((definition) => isAllowedTool(definition.name))
-				.map((definition) => ({
-					definition,
-					sourceInfo: createSyntheticSourceInfo(`<builtin:${definition.name}>`, { source: "builtin" }),
-				})),
-			runner,
-		);
-
-		const toolRegistry = new Map(wrappedBuiltInTools.map((tool) => [tool.name, tool]));
-		for (const tool of wrappedExtensionTools as AgentTool[]) {
-			toolRegistry.set(tool.name, tool);
-		}
-		this._toolRegistry = toolRegistry;
-
-		const nextActiveToolNames = (
-			options?.activeToolNames ? [...options.activeToolNames] : [...previousActiveToolNames]
-		).filter((name) => isAllowedTool(name));
-
-		if (allowedToolNames) {
-			for (const toolName of this._toolRegistry.keys()) {
-				if (allowedToolNames.has(toolName)) {
-					nextActiveToolNames.push(toolName);
-				}
-			}
-		} else if (options?.includeAllExtensionTools) {
-			for (const tool of wrappedExtensionTools) {
-				nextActiveToolNames.push(tool.name);
-			}
-		} else if (!options?.activeToolNames) {
-			for (const toolName of this._toolRegistry.keys()) {
-				if (!previousRegistryNames.has(toolName)) {
-					nextActiveToolNames.push(toolName);
-				}
-			}
-		}
-
-		this.setActiveToolsByName([...new Set(nextActiveToolNames)]);
+		this._toolDefinitions = rebuilt.definitionRegistry;
+		this._toolPromptSnippets = rebuilt.promptMaps.snippets;
+		this._toolPromptGuidelines = rebuilt.promptMaps.guidelines;
+		this._toolRegistry = rebuilt.toolRegistry;
+		this.setActiveToolsByName(rebuilt.nextActiveToolNames);
 	}
 
 	private _buildRuntime(options: {
@@ -2680,149 +2538,77 @@ export class AgentSession {
 			targetId,
 		);
 
-		// Prepare event data - mutable so extensions can override
-		let customInstructions = options.customInstructions;
-		let replaceInstructions = options.replaceInstructions;
-		let label = options.label;
-
 		const preparation: TreePreparation = {
 			targetId,
 			oldLeafId,
 			commonAncestorId,
 			entriesToSummarize,
 			userWantsSummary: options.summarize ?? false,
-			customInstructions,
-			replaceInstructions,
-			label,
+			customInstructions: options.customInstructions,
+			replaceInstructions: options.replaceInstructions,
+			label: options.label,
 		};
 
-		// Set up abort controller for summarization
 		this._branchSummaryAbortController = new AbortController();
+		const signal = this._branchSummaryAbortController.signal;
 
 		try {
-			let extensionSummary: { summary: string; details?: unknown } | undefined;
-			let fromExtension = false;
-
-			// Emit session_before_tree event
-			if (this._extensionRunner.hasHandlers("session_before_tree")) {
-				const result = (await this._extensionRunner.emit({
-					type: "session_before_tree",
-					preparation,
-					signal: this._branchSummaryAbortController.signal,
-				})) as SessionBeforeTreeResult | undefined;
-
-				if (result?.cancel) {
-					return { cancelled: true };
-				}
-
-				if (result?.summary && options.summarize) {
-					extensionSummary = result.summary;
-					fromExtension = true;
-				}
-
-				// Allow extensions to override instructions and label
-				if (result?.customInstructions !== undefined) {
-					customInstructions = result.customInstructions;
-				}
-				if (result?.replaceInstructions !== undefined) {
-					replaceInstructions = result.replaceInstructions;
-				}
-				if (result?.label !== undefined) {
-					label = result.label;
-				}
+			const beforeTree = await runSessionBeforeTree(this._extensionRunner, preparation, signal, {
+				summarize: options.summarize ?? false,
+				customInstructions: options.customInstructions,
+				replaceInstructions: options.replaceInstructions,
+				label: options.label,
+			});
+			if (beforeTree.cancelled) {
+				return { cancelled: true };
 			}
 
-			// Run default summarizer if needed
-			let summaryText: string | undefined;
-			let summaryDetails: unknown;
-			if (options.summarize && entriesToSummarize.length > 0 && !extensionSummary) {
+			const resolution = beforeTree.resolution;
+			let summaryText = resolution.summaryText;
+			let summaryDetails = resolution.summaryDetails;
+			let fromExtension = resolution.fromExtension;
+
+			if (options.summarize && entriesToSummarize.length > 0 && !summaryText) {
 				const model = this.model!;
 				const { apiKey, headers } = await this._getRequiredRequestAuth(model);
 				const branchSummarySettings = this.settingsManager.getBranchSummarySettings();
-				const result = await generateBranchSummary(entriesToSummarize, {
+				const defaultSummary = await resolveDefaultBranchSummary(entriesToSummarize, {
 					model,
 					apiKey,
 					headers,
-					signal: this._branchSummaryAbortController.signal,
-					customInstructions,
-					replaceInstructions,
+					signal,
+					customInstructions: resolution.customInstructions,
+					replaceInstructions: resolution.replaceInstructions,
 					reserveTokens: branchSummarySettings.reserveTokens,
 					streamFn: this.agent.streamFn,
 				});
-				if (result.aborted) {
+				if ("aborted" in defaultSummary) {
 					return { cancelled: true, aborted: true };
 				}
-				if (result.error) {
-					throw new Error(result.error);
+				if ("error" in defaultSummary) {
+					throw new Error(defaultSummary.error);
 				}
-				summaryText = result.summary;
-				summaryDetails = {
-					readFiles: result.readFiles || [],
-					modifiedFiles: result.modifiedFiles || [],
-				};
-			} else if (extensionSummary) {
-				summaryText = extensionSummary.summary;
-				summaryDetails = extensionSummary.details;
+				summaryText = defaultSummary.summaryText;
+				summaryDetails = defaultSummary.summaryDetails;
+				fromExtension = false;
 			}
 
-			// Determine the new leaf position based on target type
-			let newLeafId: string | null;
-			let editorText: string | undefined;
+			const { newLeafId, editorText } = resolveTreeNavigationTarget(targetEntry, targetId, (content) =>
+				this._extractUserMessageText(content),
+			);
 
-			if (targetEntry.type === "message" && targetEntry.message.role === "user") {
-				// User message: leaf = parent (null if root), text goes to editor
-				newLeafId = targetEntry.parentId;
-				editorText = this._extractUserMessageText(targetEntry.message.content);
-			} else if (targetEntry.type === "custom_message") {
-				// Custom message: leaf = parent (null if root), text goes to editor
-				newLeafId = targetEntry.parentId;
-				editorText =
-					typeof targetEntry.content === "string"
-						? targetEntry.content
-						: targetEntry.content
-								.filter((c): c is { type: "text"; text: string } => c.type === "text")
-								.map((c) => c.text)
-								.join("");
-			} else {
-				// Non-user message: leaf = selected node
-				newLeafId = targetId;
-			}
+			const summaryEntry = applyTreeLeafSwitch(this.sessionManager, {
+				newLeafId,
+				targetId,
+				summaryText,
+				summaryDetails,
+				fromExtension,
+				label: resolution.label,
+			});
 
-			// Switch leaf (with or without summary)
-			// Summary is attached at the navigation target position (newLeafId), not the old branch
-			let summaryEntry: BranchSummaryEntry | undefined;
-			if (summaryText) {
-				// Create summary at target position (can be null for root)
-				const summaryId = this.sessionManager.branchWithSummary(
-					newLeafId,
-					summaryText,
-					summaryDetails,
-					fromExtension,
-				);
-				summaryEntry = this.sessionManager.getEntry(summaryId) as BranchSummaryEntry;
-
-				// Attach label to the summary entry
-				if (label) {
-					this.sessionManager.appendLabelChange(summaryId, label);
-				}
-			} else if (newLeafId === null) {
-				// No summary, navigating to root - reset leaf
-				this.sessionManager.resetLeaf();
-			} else {
-				// No summary, navigating to non-root
-				this.sessionManager.branch(newLeafId);
-			}
-
-			// Attach label to target entry when not summarizing (no summary entry to label)
-			if (label && !summaryText) {
-				this.sessionManager.appendLabelChange(targetId, label);
-			}
-
-			// Update agent state
 			const sessionContext = this.sessionManager.buildSessionContext();
 			this.agent.state.messages = sessionContext.messages;
 
-			// Emit session_tree event
 			await this._extensionRunner.emit({
 				type: "session_tree",
 				newLeafId: this.sessionManager.getLeafId(),
@@ -2830,8 +2616,6 @@ export class AgentSession {
 				summaryEntry,
 				fromExtension: summaryText ? fromExtension : undefined,
 			});
-
-			// Emit to custom tools
 
 			return { editorText, cancelled: false, summaryEntry };
 		} finally {
