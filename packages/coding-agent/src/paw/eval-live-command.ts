@@ -17,6 +17,7 @@ export interface PawEvalLiveParsedInput {
 	keepWorkdir: boolean;
 	maxSteps: number;
 	handoff?: string;
+	matrix?: string;
 }
 
 export type PawEvalLiveParsedArgs =
@@ -72,7 +73,7 @@ export interface PawEvalLiveCommandResult {
 	results: PawEvalLiveRepoResult[];
 }
 
-const EVAL_LIVE_SCALAR_OPTIONS = new Set(["--repo", "--workdir", "--max-steps", "--handoff"]);
+const EVAL_LIVE_SCALAR_OPTIONS = new Set(["--repo", "--workdir", "--max-steps", "--handoff", "--matrix"]);
 
 export function parsePawEvalLiveArgs(args: string[]): PawEvalLiveParsedArgs {
 	if (args.some((arg) => arg === "--help" || arg === "-h")) {
@@ -82,6 +83,7 @@ export function parsePawEvalLiveArgs(args: string[]): PawEvalLiveParsedArgs {
 	let workdir: string | undefined;
 	let maxSteps = 6;
 	let handoff: string | undefined;
+	let matrix: string | undefined;
 	let install = false;
 	let keepWorkdir = false;
 	const seenSingleton = new Set<string>();
@@ -125,6 +127,8 @@ export function parsePawEvalLiveArgs(args: string[]): PawEvalLiveParsedArgs {
 			maxSteps = parsed;
 		} else if (arg === "--handoff") {
 			handoff = value;
+		} else if (arg === "--matrix") {
+			matrix = value;
 		}
 		index += 2;
 	}
@@ -175,7 +179,22 @@ export function formatPawEvalLiveCommandResult(result: PawEvalLiveCommandResult)
 			lines.push(`  unverified: ${repo.unverifiedGates.join(", ")}`);
 		}
 	}
+	const scoreboard = computeEvalLiveScoreboard(result);
+	lines.push(`scoreboard: pass=${scoreboard.pass} unverified=${scoreboard.unverified} fail=${scoreboard.fail} pass_rate=${scoreboard.passRate.toFixed(2)}%`);
 	return lines.join("\n");
+}
+
+function computeEvalLiveScoreboard(result: PawEvalLiveCommandResult): { pass: number; unverified: number; fail: number; passRate: number } {
+	let pass = 0;
+	let unverified = 0;
+	let fail = 0;
+	for (const repo of result.results) {
+		if (repo.status === "done") pass += 1;
+		else if (repo.status === "done_with_unverified") unverified += 1;
+		else fail += 1;
+	}
+	const total = result.results.length || 1;
+	return { pass, unverified, fail, passRate: ((pass + unverified) / total) * 100 };
 }
 
 export async function runPawEvalLiveCommand(args: string[]): Promise<void> {
@@ -400,8 +419,12 @@ function runLocalCommand(input: PawEvalLiveCommandRunnerInput): Promise<PawEvalL
 
 function printPawEvalLiveHelp(): void {
 	console.log(`Usage:
-  ${APP_NAME} paw eval-live --repo <url-or-path> [--repo <url-or-path>...] [--install] [--workdir <path>] [--keep-workdir]
+  ${APP_NAME} paw eval-live --repo <url-or-path> [--repo <url-or-path>...] [--install] [--workdir <path>] [--keep-workdir] [--matrix <name>]
 
 Run live MiniMax-backed Paw full-slice validation on real repositories.
+
+Matrices:
+  smoke   default 3-repo smoke matrix
+  full    nightly 10-repo matrix
 `);
 }

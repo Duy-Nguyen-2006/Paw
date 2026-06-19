@@ -17,12 +17,22 @@ export type PawDoctorReport = {
 	egressAllowlist: readonly string[];
 	evidence: string;
 	probeNote: string;
+	fixSuggestions: readonly PawDoctorFixSuggestion[];
 };
 
 export type PawDoctorReportInput = {
 	config: PawRuntimeConfig;
 	probeFacts: PawSandboxProbeFacts;
+	includeFixSuggestions?: boolean;
 };
+
+export interface PawDoctorFixSuggestion {
+	area: string;
+	issue: string;
+	command: string;
+	manualSteps: string;
+	severity: "info" | "warn" | "block";
+}
 
 export function createPawDoctorReport(input: PawDoctorReportInput): PawDoctorReport {
 	const detection = detectPawSandboxPrimitives(input.probeFacts);
@@ -34,6 +44,8 @@ export function createPawDoctorReport(input: PawDoctorReportInput): PawDoctorRep
 		);
 	}
 
+	const fixSuggestions = input.includeFixSuggestions === true ? buildPawDoctorFixSuggestions(input) : [];
+
 	return {
 		status: detection.status,
 		detectedPrimitives: detection.detectedPrimitives,
@@ -42,6 +54,7 @@ export function createPawDoctorReport(input: PawDoctorReportInput): PawDoctorRep
 		egressAllowlist: input.config.sandbox.egress_allowlist,
 		evidence: detection.evidence,
 		probeNote: "Live platform probing is read-only and is not complete cross-distro validation.",
+		fixSuggestions,
 	};
 }
 
@@ -64,6 +77,15 @@ export function formatPawDoctorReport(report: PawDoctorReport): string {
 		lines.push(...report.remediation.map((remediation) => `remediation: ${remediation}`));
 	}
 
+	if (report.fixSuggestions.length > 0) {
+		lines.push("fix suggestions:");
+		for (const suggestion of report.fixSuggestions) {
+			lines.push(`  [${suggestion.severity}] ${suggestion.area}: ${suggestion.issue}`);
+			lines.push(`    command: ${suggestion.command}`);
+			lines.push(`    manual: ${suggestion.manualSteps}`);
+		}
+	}
+
 	lines.push(
 		`egress allowlist: ${formatList(report.egressAllowlist)}`,
 		`evidence: ${report.evidence}`,
@@ -78,8 +100,11 @@ export async function runPawDoctorCommand(args: string[], loadConfig: () => PawR
 		return;
 	}
 
-	if (args.length > 0) {
-		printPawDoctorCommandError(`Unknown option for "paw doctor": ${args[0]}`);
+	const fixSuggestions = args.includes("--fix-suggestions");
+	const filtered = args.filter((arg) => arg !== "--fix-suggestions");
+
+	if (filtered.length > 0) {
+		printPawDoctorCommandError(`Unknown option for "paw doctor": ${filtered[0]}`);
 		return;
 	}
 
@@ -87,6 +112,7 @@ export async function runPawDoctorCommand(args: string[], loadConfig: () => PawR
 	const report = createPawDoctorReport({
 		config,
 		probeFacts: collectPawSandboxProbeFacts(),
+		includeFixSuggestions: fixSuggestions,
 	});
 	console.log(formatPawDoctorReport(report));
 }
@@ -160,19 +186,70 @@ function stripOsReleaseQuotes(value: string): string {
 	return value;
 }
 
+function buildPawDoctorFixSuggestions(input: PawDoctorReportInput): PawDoctorFixSuggestion[] {
+	const suggestions: PawDoctorFixSuggestion[] = [];
+	if (!input.probeFacts.bubblewrapAvailable) {
+		suggestions.push({
+			area: "sandbox",
+			issue: "bubblewrap (bwrap) is not on PATH",
+			command: "sudo apt-get install -y bubblewrap   # or: sudo dnf install -y bubblewrap",
+			manualSteps: "Install bubblewrap via your package manager, or set --no-sandbox-i-understand for trusted runs only.",
+			severity: "warn",
+		});
+	}
+	if (!input.probeFacts.landlockAvailable) {
+		suggestions.push({
+			area: "sandbox",
+			issue: "Landlock kernel support is missing",
+			command: "uname -r   # verify >= 5.13; upgrade kernel or use bwrap-only fallback",
+			manualSteps: "Upgrade to a Linux kernel that exposes /sys/kernel/security/landlock, or rely on the bwrap-only fallback.",
+			severity: "info",
+		});
+	}
+	if (!input.probeFacts.userNamespacesAvailable) {
+		suggestions.push({
+			area: "sandbox",
+			issue: "Unprivileged user namespaces are disabled",
+			command: "sudo sysctl -w kernel.unprivileged_userns_clone=1",
+			manualSteps: "Enable user namespaces or run with --no-sandbox-i-understand (unsafe override).",
+			severity: "block",
+		});
+	}
+	if (input.config.sandbox.network === "default_deny" && input.config.sandbox.egress_allowlist.length === 0) {
+		suggestions.push({
+			area: "network",
+			issue: "default_deny network is active but egress_allowlist is empty",
+			command: "paw doctor --help   # then add provider_hosts and package_registries to paw-spec/config.yaml",
+			manualSteps: "Add at least provider_hosts and package_registries to sandbox.egress_allowlist.",
+			severity: "warn",
+		});
+	}
+	if (input.config.approval.default_mode !== "strict" && input.config.kpi.pr_hard_gates.length === 0) {
+		suggestions.push({
+			area: "kpi",
+			issue: "PR hard gates are not configured",
+			command: "add kpi.pr_hard_gates [schema_validation, redteam_injection, secret_leak, liveness_resume, budget_timeout_enforcement]",
+			manualSteps: "Add PR hard gates to paw-spec/config.yaml under kpi.pr_hard_gates.",
+			severity: "info",
+		});
+	}
+	return suggestions;
+}
+
 function formatList(values: readonly string[]): string {
 	return values.length === 0 ? "none" : values.join(", ");
 }
 
 function printPawDoctorHelp(): void {
 	console.log(`Usage:
-  ${APP_NAME} paw doctor
+  ${APP_NAME} paw doctor [--fix-suggestions]
 
-Print read-only sandbox diagnostics for Paw.
+Print read-only sandbox diagnostics for Paw. Use --fix-suggestions to include actionable remediation steps.
 
 Commands:
-  ${APP_NAME} paw doctor        Show read-only sandbox diagnostics
-  ${APP_NAME} paw doctor --help Show this help
+  ${APP_NAME} paw doctor                  Show read-only sandbox diagnostics
+  ${APP_NAME} paw doctor --fix-suggestions Include actionable fix commands
+  ${APP_NAME} paw doctor --help           Show this help
 `);
 }
 

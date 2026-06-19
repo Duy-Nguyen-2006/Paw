@@ -1,12 +1,18 @@
 import { relative } from "node:path";
 import { APP_NAME } from "../config.ts";
+import { runPawChatCommand } from "./chat-command.ts";
 import { runPawBuildCommand } from "./build-command.ts";
 import { runPawCleanCommand } from "./clean-command.ts";
 import { loadDefaultPawRuntimeConfig } from "./config.ts";
+import { runPawCostCommand } from "./cost-command.ts";
+import { runPawDiffCommand } from "./diff-command.ts";
+import { runPawDrillCommand } from "./drill-command.ts";
 import { runPawDoctorCommand } from "./doctor-command.ts";
 import { runPawEvalLiveCommand } from "./eval-live-command.ts";
+import { runPawExplainCommand } from "./explain-command.ts";
 import { runPawFinalizeCommand } from "./finalize-command.ts";
 import { initializePawProject } from "./persistence.ts";
+import { runPawPlanCommand } from "./plan-command.ts";
 import { runPawApprovePlanCommand } from "./plan-approval-command.ts";
 import { runPawReportCommand } from "./report-command.ts";
 import { runPawResumeCommand } from "./resume-command.ts";
@@ -18,6 +24,7 @@ import { runPawBeginImplementationCommand } from "./slice-implementation-command
 import { runPawSelectSliceCommand } from "./slice-selection-command.ts";
 import { runPawStartCommand } from "./start-command.ts";
 import { runPawStatusCommand } from "./status-command.ts";
+import { runPawTimelineCommand } from "./timeline-command.ts";
 import { runPawBlockVerifierCommand } from "./verifier-blocked-command.ts";
 import { runPawCompleteVerificationCommand } from "./verifier-result-command.ts";
 import { runPawVerifyCommand } from "./verify-command.ts";
@@ -32,6 +39,13 @@ function printPawHelp(): void {
   ${APP_NAME} paw resume <session-id>
   ${APP_NAME} paw verify <session-id>
   ${APP_NAME} paw build <session-id> --once
+  ${APP_NAME} paw drill <name> [--json]
+  ${APP_NAME} paw diff [scope] [--session <id>] [--stat]
+  ${APP_NAME} paw plan <session-id> [--queue|--completed] [--acceptance]
+  ${APP_NAME} paw timeline <session-id> [--limit <n>] [--no-journal]
+  ${APP_NAME} paw cost <session-id> [--class trivial|standard|high_risk] [--json]
+  ${APP_NAME} paw explain [<session-id>] [--verbose]
+  ${APP_NAME} paw chat <session-id> [--json]
   ${APP_NAME} paw approve-plan <session-id> --slice <slice-id>[:<title>]...
   ${APP_NAME} paw select-slice <session-id>
   ${APP_NAME} paw begin-implementation <session-id>
@@ -46,7 +60,7 @@ function printPawHelp(): void {
   ${APP_NAME} paw finalize <session-id> --summary <text>
   ${APP_NAME} paw report <session-id>
   ${APP_NAME} paw clean --dry-run
-  ${APP_NAME} paw doctor
+  ${APP_NAME} paw doctor [--fix-suggestions]
   ${APP_NAME} paw eval-live --repo <url-or-path> [--repo <url-or-path>...] [--install]
 
 Run bounded Paw project commands.
@@ -62,6 +76,20 @@ Commands:
   ${APP_NAME} paw resume --help Show resume help
   ${APP_NAME} paw build <session-id> --once Run one worker orchestration step
   ${APP_NAME} paw build --help Show build help
+  ${APP_NAME} paw drill <name>    Run a Paw drill (crash-resume, secret-redaction, provider-failover, patch-robustness, reviewer-diff)
+  ${APP_NAME} paw drill --help    Show drill help
+  ${APP_NAME} paw diff [scope]    Show working tree or session diff
+  ${APP_NAME} paw diff --help     Show diff help
+  ${APP_NAME} paw plan <session-id>  Inspect the current plan state
+  ${APP_NAME} paw plan --help     Show plan help
+  ${APP_NAME} paw timeline <session-id>  Show session timeline (events + state + journal)
+  ${APP_NAME} paw timeline --help  Show timeline help
+  ${APP_NAME} paw cost <session-id>  Show session cost aggregation
+  ${APP_NAME} paw cost --help     Show cost help
+  ${APP_NAME} paw explain [<session-id>]  Explain current state, blocked reason, sandbox
+  ${APP_NAME} paw explain --help   Show explain help
+  ${APP_NAME} paw chat <session-id>  Start an interactive Paw chat session
+  ${APP_NAME} paw chat --help    Show chat help
   ${APP_NAME} paw approve-plan <session-id> --slice <id>[:<title>]... Approve plan slices from PLAN_DRAFTED
   ${APP_NAME} paw approve-plan --help               Show approve-plan help
   ${APP_NAME} paw select-slice <session-id>          Select next pending plan slice
@@ -93,7 +121,8 @@ Commands:
   ${APP_NAME} paw report --help                Show report help
   ${APP_NAME} paw clean --dry-run Show read-only Paw retention plan
   ${APP_NAME} paw clean --help  Show clean help
-  ${APP_NAME} paw doctor        Show read-only sandbox diagnostics
+  ${APP_NAME} paw doctor                       Show read-only sandbox diagnostics
+  ${APP_NAME} paw doctor --fix-suggestions     Include actionable fix commands
   ${APP_NAME} paw doctor --help Show doctor help
   ${APP_NAME} paw eval-live --repo <url-or-path> Run live full-slice validation on real repos
 `);
@@ -166,6 +195,27 @@ const PAW_SUBCOMMAND_HANDLERS: Record<string, PawSubcommandHandler> = {
 	doctor: handlePawDoctor,
 	"eval-live": async (rest) => {
 		await runPawEvalLiveCommand(rest);
+	},
+	drill: async (rest) => {
+		await runPawDrillCommand(rest);
+	},
+	diff: async (rest) => {
+		await runPawDiffCommand(rest);
+	},
+	plan: async (rest) => {
+		await runPawPlanCommand(rest);
+	},
+	timeline: async (rest) => {
+		await runPawTimelineCommand(rest);
+	},
+	cost: async (rest) => {
+		await runPawCostCommand(rest);
+	},
+	explain: async (rest) => {
+		await runPawExplainCommand(rest);
+	},
+	chat: async (rest) => {
+		await runPawChatCommand(rest);
 	},
 	status: handlePawStatus,
 	report: async (rest) => {
