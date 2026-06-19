@@ -17,8 +17,8 @@ import {
 } from "./runner-bind.ts";
 import { resolveRegisteredCommands } from "./runner-commands.ts";
 import { buildExtensionCommandContext, buildExtensionContext, type ExtensionContextHost } from "./runner-context.ts";
+import { emitBeforeAgentStartWithContextOverride } from "./runner-emit-agent.ts";
 import {
-	emitBeforeAgentStartAcrossExtensions,
 	emitBeforeProviderRequestAcrossExtensions,
 	emitContextAcrossExtensions,
 	emitInputAcrossExtensions,
@@ -26,17 +26,13 @@ import {
 	emitToolCallAcrossExtensions,
 	emitToolResultAcrossExtensions,
 	emitUserBashAcrossExtensions,
-	processSessionBeforeHandlersForExtension,
-	runMessageEndHandlersForExtension,
 } from "./runner-emit-helpers.ts";
+import { emitMessageEndAcrossExtensions } from "./runner-emit-message.ts";
+import { emitRunnerEventAcrossExtensions, emitSessionShutdownAcrossExtensions } from "./runner-emit-session.ts";
+import { emitProjectTrustAcrossExtensions } from "./runner-emit-trust.ts";
 import { noOpUIContext } from "./runner-noop-ui.ts";
 import { collectExtensionShortcuts } from "./runner-shortcuts.ts";
-import type {
-	BeforeAgentStartCombinedResult,
-	RunnerEmitEvent,
-	RunnerEmitResult,
-	SessionBeforeEventResult,
-} from "./runner-types.ts";
+import type { BeforeAgentStartCombinedResult, RunnerEmitEvent, RunnerEmitResult } from "./runner-types.ts";
 import type {
 	CompactOptions,
 	ContextUsage,
@@ -103,11 +99,13 @@ export async function emitSessionShutdownEvent(
 	extensionRunner: ExtensionRunner,
 	event: SessionShutdownEvent,
 ): Promise<boolean> {
-	if (extensionRunner.hasHandlers("session_shutdown")) {
-		await extensionRunner.emit(event);
-		return true;
-	}
-	return false;
+	return emitSessionShutdownAcrossExtensions(
+		(eventType) => extensionRunner.hasHandlers(eventType),
+		async (shutdownEvent) => {
+			await extensionRunner.emit(shutdownEvent as RunnerEmitEvent);
+		},
+		event,
+	);
 }
 
 export async function emitProjectTrustEvent(
@@ -115,29 +113,7 @@ export async function emitProjectTrustEvent(
 	event: ProjectTrustEvent,
 	ctx: ProjectTrustContext,
 ): Promise<{ result?: ProjectTrustEventResult; errors: ExtensionError[] }> {
-	const errors: ExtensionError[] = [];
-	for (const ext of extensionsResult.extensions) {
-		const handlers = ext.handlers.get("project_trust");
-		if (!handlers || handlers.length === 0) continue;
-
-		for (const handler of handlers) {
-			try {
-				const handlerResult = (await handler(event, ctx)) as ProjectTrustEventResult;
-				if (handlerResult.trusted === "undecided") {
-					continue;
-				}
-				return { result: handlerResult, errors };
-			} catch (error) {
-				errors.push({
-					extensionPath: ext.path,
-					event: event.type,
-					error: error instanceof Error ? error.message : String(error),
-					stack: error instanceof Error ? error.stack : undefined,
-				});
-			}
-		}
-	}
-	return { errors };
+	return emitProjectTrustAcrossExtensions(extensionsResult.extensions, event, ctx);
 }
 
 export class ExtensionRunner {
@@ -430,40 +406,15 @@ export class ExtensionRunner {
 	}
 
 	async emit<TEvent extends RunnerEmitEvent>(event: TEvent): Promise<RunnerEmitResult<TEvent>> {
-		const ctx = this.createContext();
-		let result: SessionBeforeEventResult | undefined;
-
-		for (const ext of this.extensions) {
-			const handlers = ext.handlers.get(event.type);
-			if (!handlers?.length) continue;
-
-			result = await processSessionBeforeHandlersForExtension(event, ctx, ext, handlers, result, (error) =>
-				this.emitError(error),
-			);
-			if (result?.cancel) {
-				return result as RunnerEmitResult<TEvent>;
-			}
-		}
-
-		return result as RunnerEmitResult<TEvent>;
+		return emitRunnerEventAcrossExtensions(this.extensions, this.createContext(), event, (error) =>
+			this.emitError(error),
+		);
 	}
 
 	async emitMessageEnd(event: MessageEndEvent): Promise<AgentMessage | undefined> {
-		const ctx = this.createContext();
-		let currentMessage = event.message;
-		let modified = false;
-
-		for (const ext of this.extensions) {
-			const result = await runMessageEndHandlersForExtension(event, ctx, ext, currentMessage, (error) =>
-				this.emitError(error),
-			);
-			currentMessage = result.message;
-			if (result.modified) {
-				modified = true;
-			}
-		}
-
-		return modified ? currentMessage : undefined;
+		return emitMessageEndAcrossExtensions(this.extensions, this.createContext(), event, (error) =>
+			this.emitError(error),
+		);
 	}
 
 	async emitToolResult(event: ToolResultEvent): Promise<ToolResultEventResult | undefined> {
@@ -500,22 +451,15 @@ export class ExtensionRunner {
 		systemPrompt: string,
 		systemPromptOptions: BuildSystemPromptOptions,
 	): Promise<BeforeAgentStartCombinedResult | undefined> {
-		const systemPromptState = { value: systemPrompt };
-		const ctx = Object.defineProperties({}, Object.getOwnPropertyDescriptors(this.createContext())) as ReturnType<
-			ExtensionRunner["createContext"]
-		>;
-		ctx.getSystemPrompt = () => {
-			this.assertActive();
-			return systemPromptState.value;
-		};
-		return emitBeforeAgentStartAcrossExtensions(
+		return emitBeforeAgentStartWithContextOverride(
 			this.extensions,
-			ctx,
+			this.createContext(),
 			prompt,
 			images,
-			systemPromptState,
+			systemPrompt,
 			systemPromptOptions,
 			(error) => this.emitError(error),
+			() => this.assertActive(),
 		);
 	}
 

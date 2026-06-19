@@ -38,6 +38,12 @@ import type {
 
 export type EmitErrorFn = (error: ExtensionError) => void;
 
+/**
+ * Dispatch helper for emitting events from higher-level helpers. The function
+ * may be async and should match the runner.emit signature in spirit.
+ */
+export type EmitDispatchFn<TEvent> = (event: TEvent) => Promise<unknown>;
+
 export function isSessionBeforeEvent(event: RunnerEmitEvent): event is SessionBeforeEvent {
 	return (
 		event.type === "session_before_switch" ||
