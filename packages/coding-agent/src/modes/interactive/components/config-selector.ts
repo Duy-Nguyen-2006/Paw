@@ -8,21 +8,38 @@ import {
 	type Component,
 	Container,
 	type Focusable,
-	getKeybindings,
 	Input,
-	matchesKey,
 	Spacer,
 	truncateToWidth,
 	visibleWidth,
 } from "@earendil-works/pi-tui";
-import type { PathMetadata, ResolvedPaths, ResolvedResource } from "../../../core/package-manager.ts";
+import type { ResolvedPaths, ResolvedResource } from "../../../core/package-manager.ts";
 import type { SettingsManager } from "../../../core/settings-manager.ts";
 import { theme } from "../theme/theme.ts";
+import {
+	dispatchConfigSelectorKey,
+	findNextItemIndex,
+	findPrevItemIndex,
+	pageDownToItem,
+	pageUpToItem,
+} from "./config-selector-input.ts";
+import {
+	collectContainingConfigAncestors,
+	collectMatchingConfigItems,
+	normalizeConfigQuery,
+} from "./config-selector-search.ts";
 import { toggleConfigResource } from "./config-selector-toggle.ts";
+import type {
+	FlatEntry,
+	ResourceGroup,
+	ResourceItem,
+	ResourceSubgroup,
+	ResourceType,
+} from "./config-selector-types.ts";
 import { DynamicBorder } from "./dynamic-border.ts";
 import { rawKeyHint } from "./keybinding-hints.ts";
 
-type ResourceType = "extensions" | "skills" | "prompts" | "themes";
+export type { FlatEntry, ResourceGroup, ResourceItem, ResourceSubgroup, ResourceType };
 
 const RESOURCE_TYPE_LABELS: Record<ResourceType, string> = {
 	extensions: "Extensions",
@@ -30,31 +47,6 @@ const RESOURCE_TYPE_LABELS: Record<ResourceType, string> = {
 	prompts: "Prompts",
 	themes: "Themes",
 };
-
-interface ResourceItem {
-	path: string;
-	enabled: boolean;
-	metadata: PathMetadata;
-	resourceType: ResourceType;
-	displayName: string;
-	groupKey: string;
-	subgroupKey: string;
-}
-
-interface ResourceSubgroup {
-	type: ResourceType;
-	label: string;
-	items: ResourceItem[];
-}
-
-interface ResourceGroup {
-	key: string;
-	label: string;
-	scope: "user" | "project" | "temporary";
-	origin: "package" | "top-level";
-	source: string;
-	subgroups: ResourceSubgroup[];
-}
 
 function formatBaseDir(baseDir: string): string {
 	const homeDir = homedir();
@@ -73,7 +65,7 @@ function formatBaseDir(baseDir: string): string {
 	return displayPath.endsWith("/") ? displayPath : `${displayPath}/`;
 }
 
-function getGroupLabel(metadata: PathMetadata): string {
+function getGroupLabel(metadata: ResolvedResource["metadata"]): string {
 	if (metadata.origin === "package") {
 		return `${metadata.source} (${metadata.scope})`;
 	}
@@ -89,67 +81,64 @@ function getGroupLabel(metadata: PathMetadata): string {
 	return metadata.scope === "user" ? "User settings" : "Project settings";
 }
 
-function buildGroups(resolved: ResolvedPaths): ResourceGroup[] {
-	const groupMap = new Map<string, ResourceGroup>();
+function buildItemDisplayName(path: string, resourceType: ResourceType): string {
+	const fileName = basename(path);
+	const parentFolder = basename(dirname(path));
+	if (resourceType === "extensions" && parentFolder !== "extensions") {
+		return `${parentFolder}/${fileName}`;
+	}
+	if (resourceType === "skills" && fileName === "SKILL.md") {
+		return parentFolder;
+	}
+	return fileName;
+}
 
-	const addToGroup = (resources: ResolvedResource[], resourceType: ResourceType) => {
-		for (const res of resources) {
-			const { path, enabled, metadata } = res;
-			const groupKey = `${metadata.origin}:${metadata.scope}:${metadata.source}:${metadata.baseDir ?? ""}`;
+function addToGroup(
+	groupMap: Map<string, ResourceGroup>,
+	resources: ResolvedResource[],
+	resourceType: ResourceType,
+): void {
+	for (const res of resources) {
+		const { path, enabled, metadata } = res;
+		const groupKey = `${metadata.origin}:${metadata.scope}:${metadata.source}:${metadata.baseDir ?? ""}`;
 
-			if (!groupMap.has(groupKey)) {
-				groupMap.set(groupKey, {
-					key: groupKey,
-					label: getGroupLabel(metadata),
-					scope: metadata.scope,
-					origin: metadata.origin,
-					source: metadata.source,
-					subgroups: [],
-				});
-			}
-
-			const group = groupMap.get(groupKey)!;
-			const subgroupKey = `${groupKey}:${resourceType}`;
-
-			let subgroup = group.subgroups.find((sg) => sg.type === resourceType);
-			if (!subgroup) {
-				subgroup = {
-					type: resourceType,
-					label: RESOURCE_TYPE_LABELS[resourceType],
-					items: [],
-				};
-				group.subgroups.push(subgroup);
-			}
-
-			const fileName = basename(path);
-			const parentFolder = basename(dirname(path));
-			let displayName: string;
-			if (resourceType === "extensions" && parentFolder !== "extensions") {
-				displayName = `${parentFolder}/${fileName}`;
-			} else if (resourceType === "skills" && fileName === "SKILL.md") {
-				displayName = parentFolder;
-			} else {
-				displayName = fileName;
-			}
-			subgroup.items.push({
-				path,
-				enabled,
-				metadata,
-				resourceType,
-				displayName,
-				groupKey,
-				subgroupKey,
-			});
+		let group = groupMap.get(groupKey);
+		if (!group) {
+			group = {
+				key: groupKey,
+				label: getGroupLabel(metadata),
+				scope: metadata.scope,
+				origin: metadata.origin,
+				source: metadata.source,
+				subgroups: [],
+			};
+			groupMap.set(groupKey, group);
 		}
-	};
 
-	addToGroup(resolved.extensions, "extensions");
-	addToGroup(resolved.skills, "skills");
-	addToGroup(resolved.prompts, "prompts");
-	addToGroup(resolved.themes, "themes");
+		let subgroup = group.subgroups.find((sg) => sg.type === resourceType);
+		if (!subgroup) {
+			subgroup = {
+				type: resourceType,
+				label: RESOURCE_TYPE_LABELS[resourceType],
+				items: [],
+			};
+			group.subgroups.push(subgroup);
+		}
 
-	// Sort groups: packages first, then top-level; user before project
-	const groups = Array.from(groupMap.values());
+		subgroup.items.push({
+			path,
+			enabled,
+			metadata,
+			resourceType,
+			displayName: buildItemDisplayName(path, resourceType),
+			groupKey,
+			subgroupKey: `${groupKey}:${resourceType}`,
+		});
+	}
+}
+
+/** Sort groups: packages first, then top-level; user before project; then by source. */
+function sortResourceGroups(groups: ResourceGroup[]): ResourceGroup[] {
 	groups.sort((a, b) => {
 		if (a.origin !== b.origin) {
 			return a.origin === "package" ? -1 : 1;
@@ -159,8 +148,11 @@ function buildGroups(resolved: ResolvedPaths): ResourceGroup[] {
 		}
 		return a.source.localeCompare(b.source);
 	});
+	return groups;
+}
 
-	// Sort subgroups within each group by type order, and items by name
+/** Sort subgroups and items inside each group using deterministic order. */
+function sortResourceGroupContents(groups: ResourceGroup[]): void {
 	const typeOrder: Record<ResourceType, number> = { extensions: 0, skills: 1, prompts: 2, themes: 3 };
 	for (const group of groups) {
 		group.subgroups.sort((a, b) => typeOrder[a.type] - typeOrder[b.type]);
@@ -168,14 +160,19 @@ function buildGroups(resolved: ResolvedPaths): ResourceGroup[] {
 			subgroup.items.sort((a, b) => a.displayName.localeCompare(b.displayName));
 		}
 	}
-
-	return groups;
 }
 
-type FlatEntry =
-	| { type: "group"; group: ResourceGroup }
-	| { type: "subgroup"; subgroup: ResourceSubgroup; group: ResourceGroup }
-	| { type: "item"; item: ResourceItem };
+function buildGroups(resolved: ResolvedPaths): ResourceGroup[] {
+	const groupMap = new Map<string, ResourceGroup>();
+	addToGroup(groupMap, resolved.extensions, "extensions");
+	addToGroup(groupMap, resolved.skills, "skills");
+	addToGroup(groupMap, resolved.prompts, "prompts");
+	addToGroup(groupMap, resolved.themes, "themes");
+
+	const groups = sortResourceGroups(Array.from(groupMap.values()));
+	sortResourceGroupContents(groups);
+	return groups;
+}
 
 class ConfigSelectorHeader implements Component {
 	invalidate(): void {
@@ -257,63 +254,27 @@ class ResourceList implements Component, Focusable {
 	}
 
 	private findNextItem(fromIndex: number, direction: 1 | -1): number {
-		let idx = fromIndex + direction;
-		while (idx >= 0 && idx < this.filteredItems.length) {
-			if (this.filteredItems[idx].type === "item") {
-				return idx;
-			}
-			idx += direction;
-		}
-		return fromIndex; // Stay at current if no item found
+		const search = direction === 1 ? findNextItemIndex : findPrevItemIndex;
+		const start = fromIndex + direction;
+		return search(this.filteredItems, start);
 	}
 
 	private filterItems(query: string): void {
-		if (!query.trim()) {
+		const normalized = normalizeConfigQuery(query);
+		if (!normalized) {
 			this.filteredItems = [...this.flatItems];
 			this.selectFirstItem();
 			return;
 		}
 
-		const lowerQuery = query.toLowerCase();
-		const matchingItems = new Set<ResourceItem>();
-		const matchingSubgroups = new Set<ResourceSubgroup>();
-		const matchingGroups = new Set<ResourceGroup>();
+		const matchingItems = collectMatchingConfigItems(this.flatItems, normalized);
+		const ancestors = collectContainingConfigAncestors(this.groups, matchingItems);
 
-		for (const entry of this.flatItems) {
-			if (entry.type === "item") {
-				const item = entry.item;
-				if (
-					item.displayName.toLowerCase().includes(lowerQuery) ||
-					item.resourceType.toLowerCase().includes(lowerQuery) ||
-					item.path.toLowerCase().includes(lowerQuery)
-				) {
-					matchingItems.add(item);
-				}
-			}
-		}
-
-		// Find which subgroups and groups contain matching items
-		for (const group of this.groups) {
-			for (const subgroup of group.subgroups) {
-				for (const item of subgroup.items) {
-					if (matchingItems.has(item)) {
-						matchingSubgroups.add(subgroup);
-						matchingGroups.add(group);
-					}
-				}
-			}
-		}
-
-		this.filteredItems = [];
-		for (const entry of this.flatItems) {
-			if (entry.type === "group" && matchingGroups.has(entry.group)) {
-				this.filteredItems.push(entry);
-			} else if (entry.type === "subgroup" && matchingSubgroups.has(entry.subgroup)) {
-				this.filteredItems.push(entry);
-			} else if (entry.type === "item" && matchingItems.has(entry.item)) {
-				this.filteredItems.push(entry);
-			}
-		}
+		this.filteredItems = this.flatItems.filter((entry) => {
+			if (entry.type === "group") return ancestors.matchingGroups.has(entry.group);
+			if (entry.type === "subgroup") return ancestors.matchingSubgroups.has(entry.subgroup);
+			return matchingItems.has(entry.item);
+		});
 
 		this.selectFirstItem();
 	}
@@ -399,60 +360,57 @@ class ResourceList implements Component, Focusable {
 	}
 
 	handleInput(data: string): void {
-		const kb = getKeybindings();
+		const action = dispatchConfigSelectorKey(data, {
+			selectedIndex: this.selectedIndex,
+			maxVisible: this.maxVisible,
+			filteredCount: this.filteredItems.length,
+		});
 
-		if (kb.matches(data, "tui.select.up")) {
-			this.selectedIndex = this.findNextItem(this.selectedIndex, -1);
-			return;
-		}
-		if (kb.matches(data, "tui.select.down")) {
-			this.selectedIndex = this.findNextItem(this.selectedIndex, 1);
-			return;
-		}
-		if (kb.matches(data, "tui.select.pageUp")) {
-			// Jump up by maxVisible, then find nearest item
-			let target = Math.max(0, this.selectedIndex - this.maxVisible);
-			while (target < this.filteredItems.length && this.filteredItems[target].type !== "item") {
-				target++;
+		switch (action.type) {
+			case "select-prev": {
+				const next = this.findNextItem(this.selectedIndex, -1);
+				if (next >= 0) this.selectedIndex = next;
+				return;
 			}
-			if (target < this.filteredItems.length) {
-				this.selectedIndex = target;
+			case "select-next": {
+				const next = this.findNextItem(this.selectedIndex, 1);
+				if (next >= 0) this.selectedIndex = next;
+				return;
 			}
-			return;
-		}
-		if (kb.matches(data, "tui.select.pageDown")) {
-			// Jump down by maxVisible, then find nearest item
-			let target = Math.min(this.filteredItems.length - 1, this.selectedIndex + this.maxVisible);
-			while (target >= 0 && this.filteredItems[target].type !== "item") {
-				target--;
+			case "page-up": {
+				const target = pageUpToItem(this.filteredItems, action.target);
+				if (target >= 0) this.selectedIndex = target;
+				return;
 			}
-			if (target >= 0) {
-				this.selectedIndex = target;
+			case "page-down": {
+				const target = pageDownToItem(this.filteredItems, action.target);
+				if (target >= 0) this.selectedIndex = target;
+				return;
 			}
-			return;
-		}
-		if (kb.matches(data, "tui.select.cancel")) {
-			this.onCancel?.();
-			return;
-		}
-		if (matchesKey(data, "ctrl+c")) {
-			this.onExit?.();
-			return;
-		}
-		if (data === " " || kb.matches(data, "tui.select.confirm")) {
-			const entry = this.filteredItems[this.selectedIndex];
-			if (entry?.type === "item") {
-				const newEnabled = !entry.item.enabled;
-				this.toggleResource(entry.item, newEnabled);
-				this.updateItem(entry.item, newEnabled);
-				this.onToggle?.(entry.item, newEnabled);
+			case "cancel":
+				this.onCancel?.();
+				return;
+			case "exit":
+				this.onExit?.();
+				return;
+			case "toggle-current": {
+				const entry = this.filteredItems[this.selectedIndex];
+				if (entry?.type === "item") {
+					const newEnabled = !entry.item.enabled;
+					this.toggleResource(entry.item, newEnabled);
+					this.updateItem(entry.item, newEnabled);
+					this.onToggle?.(entry.item, newEnabled);
+				}
+				return;
 			}
-			return;
+			case "forward-to-search": {
+				this.searchInput.handleInput(data);
+				this.filterItems(this.searchInput.getValue());
+				return;
+			}
+			default:
+				return;
 		}
-
-		// Pass to search input
-		this.searchInput.handleInput(data);
-		this.filterItems(this.searchInput.getValue());
 	}
 
 	private toggleResource(item: ResourceItem, enabled: boolean): void {

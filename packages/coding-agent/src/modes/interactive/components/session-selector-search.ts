@@ -1,6 +1,14 @@
 import { fuzzyMatch } from "@earendil-works/pi-tui";
 import type { SessionInfo } from "../../../core/session-manager.ts";
 
+import {
+	applyNameFilter,
+	filterSessionsPreserveOrder,
+	pickSessionSortStrategy,
+	sortSessionsByScore,
+} from "./session-selector-search-filter.ts";
+import { normalizeWhitespaceLower, tokenizeQuotedQuery, tryParseRegexQuery } from "./session-selector-search-parse.ts";
+
 export type SortMode = "threaded" | "recent" | "relevance";
 
 export type NameFilter = "all" | "named";
@@ -19,10 +27,6 @@ export interface MatchResult {
 	score: number;
 }
 
-function normalizeWhitespaceLower(text: string): string {
-	return text.toLowerCase().replace(/\s+/g, " ").trim();
-}
-
 function getSessionSearchText(session: SessionInfo): string {
 	return `${session.id} ${session.name ?? ""} ${session.allMessagesText} ${session.cwd}`;
 }
@@ -31,72 +35,10 @@ export function hasSessionName(session: SessionInfo): boolean {
 	return Boolean(session.name?.trim());
 }
 
-function matchesNameFilter(session: SessionInfo, filter: NameFilter): boolean {
-	if (filter === "all") return true;
-	return hasSessionName(session);
-}
-
-export function parseSearchQuery(query: string): ParsedSearchQuery {
-	const trimmed = query.trim();
-	if (!trimmed) {
-		return { mode: "tokens", tokens: [], regex: null };
-	}
-
-	// Regex mode: re:<pattern>
-	if (trimmed.startsWith("re:")) {
-		const pattern = trimmed.slice(3).trim();
-		if (!pattern) {
-			return { mode: "regex", tokens: [], regex: null, error: "Empty regex" };
-		}
-		try {
-			return { mode: "regex", tokens: [], regex: new RegExp(pattern, "i") };
-		} catch (err) {
-			const msg = err instanceof Error ? err.message : String(err);
-			return { mode: "regex", tokens: [], regex: null, error: msg };
-		}
-	}
-
-	// Token mode with quote support.
-	// Example: foo "node cve" bar
-	const tokens: { kind: "fuzzy" | "phrase"; value: string }[] = [];
-	let buf = "";
-	let inQuote = false;
-	let hadUnclosedQuote = false;
-
-	const flush = (kind: "fuzzy" | "phrase"): void => {
-		const v = buf.trim();
-		buf = "";
-		if (!v) return;
-		tokens.push({ kind, value: v });
-	};
-
-	for (let i = 0; i < trimmed.length; i++) {
-		const ch = trimmed[i]!;
-		if (ch === '"') {
-			if (inQuote) {
-				flush("phrase");
-				inQuote = false;
-			} else {
-				flush("fuzzy");
-				inQuote = true;
-			}
-			continue;
-		}
-
-		if (!inQuote && /\s/.test(ch)) {
-			flush("fuzzy");
-			continue;
-		}
-
-		buf += ch;
-	}
-
-	if (inQuote) {
-		hadUnclosedQuote = true;
-	}
-
-	// If quotes were unbalanced, fall back to plain whitespace tokenization.
+function parseTokenQuery(trimmed: string): ParsedSearchQuery {
+	const { tokens, hadUnclosedQuote } = tokenizeQuotedQuery(trimmed);
 	if (hadUnclosedQuote) {
+		// Fall back to plain whitespace tokenization when quotes are unbalanced.
 		return {
 			mode: "tokens",
 			tokens: trimmed
@@ -107,10 +49,19 @@ export function parseSearchQuery(query: string): ParsedSearchQuery {
 			regex: null,
 		};
 	}
-
-	flush(inQuote ? "phrase" : "fuzzy");
-
 	return { mode: "tokens", tokens, regex: null };
+}
+
+export function parseSearchQuery(query: string): ParsedSearchQuery {
+	const trimmed = query.trim();
+	if (!trimmed) {
+		return { mode: "tokens", tokens: [], regex: null };
+	}
+
+	const regexResult = tryParseRegexQuery(trimmed);
+	if (regexResult) return regexResult;
+
+	return parseTokenQuery(trimmed);
 }
 
 export function matchSession(session: SessionInfo, parsed: ParsedSearchQuery): MatchResult {
@@ -158,36 +109,16 @@ export function filterAndSortSessions(
 	sortMode: SortMode,
 	nameFilter: NameFilter = "all",
 ): SessionInfo[] {
-	const nameFiltered =
-		nameFilter === "all" ? sessions : sessions.filter((session) => matchesNameFilter(session, nameFilter));
+	const nameFiltered = applyNameFilter(sessions, nameFilter);
 	const trimmed = query.trim();
 	if (!trimmed) return nameFiltered;
 
 	const parsed = parseSearchQuery(query);
 	if (parsed.error) return [];
 
-	// Recent mode: filter only, keep incoming order.
-	if (sortMode === "recent") {
-		const filtered: SessionInfo[] = [];
-		for (const s of nameFiltered) {
-			const res = matchSession(s, parsed);
-			if (res.matches) filtered.push(s);
-		}
-		return filtered;
+	const strategy = pickSessionSortStrategy(sortMode);
+	if (strategy === "preserve") {
+		return filterSessionsPreserveOrder(nameFiltered, parsed, matchSession);
 	}
-
-	// Relevance mode: sort by score, tie-break by modified desc.
-	const scored: { session: SessionInfo; score: number }[] = [];
-	for (const s of nameFiltered) {
-		const res = matchSession(s, parsed);
-		if (!res.matches) continue;
-		scored.push({ session: s, score: res.score });
-	}
-
-	scored.sort((a, b) => {
-		if (a.score !== b.score) return a.score - b.score;
-		return b.session.modified.getTime() - a.session.modified.getTime();
-	});
-
-	return scored.map((r) => r.session);
+	return sortSessionsByScore(nameFiltered, parsed, matchSession);
 }

@@ -13,20 +13,27 @@ import {
 	visibleWidth,
 } from "@earendil-works/pi-tui";
 import { KeybindingsManager } from "../../../core/keybindings.ts";
-import type { SessionInfo, SessionListProgress } from "../../../core/session-manager.ts";
+import type { SessionInfo } from "../../../core/session-manager.ts";
 import { theme } from "../theme/theme.ts";
 import { DynamicBorder } from "./dynamic-border.ts";
 import { keyHint, keyText } from "./keybinding-hints.ts";
+import { dispatchSessionListKey } from "./session-selector-input.ts";
 import { renderSessionListLine } from "./session-selector-line.ts";
+import {
+	buildProgressCallback,
+	createAllScopeStaleness,
+	type LoadScopeReason,
+	type SessionsLoader,
+	selectScopeLoader,
+} from "./session-selector-load.ts";
 import { filterAndSortSessions, hasSessionName, type NameFilter, type SortMode } from "./session-selector-search.ts";
 import {
 	buildSessionTree,
 	canonicalizeSessionPath,
-	flattenSessionTree,
 	type FlatSessionNode,
+	flattenSessionTree,
 } from "./session-selector-tree.ts";
-
-type SessionScope = "current" | "all";
+import type { SessionScope } from "./session-selector-types.ts";
 
 class SessionSelectorHeader implements Component {
 	private scope: SessionScope;
@@ -351,114 +358,79 @@ class SessionList implements Component, Focusable {
 	}
 
 	handleInput(keyData: string): void {
-		const kb = getKeybindings();
+		const action = dispatchSessionListKey(
+			keyData,
+			{
+				selectedIndex: this.selectedIndex,
+				filteredCount: this.filteredSessions.length,
+				filteredSessions: this.filteredSessions,
+				showPath: this.showPath,
+				confirmingDeletePath: this.confirmingDeletePath,
+				searchValueLength: this.searchInput.getValue().length,
+				maxVisible: this.maxVisible,
+			},
+			{ keybindings: this.keybindings },
+		);
 
-		// Handle delete confirmation state first - intercept all keys
-		if (this.confirmingDeletePath !== null) {
-			if (kb.matches(keyData, "tui.select.confirm")) {
-				const pathToDelete = this.confirmingDeletePath;
+		switch (action.type) {
+			case "confirm-delete": {
 				this.setConfirmingDeletePath(null);
-				void this.onDeleteSession?.(pathToDelete);
+				void this.onDeleteSession?.(action.path);
 				return;
 			}
-			if (kb.matches(keyData, "tui.select.cancel")) {
+			case "cancel-delete":
 				this.setConfirmingDeletePath(null);
 				return;
-			}
-			// Ignore all other keys while confirming
-			return;
-		}
-
-		if (kb.matches(keyData, "tui.input.tab")) {
-			if (this.onToggleScope) {
-				this.onToggleScope();
-			}
-			return;
-		}
-
-		if (kb.matches(keyData, "app.session.toggleSort")) {
-			this.onToggleSort?.();
-			return;
-		}
-
-		if (this.keybindings.matches(keyData, "app.session.toggleNamedFilter")) {
-			this.onToggleNameFilter?.();
-			return;
-		}
-
-		// Ctrl+P: toggle path display
-		if (kb.matches(keyData, "app.session.togglePath")) {
-			this.showPath = !this.showPath;
-			this.onTogglePath?.(this.showPath);
-			return;
-		}
-
-		// Ctrl+D: initiate delete confirmation (useful on terminals that don't distinguish Ctrl+Backspace from Backspace)
-		if (kb.matches(keyData, "app.session.delete")) {
-			this.startDeleteConfirmationForSelectedSession();
-			return;
-		}
-
-		// Rename selected session
-		if (kb.matches(keyData, "app.session.rename")) {
-			const selected = this.filteredSessions[this.selectedIndex];
-			if (selected) {
-				this.onRenameSession?.(selected.session.path);
-			}
-			return;
-		}
-
-		// Ctrl+Backspace: non-invasive convenience alias for delete
-		// Only triggers deletion when the query is empty; otherwise it is forwarded to the input
-		if (kb.matches(keyData, "app.session.deleteNoninvasive")) {
-			if (this.searchInput.getValue().length > 0) {
+			case "toggle-scope":
+				this.onToggleScope?.();
+				return;
+			case "toggle-sort":
+				this.onToggleSort?.();
+				return;
+			case "toggle-named-filter":
+				this.onToggleNameFilter?.();
+				return;
+			case "toggle-path":
+				this.showPath = action.nextValue;
+				this.onTogglePath?.(this.showPath);
+				return;
+			case "start-delete":
+				this.startDeleteConfirmationForSelectedSession();
+				return;
+			case "rename-selected":
+				this.onRenameSession?.(action.path);
+				return;
+			case "forward-delete-noninvasive":
 				this.searchInput.handleInput(keyData);
 				this.filterSessions(this.searchInput.getValue());
 				return;
-			}
-
-			this.startDeleteConfirmationForSelectedSession();
-			return;
-		}
-
-		// Up arrow
-		if (kb.matches(keyData, "tui.select.up")) {
-			this.selectedIndex = Math.max(0, this.selectedIndex - 1);
-		}
-		// Down arrow
-		else if (kb.matches(keyData, "tui.select.down")) {
-			this.selectedIndex = Math.min(this.filteredSessions.length - 1, this.selectedIndex + 1);
-		}
-		// Page up - jump up by maxVisible items
-		else if (kb.matches(keyData, "tui.select.pageUp")) {
-			this.selectedIndex = Math.max(0, this.selectedIndex - this.maxVisible);
-		}
-		// Page down - jump down by maxVisible items
-		else if (kb.matches(keyData, "tui.select.pageDown")) {
-			this.selectedIndex = Math.min(this.filteredSessions.length - 1, this.selectedIndex + this.maxVisible);
-		}
-		// Enter
-		else if (kb.matches(keyData, "tui.select.confirm")) {
-			const selected = this.filteredSessions[this.selectedIndex];
-			if (selected && this.onSelect) {
-				this.onSelect(selected.session.path);
-			}
-		}
-		// Escape - cancel
-		else if (kb.matches(keyData, "tui.select.cancel")) {
-			if (this.onCancel) {
-				this.onCancel();
-			}
-		}
-		// Pass everything else to search input
-		else {
-			this.searchInput.handleInput(keyData);
-			this.filterSessions(this.searchInput.getValue());
+			case "move-up":
+				this.selectedIndex = Math.max(0, this.selectedIndex - 1);
+				return;
+			case "move-down":
+				this.selectedIndex = Math.min(this.filteredSessions.length - 1, this.selectedIndex + 1);
+				return;
+			case "page-up":
+				this.selectedIndex = Math.max(0, this.selectedIndex - this.maxVisible);
+				return;
+			case "page-down":
+				this.selectedIndex = Math.min(this.filteredSessions.length - 1, this.selectedIndex + this.maxVisible);
+				return;
+			case "select-current":
+				this.onSelect?.(action.path);
+				return;
+			case "cancel":
+				this.onCancel?.();
+				return;
+			case "forward-to-search":
+				this.searchInput.handleInput(keyData);
+				this.filterSessions(this.searchInput.getValue());
+				return;
+			default:
+				return;
 		}
 	}
 }
-
-type SessionsLoader = (onProgress?: SessionListProgress) => Promise<SessionInfo[]>;
 
 /**
  * Delete a session file, trying the `trash` CLI first, then falling back to unlink
@@ -740,47 +712,50 @@ export class SessionSelectorComponent extends Container implements Focusable {
 		}
 	}
 
-	private async loadScope(scope: SessionScope, reason: "initial" | "refresh" | "toggle"): Promise<void> {
+	private async loadScope(scope: SessionScope, reason: LoadScopeReason): Promise<void> {
 		const showCwd = scope === "all";
-		const seq = scope === "all" ? ++this.allLoadSeq : undefined;
-		const isStaleScope = () => scope !== this.scope;
-		const isStaleSeq = () => seq !== undefined && seq !== this.allLoadSeq;
+		const { check } = createAllScopeStaleness(
+			scope,
+			() => this.scope,
+			() => this.allLoadSeq,
+			() => ++this.allLoadSeq,
+		);
 
 		this.markScopeLoading(scope);
 		this.header.setScope(scope);
 		this.header.setLoading(true);
 		this.requestRender();
 
-		const onProgress = (loaded: number, total: number) => {
-			if (isStaleScope() || isStaleSeq()) return;
+		const onProgress = buildProgressCallback(check, (loaded, total) => {
 			this.header.setProgress(loaded, total);
 			this.requestRender();
-		};
+		});
 
 		try {
-			const sessions = await (scope === "current"
-				? this.currentSessionsLoader(onProgress)
-				: this.allSessionsLoader(onProgress));
+			const loader = selectScopeLoader(scope, this.currentSessionsLoader, this.allSessionsLoader);
+			const sessions = await loader(onProgress);
 
 			this.storeLoadedSessions(scope, sessions);
-			if (isStaleScope() || isStaleSeq()) return;
+			if (check.isStaleScope() || check.isStaleSeq()) return;
 
 			this.header.setLoading(false);
 			this.sessionList.setSessions(sessions, showCwd);
 			this.requestRender();
 		} catch (err) {
 			this.clearScopeLoading(scope);
-			if (isStaleScope() || isStaleSeq()) return;
-
-			const message = err instanceof Error ? err.message : String(err);
-			this.header.setLoading(false);
-			this.header.setStatusMessage({ type: "error", message: `Failed to load sessions: ${message}` }, 4000);
-
-			if (reason === "initial") {
-				this.sessionList.setSessions([], showCwd);
-			}
-			this.requestRender();
+			if (check.isStaleScope() || check.isStaleSeq()) return;
+			this.handleScopeLoadError(err, reason, showCwd);
 		}
+	}
+
+	private handleScopeLoadError(err: unknown, reason: LoadScopeReason, showCwd: boolean): void {
+		const message = err instanceof Error ? err.message : String(err);
+		this.header.setLoading(false);
+		this.header.setStatusMessage({ type: "error", message: `Failed to load sessions: ${message}` }, 4000);
+		if (reason === "initial") {
+			this.sessionList.setSessions([], showCwd);
+		}
+		this.requestRender();
 	}
 
 	/** Set the loading flag for the given scope. */
