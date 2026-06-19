@@ -1,19 +1,20 @@
 import { relative } from "node:path";
 import { APP_NAME } from "../config.ts";
-import { runPawChatCommand } from "./chat-command.ts";
+import { runPawApproveRetryCommand } from "./approve-retry-command.ts";
 import { runPawBuildCommand } from "./build-command.ts";
+import { runPawChatCommand } from "./chat-command.ts";
 import { runPawCleanCommand } from "./clean-command.ts";
 import { loadDefaultPawRuntimeConfig } from "./config.ts";
 import { runPawCostCommand } from "./cost-command.ts";
 import { runPawDiffCommand } from "./diff-command.ts";
-import { runPawDrillCommand } from "./drill-command.ts";
 import { runPawDoctorCommand } from "./doctor-command.ts";
+import { runPawDrillCommand } from "./drill-command.ts";
 import { runPawEvalLiveCommand } from "./eval-live-command.ts";
 import { runPawExplainCommand } from "./explain-command.ts";
 import { runPawFinalizeCommand } from "./finalize-command.ts";
 import { initializePawProject } from "./persistence.ts";
-import { runPawPlanCommand } from "./plan-command.ts";
 import { runPawApprovePlanCommand } from "./plan-approval-command.ts";
+import { runPawPlanCommand } from "./plan-command.ts";
 import { runPawReportCommand } from "./report-command.ts";
 import { runPawResumeCommand } from "./resume-command.ts";
 import { runPawBlockReviewerCommand } from "./reviewer-blocked-command.ts";
@@ -46,6 +47,9 @@ function printPawHelp(): void {
   ${APP_NAME} paw cost <session-id> [--class trivial|standard|high_risk] [--json]
   ${APP_NAME} paw explain [<session-id>] [--verbose]
   ${APP_NAME} paw chat <session-id> [--json]
+  ${APP_NAME} paw approve <session-id> [--reason <text>]
+  ${APP_NAME} paw reject <session-id> --reason <text>
+  ${APP_NAME} paw retry <session-id>
   ${APP_NAME} paw approve-plan <session-id> --slice <slice-id>[:<title>]...
   ${APP_NAME} paw select-slice <session-id>
   ${APP_NAME} paw begin-implementation <session-id>
@@ -90,6 +94,9 @@ Commands:
   ${APP_NAME} paw explain --help   Show explain help
   ${APP_NAME} paw chat <session-id>  Start an interactive Paw chat session
   ${APP_NAME} paw chat --help    Show chat help
+  ${APP_NAME} paw approve <session-id>  Advance from SPEC_DRAFTED, PLAN_DRAFTED, or BLOCKED_NEEDS_USER_DECISION
+  ${APP_NAME} paw reject <session-id>  Move session to BLOCKED_NEEDS_USER_DECISION with a reason
+  ${APP_NAME} paw retry <session-id>  Resume from a blocked state or restart the current slice step
   ${APP_NAME} paw approve-plan <session-id> --slice <id>[:<title>]... Approve plan slices from PLAN_DRAFTED
   ${APP_NAME} paw approve-plan --help               Show approve-plan help
   ${APP_NAME} paw select-slice <session-id>          Select next pending plan slice
@@ -216,6 +223,15 @@ const PAW_SUBCOMMAND_HANDLERS: Record<string, PawSubcommandHandler> = {
 	},
 	chat: async (rest) => {
 		await runPawChatCommand(rest);
+	},
+	approve: async (rest) => {
+		await runPawApproveRetryCommand(["approve", ...rest]);
+	},
+	reject: async (rest) => {
+		await runPawApproveRetryCommand(["reject", ...rest]);
+	},
+	retry: async (rest) => {
+		await runPawApproveRetryCommand(["retry", ...rest]);
 	},
 	status: handlePawStatus,
 	report: async (rest) => {

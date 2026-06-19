@@ -19,6 +19,28 @@ export {
 	evaluatePawToolApproval,
 	isPawRiskAtLeast,
 } from "./approval-policy.ts";
+export type {
+	PawApproveRetryAction,
+	PawApproveRetryAdvancedResult,
+	PawApproveRetryInput,
+	PawApproveRetryInvalidStateResult,
+	PawApproveRetryLockedResult,
+	PawApproveRetryMissingProjectResult,
+	PawApproveRetryMissingSessionResult,
+	PawApproveRetryNoOpResult,
+	PawApproveRetryNotLockedResult,
+	PawApproveRetryParsedArgs,
+	PawApproveRetryParseResult,
+	PawApproveRetryRejectedResult,
+	PawApproveRetryResult,
+	PawApproveRetryRetriedResult,
+} from "./approve-retry-command.ts";
+export {
+	createPawApproveRetryResult,
+	formatPawApproveRetryResult,
+	parsePawApproveRetryArgs,
+	runPawApproveRetryCommand,
+} from "./approve-retry-command.ts";
 export type { PawArtifactNameInput, PawArtifactPaths } from "./artifacts.ts";
 export {
 	assertPawArtifactRef,
@@ -28,16 +50,6 @@ export {
 	resolvePawArtifactPaths,
 	writePawArtifactReport,
 } from "./artifacts.ts";
-export type {
-	PawChatMessage,
-	PawChatParsedArgs,
-	PawChatParseResult,
-	PawChatSession,
-	PawAction,
-} from "./chat-command.ts";
-export { parsePawChatArgs, runPawChatCommand } from "./chat-command.ts";
-export type { PawCommandAllowlistConfig, PawCommandAllowlistEntry, PawCommandAllowlistInput, PawCommandAllowlistDecision } from "./command-allowlist.ts";
-export { DEFAULT_PAW_COMMAND_ALLOWLIST, evaluatePawCommandAllowlist } from "./command-allowlist.ts";
 export type {
 	PawBudgetBlockCode,
 	PawBudgetDecision,
@@ -67,6 +79,14 @@ export {
 	runPawBuildCommand,
 } from "./build-command.ts";
 export type {
+	PawAction,
+	PawChatMessage,
+	PawChatParsedArgs,
+	PawChatParseResult,
+	PawChatSession,
+} from "./chat-command.ts";
+export { parsePawChatArgs, runPawChatCommand } from "./chat-command.ts";
+export type {
 	PawCheckpointChangedFile,
 	PawCheckpointMetadata,
 	PawCheckpointNameInput,
@@ -83,6 +103,13 @@ export {
 	validatePawCheckpointMetadata,
 	writePawCheckpointMetadata,
 } from "./checkpoints.ts";
+export type {
+	PawCommandAllowlistConfig,
+	PawCommandAllowlistDecision,
+	PawCommandAllowlistEntry,
+	PawCommandAllowlistInput,
+} from "./command-allowlist.ts";
+export { DEFAULT_PAW_COMMAND_ALLOWLIST, evaluatePawCommandAllowlist } from "./command-allowlist.ts";
 export {
 	findDefaultPawConfigPath,
 	loadDefaultPawRuntimeConfig,
@@ -119,6 +146,8 @@ export type {
 	PawValidationIssue,
 	PawValidationResult,
 } from "./contracts.ts";
+export type { PawCostEntry, PawCostParsedArgs, PawCostParseResult, PawCostResult } from "./cost-command.ts";
+export { createPawCostResult, formatPawCostResult, parsePawCostArgs, runPawCostCommand } from "./cost-command.ts";
 export type {
 	PawCostLatencyCacheAdvisory,
 	PawCostLatencyCacheInput,
@@ -131,6 +160,26 @@ export {
 	DEFAULT_PAW_COST_LATENCY_CACHE_THRESHOLDS,
 	evaluatePawCostLatencyCache,
 } from "./cost-latency-cache.ts";
+export type {
+	PawDiffEntry,
+	PawDiffParsedArgs,
+	PawDiffParseResult,
+	PawDiffResult,
+	PawDiffScope,
+} from "./diff-command.ts";
+export { createPawDiffResult, formatPawDiffResult, parsePawDiffArgs, runPawDiffCommand } from "./diff-command.ts";
+export type {
+	PawCrashResumeCheck,
+	PawDrillCommandInput,
+	PawDrillName,
+	PawDrillParsedArgs,
+	PawDrillParseResult,
+	PawDrillResult,
+	PawPatchRobustnessCheck,
+	PawReviewerDiffCheck,
+	PawSecretRedactionCheck,
+} from "./drill-command.ts";
+export { PAW_DRILL_NAMES, parsePawDrillArgs, runPawDrillCommand, runPawSecretRedactionDrill } from "./drill-command.ts";
 export type {
 	PawEditApplyMethod,
 	PawEditBlockCode,
@@ -156,6 +205,15 @@ export {
 	parsePawEvalLiveArgs,
 	runPawEvalLiveCommand,
 } from "./eval-live-command.ts";
+export type { PawEventLogEntry, PawEventLogEventName, PawEventLogWriterOptions } from "./event-log.ts";
+export { ensurePawEventLogFile, PawEventLogWriter, readPawEventLog } from "./event-log.ts";
+export type { PawExplainParsedArgs, PawExplainParseResult, PawExplainResult } from "./explain-command.ts";
+export {
+	createPawExplainResult,
+	formatPawExplainResult,
+	parsePawExplainArgs,
+	runPawExplainCommand,
+} from "./explain-command.ts";
 export type {
 	PawFinalReport,
 	PawFinalReportInput,
@@ -196,6 +254,8 @@ export {
 	parsePawFinalizeArgs,
 	runPawFinalizeCommand,
 } from "./finalize-command.ts";
+export type { PawMemoryEntry, PawMemoryRecordInput, PawMemoryStore, PawMemoryStoreConfig } from "./memory-store.ts";
+export { createPawFileMemoryStore, DEFAULT_PAW_MEMORY_CONFIG, PawFileMemoryStore } from "./memory-store.ts";
 export type {
 	PawFailoverRoute,
 	PawModelRoutingRole,
@@ -252,30 +312,23 @@ export {
 	parsePawApprovePlanArgs,
 	runPawApprovePlanCommand,
 } from "./plan-approval-command.ts";
+export type {
+	PawPlanParsedArgs,
+	PawPlanParseResult,
+	PawPlanResult,
+	PawPlanSlice,
+	PawPlanView,
+} from "./plan-command.ts";
+export { createPawPlanResult, formatPawPlanResult, parsePawPlanArgs, runPawPlanCommand } from "./plan-command.ts";
 export type { PawPlannerSlice, PawPlanSliceQueue } from "./plan-slices.ts";
 export { createPawPlanSliceQueue } from "./plan-slices.ts";
-export type { PawPlanParsedArgs, PawPlanParseResult, PawPlanResult, PawPlanSlice, PawPlanView } from "./plan-command.ts";
-export { createPawPlanResult, formatPawPlanResult, parsePawPlanArgs, runPawPlanCommand } from "./plan-command.ts";
-export type { PawDetectedLanguage, PawDetectedMonorepo, PawDetectedPackageManager, PawProjectDetection } from "./project-detection.ts";
+export type {
+	PawDetectedLanguage,
+	PawDetectedMonorepo,
+	PawDetectedPackageManager,
+	PawProjectDetection,
+} from "./project-detection.ts";
 export { buildPawVerifyCommand, detectPawProject } from "./project-detection.ts";
-export type { PawMemoryEntry, PawMemoryRecordInput, PawMemoryStore, PawMemoryStoreConfig } from "./memory-store.ts";
-export { DEFAULT_PAW_MEMORY_CONFIG, PawFileMemoryStore, createPawFileMemoryStore } from "./memory-store.ts";
-export type { PawReviewerDiffCommandRunner, PawReviewerDiffEntry, PawReviewerDiffInput, PawReviewerDiffResult, PawReviewerDiffScope, PawReviewerStructuredFinding, PawReviewerStructuredReview } from "./reviewer-diff.ts";
-export { readPawReviewerDiff, reviewPawDiffForRules } from "./reviewer-diff.ts";
-export type { PawSecretScanFinding, PawSecretScanResult, PawSecretScanSeverity } from "./secret-scanner.ts";
-export { isAllowedDummyKey, scanPawRepoForSecrets } from "./secret-scanner.ts";
-export type { PawTimelineEntry, PawTimelineParsedArgs, PawTimelineParseResult, PawTimelineResult } from "./timeline-command.ts";
-export { createPawTimelineResult, formatPawTimelineResult, parsePawTimelineArgs, runPawTimelineCommand } from "./timeline-command.ts";
-export type { PawEventLogEntry, PawEventLogEventName, PawEventLogWriterOptions } from "./event-log.ts";
-export { PawEventLogWriter, ensurePawEventLogFile, readPawEventLog } from "./event-log.ts";
-export type { PawCostEntry, PawCostParsedArgs, PawCostParseResult, PawCostResult } from "./cost-command.ts";
-export { createPawCostResult, formatPawCostResult, parsePawCostArgs, runPawCostCommand } from "./cost-command.ts";
-export type { PawDiffEntry, PawDiffParsedArgs, PawDiffParseResult, PawDiffResult, PawDiffScope } from "./diff-command.ts";
-export { createPawDiffResult, formatPawDiffResult, parsePawDiffArgs, runPawDiffCommand } from "./diff-command.ts";
-export type { PawDrillName, PawDrillParsedArgs, PawDrillParseResult, PawDrillResult, PawDrillCommandInput, PawCrashResumeCheck, PawSecretRedactionCheck, PawPatchRobustnessCheck, PawReviewerDiffCheck } from "./drill-command.ts";
-export { PAW_DRILL_NAMES, parsePawDrillArgs, runPawDrillCommand, runPawSecretRedactionDrill } from "./drill-command.ts";
-export type { PawExplainParsedArgs, PawExplainParseResult, PawExplainResult } from "./explain-command.ts";
-export { createPawExplainResult, formatPawExplainResult, parsePawExplainArgs, runPawExplainCommand } from "./explain-command.ts";
 export type {
 	PawReportCommandFoundJsonResult,
 	PawReportCommandFoundResult,
@@ -386,6 +439,16 @@ export type {
 } from "./reviewer-blocked-result.ts";
 export { blockPawReviewerResult } from "./reviewer-blocked-result.ts";
 export type {
+	PawReviewerDiffCommandRunner,
+	PawReviewerDiffEntry,
+	PawReviewerDiffInput,
+	PawReviewerDiffResult,
+	PawReviewerDiffScope,
+	PawReviewerStructuredFinding,
+	PawReviewerStructuredReview,
+} from "./reviewer-diff.ts";
+export { readPawReviewerDiff, reviewPawDiffForRules } from "./reviewer-diff.ts";
+export type {
 	PawReviewerOnceBlockedResult,
 	PawReviewerOnceCompletedResult,
 	PawReviewerOnceInput,
@@ -485,6 +548,8 @@ export type {
 	PawScoutBenchmarkThresholdConfig,
 } from "./scout-benchmark.ts";
 export { DEFAULT_PAW_SCOUT_BENCHMARK_THRESHOLDS, evaluatePawScoutBenchmark } from "./scout-benchmark.ts";
+export type { PawSecretScanFinding, PawSecretScanResult, PawSecretScanSeverity } from "./secret-scanner.ts";
+export { isAllowedDummyKey, scanPawRepoForSecrets } from "./secret-scanner.ts";
 export type {
 	PawInjectionConfig,
 	PawRedactionDecision,
@@ -564,7 +629,6 @@ export type {
 	PawSliceImplementationResult,
 } from "./slice-implementation.ts";
 export { beginPawSliceImplementation } from "./slice-implementation.ts";
-
 export type {
 	PawBeginImplementationCommandAdvancedResult,
 	PawBeginImplementationCommandInput,
@@ -709,6 +773,18 @@ export type {
 	PawTaskSessionStartResult,
 } from "./task-session.ts";
 export { advancePawTaskSession, startPawTaskSession } from "./task-session.ts";
+export type {
+	PawTimelineEntry,
+	PawTimelineParsedArgs,
+	PawTimelineParseResult,
+	PawTimelineResult,
+} from "./timeline-command.ts";
+export {
+	createPawTimelineResult,
+	formatPawTimelineResult,
+	parsePawTimelineArgs,
+	runPawTimelineCommand,
+} from "./timeline-command.ts";
 export type {
 	PawLocalSubprocessFileChangeDetector,
 	PawLocalSubprocessFileChangeDetectorInput,
