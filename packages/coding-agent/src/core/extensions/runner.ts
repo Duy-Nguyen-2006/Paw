@@ -5,54 +5,64 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { ImageContent, Model } from "@earendil-works/pi-ai";
 import type { KeyId } from "@earendil-works/pi-tui";
-import { type Theme, theme } from "../../modes/interactive/theme/theme.ts";
 import type { ResourceDiagnostic } from "../diagnostics.ts";
 import type { KeybindingsConfig } from "../keybindings.ts";
 import type { ModelRegistry } from "../model-registry.ts";
 import type { SessionManager } from "../session-manager.ts";
 import type { BuildSystemPromptOptions } from "../system-prompt.ts";
+import {
+	applyExtensionActions,
+	flushPendingProviderRegistrations,
+	wireLiveProviderRegistration,
+} from "./runner-bind.ts";
+import { resolveRegisteredCommands } from "./runner-commands.ts";
+import { buildExtensionCommandContext, buildExtensionContext, type ExtensionContextHost } from "./runner-context.ts";
+import {
+	emitBeforeAgentStartAcrossExtensions,
+	emitBeforeProviderRequestAcrossExtensions,
+	emitContextAcrossExtensions,
+	emitInputAcrossExtensions,
+	emitResourcesDiscoverAcrossExtensions,
+	emitToolCallAcrossExtensions,
+	emitToolResultAcrossExtensions,
+	emitUserBashAcrossExtensions,
+	processSessionBeforeHandlersForExtension,
+	runMessageEndHandlersForExtension,
+} from "./runner-emit-helpers.ts";
+import { noOpUIContext } from "./runner-noop-ui.ts";
+import { collectExtensionShortcuts } from "./runner-shortcuts.ts";
 import type {
-	BeforeAgentStartEvent,
-	BeforeAgentStartEventResult,
-	BeforeProviderRequestEvent,
+	BeforeAgentStartCombinedResult,
+	RunnerEmitEvent,
+	RunnerEmitResult,
+	SessionBeforeEventResult,
+} from "./runner-types.ts";
+import type {
 	CompactOptions,
-	ContextEvent,
-	ContextEventResult,
 	ContextUsage,
 	Extension,
 	ExtensionActions,
-	ExtensionCommandContext,
 	ExtensionCommandContextActions,
-	ExtensionContext,
 	ExtensionContextActions,
 	ExtensionError,
-	ExtensionEvent,
 	ExtensionFlag,
 	ExtensionMode,
 	ExtensionRuntime,
 	ExtensionShortcut,
 	ExtensionUIContext,
-	InputEvent,
 	InputEventResult,
 	InputSource,
 	LoadExtensionsResult,
 	MessageEndEvent,
-	MessageEndEventResult,
 	MessageRenderer,
 	ProjectTrustContext,
 	ProjectTrustEvent,
 	ProjectTrustEventResult,
 	ProviderConfig,
-	RegisteredCommand,
 	RegisteredTool,
 	ReplacedSessionContext,
 	ResolvedCommand,
 	ResourcesDiscoverEvent,
-	ResourcesDiscoverResult,
-	SessionBeforeCompactResult,
-	SessionBeforeForkResult,
-	SessionBeforeSwitchResult,
-	SessionBeforeTreeResult,
 	SessionShutdownEvent,
 	ToolCallEvent,
 	ToolCallEventResult,
@@ -61,96 +71,6 @@ import type {
 	UserBashEvent,
 	UserBashEventResult,
 } from "./types.ts";
-
-// Extension shortcuts compete with canonical keybinding ids from keybindings.json.
-// Only editor-global shortcuts are reserved here. Picker-specific bindings are not.
-const RESERVED_KEYBINDINGS_FOR_EXTENSION_CONFLICTS = [
-	"app.interrupt",
-	"app.clear",
-	"app.exit",
-	"app.suspend",
-	"app.thinking.cycle",
-	"app.model.cycleForward",
-	"app.model.cycleBackward",
-	"app.model.select",
-	"app.tools.expand",
-	"app.thinking.toggle",
-	"app.editor.external",
-	"app.message.followUp",
-	"tui.input.submit",
-	"tui.select.confirm",
-	"tui.select.cancel",
-	"tui.input.copy",
-	"tui.editor.deleteToLineEnd",
-] as const;
-
-type BuiltInKeyBindings = Partial<Record<KeyId, { keybinding: string; restrictOverride: boolean }>>;
-
-const buildBuiltinKeybindings = (resolvedKeybindings: KeybindingsConfig): BuiltInKeyBindings => {
-	const builtinKeybindings = {} as BuiltInKeyBindings;
-	for (const [keybinding, keys] of Object.entries(resolvedKeybindings)) {
-		if (keys === undefined) continue;
-		const keyList = Array.isArray(keys) ? keys : [keys];
-		const restrictOverride = (RESERVED_KEYBINDINGS_FOR_EXTENSION_CONFLICTS as readonly string[]).includes(keybinding);
-		for (const key of keyList) {
-			const normalizedKey = key.toLowerCase() as KeyId;
-			// If multiple actions bind the same key, the reserved action wins so extensions
-			// remain blocked by reserved shortcuts regardless of iteration order.
-			const existing = builtinKeybindings[normalizedKey];
-			if (existing?.restrictOverride && !restrictOverride) continue;
-			builtinKeybindings[normalizedKey] = {
-				keybinding,
-				restrictOverride,
-			};
-		}
-	}
-	return builtinKeybindings;
-};
-
-/** Combined result from all before_agent_start handlers */
-interface BeforeAgentStartCombinedResult {
-	messages?: NonNullable<BeforeAgentStartEventResult["message"]>[];
-	systemPrompt?: string;
-}
-
-/**
- * Events handled by the generic emit() method.
- * Events with dedicated emitXxx() methods are excluded for stronger type safety.
- */
-type RunnerEmitEvent = Exclude<
-	ExtensionEvent,
-	| ToolCallEvent
-	| ProjectTrustEvent
-	| ToolResultEvent
-	| UserBashEvent
-	| ContextEvent
-	| BeforeProviderRequestEvent
-	| BeforeAgentStartEvent
-	| MessageEndEvent
-	| ResourcesDiscoverEvent
-	| InputEvent
->;
-
-type SessionBeforeEvent = Extract<
-	RunnerEmitEvent,
-	{ type: "session_before_switch" | "session_before_fork" | "session_before_compact" | "session_before_tree" }
->;
-
-type SessionBeforeEventResult =
-	| SessionBeforeSwitchResult
-	| SessionBeforeForkResult
-	| SessionBeforeCompactResult
-	| SessionBeforeTreeResult;
-
-type RunnerEmitResult<TEvent extends RunnerEmitEvent> = TEvent extends { type: "session_before_switch" }
-	? SessionBeforeSwitchResult | undefined
-	: TEvent extends { type: "session_before_fork" }
-		? SessionBeforeForkResult | undefined
-		: TEvent extends { type: "session_before_compact" }
-			? SessionBeforeCompactResult | undefined
-			: TEvent extends { type: "session_before_tree" }
-				? SessionBeforeTreeResult | undefined
-				: undefined;
 
 export type ExtensionErrorListener = (error: ExtensionError) => void;
 
@@ -179,10 +99,6 @@ export type ReloadHandler = () => Promise<void>;
 
 export type ShutdownHandler = () => void;
 
-/**
- * Helper function to emit session_shutdown event to extensions.
- * Returns true if the event was emitted, false if there were no handlers.
- */
 export async function emitSessionShutdownEvent(
 	extensionRunner: ExtensionRunner,
 	event: SessionShutdownEvent,
@@ -201,8 +117,6 @@ export async function emitProjectTrustEvent(
 ): Promise<{ result?: ProjectTrustEventResult; errors: ExtensionError[] }> {
 	const errors: ExtensionError[] = [];
 	for (const ext of extensionsResult.extensions) {
-		// A single extension may register multiple handlers for the same event.
-		// The first project_trust handler that returns yes/no wins; undecided falls through.
 		const handlers = ext.handlers.get("project_trust");
 		if (!handlers || handlers.length === 0) continue;
 
@@ -225,39 +139,6 @@ export async function emitProjectTrustEvent(
 	}
 	return { errors };
 }
-
-const noOpUIContext: ExtensionUIContext = {
-	select: async () => undefined,
-	confirm: async () => false,
-	input: async () => undefined,
-	notify: () => {},
-	onTerminalInput: () => () => {},
-	setStatus: () => {},
-	setWorkingMessage: () => {},
-	setWorkingVisible: () => {},
-	setWorkingIndicator: () => {},
-	setHiddenThinkingLabel: () => {},
-	setWidget: () => {},
-	setFooter: () => {},
-	setHeader: () => {},
-	setTitle: () => {},
-	custom: async () => undefined as never,
-	pasteToEditor: () => {},
-	setEditorText: () => {},
-	getEditorText: () => "",
-	editor: async () => undefined,
-	addAutocompleteProvider: () => {},
-	setEditorComponent: () => {},
-	getEditorComponent: () => undefined,
-	get theme() {
-		return theme;
-	},
-	getAllThemes: () => [],
-	getTheme: () => undefined,
-	setTheme: (_theme: string | Theme) => ({ success: false, error: "UI not available" }),
-	getToolsExpanded: () => false,
-	setToolsExpanded: () => {},
-};
 
 export class ExtensionRunner {
 	private extensions: Extension[];
@@ -312,23 +193,7 @@ export class ExtensionRunner {
 			unregisterProvider?: (name: string) => void;
 		},
 	): void {
-		// Copy actions into the shared runtime (all extension APIs reference this)
-		this.runtime.sendMessage = actions.sendMessage;
-		this.runtime.sendUserMessage = actions.sendUserMessage;
-		this.runtime.appendEntry = actions.appendEntry;
-		this.runtime.setSessionName = actions.setSessionName;
-		this.runtime.getSessionName = actions.getSessionName;
-		this.runtime.setLabel = actions.setLabel;
-		this.runtime.getActiveTools = actions.getActiveTools;
-		this.runtime.getAllTools = actions.getAllTools;
-		this.runtime.setActiveTools = actions.setActiveTools;
-		this.runtime.refreshTools = actions.refreshTools;
-		this.runtime.getCommands = actions.getCommands;
-		this.runtime.setModel = actions.setModel;
-		this.runtime.getThinkingLevel = actions.getThinkingLevel;
-		this.runtime.setThinkingLevel = actions.setThinkingLevel;
-
-		// Context actions (required)
+		applyExtensionActions(this.runtime, actions);
 		this.getModel = contextActions.getModel;
 		this.isIdleFn = contextActions.isIdle;
 		this.isProjectTrustedFn = contextActions.isProjectTrusted;
@@ -341,41 +206,10 @@ export class ExtensionRunner {
 		this.getSystemPromptFn = contextActions.getSystemPrompt;
 		this.getSystemPromptOptionsFn = contextActions.getSystemPromptOptions ?? (() => ({ cwd: this.cwd }));
 
-		// Flush provider registrations queued during extension loading
-		for (const { name, config, extensionPath } of this.runtime.pendingProviderRegistrations) {
-			try {
-				if (providerActions?.registerProvider) {
-					providerActions.registerProvider(name, config);
-				} else {
-					this.modelRegistry.registerProvider(name, config);
-				}
-			} catch (err) {
-				this.emitError({
-					extensionPath,
-					event: "register_provider",
-					error: err instanceof Error ? err.message : String(err),
-					stack: err instanceof Error ? err.stack : undefined,
-				});
-			}
-		}
-		this.runtime.pendingProviderRegistrations = [];
-
-		// From this point on, provider registration/unregistration takes effect immediately
-		// without requiring a /reload.
-		this.runtime.registerProvider = (name, config) => {
-			if (providerActions?.registerProvider) {
-				providerActions.registerProvider(name, config);
-				return;
-			}
-			this.modelRegistry.registerProvider(name, config);
-		};
-		this.runtime.unregisterProvider = (name) => {
-			if (providerActions?.unregisterProvider) {
-				providerActions.unregisterProvider(name);
-				return;
-			}
-			this.modelRegistry.unregisterProvider(name);
-		};
+		flushPendingProviderRegistrations(this.runtime, this.modelRegistry, providerActions, (error) =>
+			this.emitError(error),
+		);
+		wireLiveProviderRegistration(this.runtime, this.modelRegistry, providerActions);
 	}
 
 	bindCommandContext(actions?: ExtensionCommandContextActions): void {
@@ -414,7 +248,6 @@ export class ExtensionRunner {
 		return this.extensions.map((e) => e.path);
 	}
 
-	/** Get all registered tools from all extensions (first registration per name wins). */
 	getAllRegisteredTools(): RegisteredTool[] {
 		const toolsByName = new Map<string, RegisteredTool>();
 		for (const ext of this.extensions) {
@@ -427,7 +260,6 @@ export class ExtensionRunner {
 		return Array.from(toolsByName.values());
 	}
 
-	/** Get a tool definition by name. Returns undefined if not found. */
 	getToolDefinition(toolName: string): RegisteredTool["definition"] | undefined {
 		for (const ext of this.extensions) {
 			const tool = ext.tools.get(toolName);
@@ -460,47 +292,12 @@ export class ExtensionRunner {
 
 	getShortcuts(resolvedKeybindings: KeybindingsConfig): Map<KeyId, ExtensionShortcut> {
 		this.shortcutDiagnostics = [];
-		const builtinKeybindings = buildBuiltinKeybindings(resolvedKeybindings);
-		const extensionShortcuts = new Map<KeyId, ExtensionShortcut>();
-
-		const addDiagnostic = (message: string, extensionPath: string) => {
+		return collectExtensionShortcuts(this.extensions, resolvedKeybindings, (message, extensionPath) => {
 			this.shortcutDiagnostics.push({ type: "warning", message, path: extensionPath });
 			if (!this.hasUI()) {
 				console.warn(message);
 			}
-		};
-
-		for (const ext of this.extensions) {
-			for (const [key, shortcut] of ext.shortcuts) {
-				const normalizedKey = key.toLowerCase() as KeyId;
-
-				const builtInKeybinding = builtinKeybindings[normalizedKey];
-				if (builtInKeybinding?.restrictOverride === true) {
-					addDiagnostic(
-						`Extension shortcut '${key}' from ${shortcut.extensionPath} conflicts with built-in shortcut. Skipping.`,
-						shortcut.extensionPath,
-					);
-					continue;
-				}
-
-				if (builtInKeybinding?.restrictOverride === false) {
-					addDiagnostic(
-						`Extension shortcut conflict: '${key}' is built-in shortcut for ${builtInKeybinding.keybinding} and ${shortcut.extensionPath}. Using ${shortcut.extensionPath}.`,
-						shortcut.extensionPath,
-					);
-				}
-
-				const existingExtensionShortcut = extensionShortcuts.get(normalizedKey);
-				if (existingExtensionShortcut) {
-					addDiagnostic(
-						`Extension shortcut conflict: '${key}' registered by both ${existingExtensionShortcut.extensionPath} and ${shortcut.extensionPath}. Using ${shortcut.extensionPath}.`,
-						shortcut.extensionPath,
-					);
-				}
-				extensionShortcuts.set(normalizedKey, shortcut);
-			}
-		}
-		return extensionShortcuts;
+		});
 	}
 
 	getShortcutDiagnostics(): ResourceDiagnostic[] {
@@ -516,7 +313,7 @@ export class ExtensionRunner {
 		}
 	}
 
-	private assertActive(): void {
+	assertActive(): void {
 		if (this.staleMessage) {
 			throw new Error(this.staleMessage);
 		}
@@ -553,45 +350,9 @@ export class ExtensionRunner {
 		return undefined;
 	}
 
-	private resolveRegisteredCommands(): ResolvedCommand[] {
-		const commands: RegisteredCommand[] = [];
-		const counts = new Map<string, number>();
-
-		for (const ext of this.extensions) {
-			for (const command of ext.commands.values()) {
-				commands.push(command);
-				counts.set(command.name, (counts.get(command.name) ?? 0) + 1);
-			}
-		}
-
-		const seen = new Map<string, number>();
-		const takenInvocationNames = new Set<string>();
-
-		return commands.map((command) => {
-			const occurrence = (seen.get(command.name) ?? 0) + 1;
-			seen.set(command.name, occurrence);
-
-			let invocationName = (counts.get(command.name) ?? 0) > 1 ? `${command.name}:${occurrence}` : command.name;
-
-			if (takenInvocationNames.has(invocationName)) {
-				let suffix = occurrence;
-				do {
-					suffix++;
-					invocationName = `${command.name}:${suffix}`;
-				} while (takenInvocationNames.has(invocationName));
-			}
-
-			takenInvocationNames.add(invocationName);
-			return {
-				...command,
-				invocationName,
-			};
-		});
-	}
-
 	getRegisteredCommands(): ResolvedCommand[] {
 		this.commandDiagnostics = [];
-		return this.resolveRegisteredCommands();
+		return resolveRegisteredCommands(this.extensions);
 	}
 
 	getCommandDiagnostics(): ResourceDiagnostic[] {
@@ -602,135 +363,70 @@ export class ExtensionRunner {
 		return this.resolveRegisteredCommands().find((command) => command.invocationName === name);
 	}
 
-	/**
-	 * Request a graceful shutdown. Called by extension tools and event handlers.
-	 * The actual shutdown behavior is provided by the mode via bindExtensions().
-	 */
+	private resolveRegisteredCommands(): ResolvedCommand[] {
+		return resolveRegisteredCommands(this.extensions);
+	}
+
 	shutdown(): void {
 		this.shutdownHandler();
 	}
 
-	/**
-	 * Create an ExtensionContext for use in event handlers and tool execution.
-	 * Context values are resolved at call time, so changes via bindCore/bindUI are reflected.
-	 */
-	createContext(): ExtensionContext {
+	private getContextHost(): ExtensionContextHost {
 		const runner = this;
-		const getModel = this.getModel;
 		return {
-			get ui() {
-				runner.assertActive();
+			assertActive: () => runner.assertActive(),
+			get uiContext() {
 				return runner.uiContext;
 			},
 			get mode() {
-				runner.assertActive();
 				return runner.mode;
 			},
-			get hasUI() {
-				runner.assertActive();
-				return runner.hasUI();
-			},
 			get cwd() {
-				runner.assertActive();
 				return runner.cwd;
 			},
 			get sessionManager() {
-				runner.assertActive();
 				return runner.sessionManager;
 			},
 			get modelRegistry() {
-				runner.assertActive();
 				return runner.modelRegistry;
 			},
-			get model() {
-				runner.assertActive();
-				return getModel();
+			getModel: () => runner.getModel(),
+			isIdleFn: () => runner.isIdleFn(),
+			isProjectTrustedFn: () => runner.isProjectTrustedFn(),
+			getSignalFn: () => runner.getSignalFn(),
+			abortFn: () => runner.abortFn(),
+			hasPendingMessagesFn: () => runner.hasPendingMessagesFn(),
+			shutdownHandler: () => runner.shutdownHandler(),
+			getContextUsageFn: () => runner.getContextUsageFn(),
+			compactFn: (options) => runner.compactFn(options),
+			getSystemPromptFn: () => runner.getSystemPromptFn(),
+			getSystemPromptOptionsFn: () => runner.getSystemPromptOptionsFn(),
+			waitForIdleFn: () => runner.waitForIdleFn(),
+			get newSessionHandler() {
+				return runner.newSessionHandler;
 			},
-			isIdle: () => {
-				runner.assertActive();
-				return runner.isIdleFn();
+			get forkHandler() {
+				return runner.forkHandler;
 			},
-			isProjectTrusted: () => {
-				runner.assertActive();
-				return runner.isProjectTrustedFn();
+			get navigateTreeHandler() {
+				return runner.navigateTreeHandler;
 			},
-			get signal() {
-				runner.assertActive();
-				return runner.getSignalFn();
+			get switchSessionHandler() {
+				return runner.switchSessionHandler;
 			},
-			abort: () => {
-				runner.assertActive();
-				runner.abortFn();
+			get reloadHandler() {
+				return runner.reloadHandler;
 			},
-			hasPendingMessages: () => {
-				runner.assertActive();
-				return runner.hasPendingMessagesFn();
-			},
-			shutdown: () => {
-				runner.assertActive();
-				runner.shutdownHandler();
-			},
-			getContextUsage: () => {
-				runner.assertActive();
-				return runner.getContextUsageFn();
-			},
-			compact: (options) => {
-				runner.assertActive();
-				runner.compactFn(options);
-			},
-			getSystemPrompt: () => {
-				runner.assertActive();
-				return runner.getSystemPromptFn();
-			},
+			hasUI: () => runner.hasUI(),
 		};
 	}
 
-	createCommandContext(): ExtensionCommandContext {
-		// Use property descriptors instead of object spread so the guarded getters from
-		// createContext() stay lazy. A spread would eagerly read them once and freeze the
-		// old values into the returned object, bypassing stale-instance checks.
-		const context = Object.defineProperties(
-			{},
-			Object.getOwnPropertyDescriptors(this.createContext()),
-		) as ExtensionCommandContext;
-		context.getSystemPromptOptions = () => {
-			this.assertActive();
-			return this.getSystemPromptOptionsFn();
-		};
-		context.waitForIdle = () => {
-			this.assertActive();
-			return this.waitForIdleFn();
-		};
-		context.newSession = (options) => {
-			this.assertActive();
-			return this.newSessionHandler(options);
-		};
-		context.fork = (entryId, options) => {
-			this.assertActive();
-			return this.forkHandler(entryId, options);
-		};
-		context.navigateTree = (targetId, options) => {
-			this.assertActive();
-			return this.navigateTreeHandler(targetId, options);
-		};
-		context.switchSession = (sessionPath, options) => {
-			this.assertActive();
-			return this.switchSessionHandler(sessionPath, options);
-		};
-		context.reload = () => {
-			this.assertActive();
-			return this.reloadHandler();
-		};
-		return context;
+	createContext() {
+		return buildExtensionContext(this.getContextHost());
 	}
 
-	private isSessionBeforeEvent(event: RunnerEmitEvent): event is SessionBeforeEvent {
-		return (
-			event.type === "session_before_switch" ||
-			event.type === "session_before_fork" ||
-			event.type === "session_before_compact" ||
-			event.type === "session_before_tree"
-		);
+	createCommandContext() {
+		return buildExtensionCommandContext(this.getContextHost());
 	}
 
 	async emit<TEvent extends RunnerEmitEvent>(event: TEvent): Promise<RunnerEmitResult<TEvent>> {
@@ -741,7 +437,9 @@ export class ExtensionRunner {
 			const handlers = ext.handlers.get(event.type);
 			if (!handlers?.length) continue;
 
-			result = await this.processEventHandlers(event, ctx, ext, handlers, result);
+			result = await processSessionBeforeHandlersForExtension(event, ctx, ext, handlers, result, (error) =>
+				this.emitError(error),
+			);
 			if (result?.cancel) {
 				return result as RunnerEmitResult<TEvent>;
 			}
@@ -750,82 +448,15 @@ export class ExtensionRunner {
 		return result as RunnerEmitResult<TEvent>;
 	}
 
-	private async processEventHandlers<TEvent extends RunnerEmitEvent>(
-		event: TEvent,
-		ctx: ExtensionContext,
-		ext: Extension,
-		handlers: Array<(event: any, ctx: ExtensionContext) => Promise<any>>,
-		currentResult: SessionBeforeEventResult | undefined,
-	): Promise<SessionBeforeEventResult | undefined> {
-		const isBeforeEvent = this.isSessionBeforeEvent(event);
-		let result = currentResult;
-
-		for (const handler of handlers) {
-			let handlerResult: unknown;
-			try {
-				handlerResult = await handler(event, ctx);
-			} catch (err) {
-				this.reportHandlerError(ext.path, event.type, err);
-				continue;
-			}
-
-			if (!isBeforeEvent || !handlerResult) continue;
-			result = handlerResult as SessionBeforeEventResult;
-			if (result.cancel) break;
-		}
-
-		return result;
-	}
-
-	private reportHandlerError(extensionPath: string, event: string, err: unknown): void {
-		const message = err instanceof Error ? err.message : String(err);
-		const stack = err instanceof Error ? err.stack : undefined;
-		this.emitError({ extensionPath, event, error: message, stack });
-	}
-
-	private async runMessageEndHandlers(
-		event: MessageEndEvent,
-		ctx: ExtensionContext,
-		ext: Extension,
-		currentMessage: AgentMessage,
-	): Promise<{ message: AgentMessage; modified: boolean }> {
-		const handlers = ext.handlers.get("message_end");
-		if (!handlers?.length) {
-			return { message: currentMessage, modified: false };
-		}
-		let message = currentMessage;
-		let modified = false;
-		for (const handler of handlers) {
-			try {
-				const currentEvent: MessageEndEvent = { ...event, message };
-				const handlerResult = (await handler(currentEvent, ctx)) as MessageEndEventResult | undefined;
-				if (!handlerResult?.message) {
-					continue;
-				}
-				if (handlerResult.message.role !== message.role) {
-					this.emitError({
-						extensionPath: ext.path,
-						event: "message_end",
-						error: "message_end handlers must return a message with the same role",
-					});
-					continue;
-				}
-				message = handlerResult.message;
-				modified = true;
-			} catch (err) {
-				this.reportHandlerError(ext.path, "message_end", err);
-			}
-		}
-		return { message, modified };
-	}
-
 	async emitMessageEnd(event: MessageEndEvent): Promise<AgentMessage | undefined> {
 		const ctx = this.createContext();
 		let currentMessage = event.message;
 		let modified = false;
 
 		for (const ext of this.extensions) {
-			const result = await this.runMessageEndHandlers(event, ctx, ext, currentMessage);
+			const result = await runMessageEndHandlersForExtension(event, ctx, ext, currentMessage, (error) =>
+				this.emitError(error),
+			);
 			currentMessage = result.message;
 			if (result.modified) {
 				modified = true;
@@ -836,171 +467,31 @@ export class ExtensionRunner {
 	}
 
 	async emitToolResult(event: ToolResultEvent): Promise<ToolResultEventResult | undefined> {
-		const ctx = this.createContext();
-		const currentEvent: ToolResultEvent = { ...event };
-		let modified = false;
-
-		for (const ext of this.extensions) {
-			const handlers = ext.handlers.get("tool_result");
-			if (!handlers || handlers.length === 0) continue;
-
-			for (const handler of handlers) {
-				try {
-					const handlerResult = (await handler(currentEvent, ctx)) as ToolResultEventResult | undefined;
-					if (!handlerResult) continue;
-
-					if (handlerResult.content !== undefined) {
-						currentEvent.content = handlerResult.content;
-						modified = true;
-					}
-					if (handlerResult.details !== undefined) {
-						currentEvent.details = handlerResult.details;
-						modified = true;
-					}
-					if (handlerResult.isError !== undefined) {
-						currentEvent.isError = handlerResult.isError;
-						modified = true;
-					}
-				} catch (err) {
-					const message = err instanceof Error ? err.message : String(err);
-					const stack = err instanceof Error ? err.stack : undefined;
-					this.emitError({
-						extensionPath: ext.path,
-						event: "tool_result",
-						error: message,
-						stack,
-					});
-				}
-			}
-		}
-
-		if (!modified) {
-			return undefined;
-		}
-
-		return {
-			content: currentEvent.content,
-			details: currentEvent.details,
-			isError: currentEvent.isError,
-		};
+		return emitToolResultAcrossExtensions(this.extensions, this.createContext(), event, (error) =>
+			this.emitError(error),
+		);
 	}
 
 	async emitToolCall(event: ToolCallEvent): Promise<ToolCallEventResult | undefined> {
-		const ctx = this.createContext();
-		let result: ToolCallEventResult | undefined;
-
-		for (const ext of this.extensions) {
-			const handlers = ext.handlers.get("tool_call");
-			if (!handlers || handlers.length === 0) continue;
-
-			for (const handler of handlers) {
-				const handlerResult = await handler(event, ctx);
-
-				if (handlerResult) {
-					result = handlerResult;
-					if (result.block) {
-						return result;
-					}
-				}
-			}
-		}
-
-		return result;
+		return emitToolCallAcrossExtensions(this.extensions, this.createContext(), event);
 	}
 
 	async emitUserBash(event: UserBashEvent): Promise<UserBashEventResult | undefined> {
-		const ctx = this.createContext();
-
-		for (const ext of this.extensions) {
-			const handlers = ext.handlers.get("user_bash");
-			if (!handlers || handlers.length === 0) continue;
-
-			for (const handler of handlers) {
-				try {
-					const handlerResult = await handler(event, ctx);
-					if (handlerResult) {
-						return handlerResult;
-					}
-				} catch (err) {
-					const message = err instanceof Error ? err.message : String(err);
-					const stack = err instanceof Error ? err.stack : undefined;
-					this.emitError({
-						extensionPath: ext.path,
-						event: "user_bash",
-						error: message,
-						stack,
-					});
-				}
-			}
-		}
-
-		return undefined;
+		return emitUserBashAcrossExtensions(this.extensions, this.createContext(), event, (error) =>
+			this.emitError(error),
+		);
 	}
 
 	async emitContext(messages: AgentMessage[]): Promise<AgentMessage[]> {
-		const ctx = this.createContext();
-		let currentMessages = structuredClone(messages);
-
-		for (const ext of this.extensions) {
-			const handlers = ext.handlers.get("context");
-			if (!handlers || handlers.length === 0) continue;
-
-			for (const handler of handlers) {
-				try {
-					const event: ContextEvent = { type: "context", messages: currentMessages };
-					const handlerResult = await handler(event, ctx);
-
-					if (handlerResult && (handlerResult as ContextEventResult).messages) {
-						currentMessages = (handlerResult as ContextEventResult).messages!;
-					}
-				} catch (err) {
-					const message = err instanceof Error ? err.message : String(err);
-					const stack = err instanceof Error ? err.stack : undefined;
-					this.emitError({
-						extensionPath: ext.path,
-						event: "context",
-						error: message,
-						stack,
-					});
-				}
-			}
-		}
-
-		return currentMessages;
+		return emitContextAcrossExtensions(this.extensions, this.createContext(), messages, (error) =>
+			this.emitError(error),
+		);
 	}
 
 	async emitBeforeProviderRequest(payload: unknown): Promise<unknown> {
-		const ctx = this.createContext();
-		let currentPayload = payload;
-
-		for (const ext of this.extensions) {
-			const handlers = ext.handlers.get("before_provider_request");
-			if (!handlers || handlers.length === 0) continue;
-
-			for (const handler of handlers) {
-				try {
-					const event: BeforeProviderRequestEvent = {
-						type: "before_provider_request",
-						payload: currentPayload,
-					};
-					const handlerResult = await handler(event, ctx);
-					if (handlerResult !== undefined) {
-						currentPayload = handlerResult;
-					}
-				} catch (err) {
-					const message = err instanceof Error ? err.message : String(err);
-					const stack = err instanceof Error ? err.stack : undefined;
-					this.emitError({
-						extensionPath: ext.path,
-						event: "before_provider_request",
-						error: message,
-						stack,
-					});
-				}
-			}
-		}
-
-		return currentPayload;
+		return emitBeforeProviderRequestAcrossExtensions(this.extensions, this.createContext(), payload, (error) =>
+			this.emitError(error),
+		);
 	}
 
 	async emitBeforeAgentStart(
@@ -1009,64 +500,23 @@ export class ExtensionRunner {
 		systemPrompt: string,
 		systemPromptOptions: BuildSystemPromptOptions,
 	): Promise<BeforeAgentStartCombinedResult | undefined> {
-		let currentSystemPrompt = systemPrompt;
-		const ctx = Object.defineProperties(
-			{},
-			Object.getOwnPropertyDescriptors(this.createContext()),
-		) as ExtensionContext;
+		const systemPromptState = { value: systemPrompt };
+		const ctx = Object.defineProperties({}, Object.getOwnPropertyDescriptors(this.createContext())) as ReturnType<
+			ExtensionRunner["createContext"]
+		>;
 		ctx.getSystemPrompt = () => {
 			this.assertActive();
-			return currentSystemPrompt;
+			return systemPromptState.value;
 		};
-		const messages: NonNullable<BeforeAgentStartEventResult["message"]>[] = [];
-		let systemPromptModified = false;
-
-		for (const ext of this.extensions) {
-			const handlers = ext.handlers.get("before_agent_start");
-			if (!handlers || handlers.length === 0) continue;
-
-			for (const handler of handlers) {
-				try {
-					const event: BeforeAgentStartEvent = {
-						type: "before_agent_start",
-						prompt,
-						images,
-						systemPrompt: currentSystemPrompt,
-						systemPromptOptions,
-					};
-					const handlerResult = await handler(event, ctx);
-
-					if (handlerResult) {
-						const result = handlerResult as BeforeAgentStartEventResult;
-						if (result.message) {
-							messages.push(result.message);
-						}
-						if (result.systemPrompt !== undefined) {
-							currentSystemPrompt = result.systemPrompt;
-							systemPromptModified = true;
-						}
-					}
-				} catch (err) {
-					const message = err instanceof Error ? err.message : String(err);
-					const stack = err instanceof Error ? err.stack : undefined;
-					this.emitError({
-						extensionPath: ext.path,
-						event: "before_agent_start",
-						error: message,
-						stack,
-					});
-				}
-			}
-		}
-
-		if (messages.length > 0 || systemPromptModified) {
-			return {
-				messages: messages.length > 0 ? messages : undefined,
-				systemPrompt: systemPromptModified ? currentSystemPrompt : undefined,
-			};
-		}
-
-		return undefined;
+		return emitBeforeAgentStartAcrossExtensions(
+			this.extensions,
+			ctx,
+			prompt,
+			images,
+			systemPromptState,
+			systemPromptOptions,
+			(error) => this.emitError(error),
+		);
 	}
 
 	async emitResourcesDiscover(
@@ -1077,85 +527,25 @@ export class ExtensionRunner {
 		promptPaths: Array<{ path: string; extensionPath: string }>;
 		themePaths: Array<{ path: string; extensionPath: string }>;
 	}> {
-		const ctx = this.createContext();
-		const skillPaths: Array<{ path: string; extensionPath: string }> = [];
-		const promptPaths: Array<{ path: string; extensionPath: string }> = [];
-		const themePaths: Array<{ path: string; extensionPath: string }> = [];
-
-		for (const ext of this.extensions) {
-			const handlers = ext.handlers.get("resources_discover");
-			if (!handlers || handlers.length === 0) continue;
-
-			for (const handler of handlers) {
-				try {
-					const event: ResourcesDiscoverEvent = { type: "resources_discover", cwd, reason };
-					const handlerResult = await handler(event, ctx);
-					const result = handlerResult as ResourcesDiscoverResult | undefined;
-
-					if (result?.skillPaths?.length) {
-						skillPaths.push(...result.skillPaths.map((path) => ({ path, extensionPath: ext.path })));
-					}
-					if (result?.promptPaths?.length) {
-						promptPaths.push(...result.promptPaths.map((path) => ({ path, extensionPath: ext.path })));
-					}
-					if (result?.themePaths?.length) {
-						themePaths.push(...result.themePaths.map((path) => ({ path, extensionPath: ext.path })));
-					}
-				} catch (err) {
-					const message = err instanceof Error ? err.message : String(err);
-					const stack = err instanceof Error ? err.stack : undefined;
-					this.emitError({
-						extensionPath: ext.path,
-						event: "resources_discover",
-						error: message,
-						stack,
-					});
-				}
-			}
-		}
-
-		return { skillPaths, promptPaths, themePaths };
+		return emitResourcesDiscoverAcrossExtensions(this.extensions, this.createContext(), cwd, reason, (error) =>
+			this.emitError(error),
+		);
 	}
 
-	/** Emit input event. Transforms chain, "handled" short-circuits. */
 	async emitInput(
 		text: string,
 		images: ImageContent[] | undefined,
 		source: InputSource,
 		streamingBehavior?: "steer" | "followUp",
 	): Promise<InputEventResult> {
-		const ctx = this.createContext();
-		let currentText = text;
-		let currentImages = images;
-
-		for (const ext of this.extensions) {
-			for (const handler of ext.handlers.get("input") ?? []) {
-				try {
-					const event: InputEvent = {
-						type: "input",
-						text: currentText,
-						images: currentImages,
-						source,
-						streamingBehavior,
-					};
-					const result = (await handler(event, ctx)) as InputEventResult | undefined;
-					if (result?.action === "handled") return result;
-					if (result?.action === "transform") {
-						currentText = result.text;
-						currentImages = result.images ?? currentImages;
-					}
-				} catch (err) {
-					this.emitError({
-						extensionPath: ext.path,
-						event: "input",
-						error: err instanceof Error ? err.message : String(err),
-						stack: err instanceof Error ? err.stack : undefined,
-					});
-				}
-			}
-		}
-		return currentText !== text || currentImages !== images
-			? { action: "transform", text: currentText, images: currentImages }
-			: { action: "continue" };
+		return emitInputAcrossExtensions(
+			this.extensions,
+			this.createContext(),
+			text,
+			images,
+			source,
+			streamingBehavior,
+			(error) => this.emitError(error),
+		);
 	}
 }
