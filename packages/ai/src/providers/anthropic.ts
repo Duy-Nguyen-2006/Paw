@@ -465,38 +465,37 @@ function handleAnthropicContentBlockStart(
 	event: Extract<RawMessageStreamEvent, { type: "content_block_start" }>,
 ): void {
 	const { output, stream, isOAuth, context } = ctx;
+	const startBlock = createAnthropicContentBlock(event, isOAuth, context);
+	if (!startBlock) return;
+	output.content.push(startBlock);
+	const contentIndex = output.content.length - 1;
+	const eventType = anthropicBlockStartEventType(startBlock);
+	stream.push({ type: eventType, contentIndex, partial: output });
+}
+
+function createAnthropicContentBlock(
+	event: Extract<RawMessageStreamEvent, { type: "content_block_start" }>,
+	isOAuth: boolean,
+	context: Context,
+): AnthropicStreamBlock | undefined {
 	const blockType = event.content_block.type;
 	if (blockType === "text") {
-		const block: AnthropicStreamBlock = { type: "text", text: "", index: event.index };
-		output.content.push(block);
-		stream.push({ type: "text_start", contentIndex: output.content.length - 1, partial: output });
-		return;
+		return { type: "text", text: "", index: event.index };
 	}
 	if (blockType === "thinking") {
-		const block: AnthropicStreamBlock = {
-			type: "thinking",
-			thinking: "",
-			thinkingSignature: "",
-			index: event.index,
-		};
-		output.content.push(block);
-		stream.push({ type: "thinking_start", contentIndex: output.content.length - 1, partial: output });
-		return;
+		return { type: "thinking", thinking: "", thinkingSignature: "", index: event.index };
 	}
 	if (blockType === "redacted_thinking") {
-		const block: AnthropicStreamBlock = {
+		return {
 			type: "thinking",
 			thinking: "[Reasoning redacted]",
 			thinkingSignature: event.content_block.data,
 			redacted: true,
 			index: event.index,
 		};
-		output.content.push(block);
-		stream.push({ type: "thinking_start", contentIndex: output.content.length - 1, partial: output });
-		return;
 	}
 	if (blockType === "tool_use") {
-		const block: AnthropicStreamBlock = {
+		return {
 			type: "toolCall",
 			id: event.content_block.id,
 			name: isOAuth ? fromClaudeCodeName(event.content_block.name, context.tools) : event.content_block.name,
@@ -504,9 +503,14 @@ function handleAnthropicContentBlockStart(
 			partialJson: "",
 			index: event.index,
 		};
-		output.content.push(block);
-		stream.push({ type: "toolcall_start", contentIndex: output.content.length - 1, partial: output });
 	}
+	return undefined;
+}
+
+function anthropicBlockStartEventType(block: AnthropicStreamBlock): "text_start" | "thinking_start" | "toolcall_start" {
+	if (block.type === "text") return "text_start";
+	if (block.type === "thinking") return "thinking_start";
+	return "toolcall_start";
 }
 
 function handleAnthropicContentBlockDelta(
@@ -549,7 +553,15 @@ function handleAnthropicContentBlockStop(
 	if (!block) return;
 	const contentIndex = blocks.indexOf(block);
 	delete (block as { index?: number }).index;
+	finalizeAnthropicContentBlock(block, contentIndex, stream, output);
+}
 
+function finalizeAnthropicContentBlock(
+	block: AnthropicStreamBlock,
+	contentIndex: number,
+	stream: AssistantMessageEventStream,
+	output: AssistantMessage,
+): void {
 	if (block.type === "text") {
 		stream.push({ type: "text_end", contentIndex, content: block.text, partial: output });
 		return;
@@ -566,18 +578,10 @@ function handleAnthropicContentBlockStop(
 }
 
 function dispatchAnthropicStreamEvent(ctx: AnthropicStreamDispatchContext, event: RawMessageStreamEvent): void {
-	const { output, model } = ctx;
+	const { model } = ctx;
 
 	if (event.type === "message_start") {
-		output.responseId = event.message.id;
-		output.usage.input = event.message.usage.input_tokens || 0;
-		output.usage.output = event.message.usage.output_tokens || 0;
-		output.usage.cacheRead = event.message.usage.cache_read_input_tokens || 0;
-		output.usage.cacheWrite = event.message.usage.cache_creation_input_tokens || 0;
-		output.usage.cacheWrite1h = event.message.usage.cache_creation?.ephemeral_1h_input_tokens || 0;
-		output.usage.totalTokens =
-			output.usage.input + output.usage.output + output.usage.cacheRead + output.usage.cacheWrite;
-		calculateCost(model, output.usage);
+		applyAnthropicMessageStart(ctx, event);
 		return;
 	}
 	if (event.type === "content_block_start") {
@@ -593,25 +597,56 @@ function dispatchAnthropicStreamEvent(ctx: AnthropicStreamDispatchContext, event
 		return;
 	}
 	if (event.type === "message_delta") {
-		if (event.delta.stop_reason) {
-			const stopReasonResult = mapStopReason(event.delta.stop_reason, event.delta.stop_details);
-			output.stopReason = stopReasonResult.stopReason;
-			if (stopReasonResult.errorMessage) {
-				output.errorMessage = stopReasonResult.errorMessage;
-			}
-		}
-		if (event.usage.input_tokens != null) output.usage.input = event.usage.input_tokens;
-		if (event.usage.output_tokens != null) output.usage.output = event.usage.output_tokens;
-		if (event.usage.cache_read_input_tokens != null) {
-			output.usage.cacheRead = event.usage.cache_read_input_tokens;
-		}
-		if (event.usage.cache_creation_input_tokens != null) {
-			output.usage.cacheWrite = event.usage.cache_creation_input_tokens;
-		}
-		output.usage.totalTokens =
-			output.usage.input + output.usage.output + output.usage.cacheRead + output.usage.cacheWrite;
-		calculateCost(model, output.usage);
+		applyAnthropicMessageDelta(ctx, event);
 	}
+}
+
+function applyAnthropicMessageStart(
+	ctx: AnthropicStreamDispatchContext,
+	event: Extract<RawMessageStreamEvent, { type: "message_start" }>,
+): void {
+	const { output, model } = ctx;
+	output.responseId = event.message.id;
+	output.usage.input = event.message.usage.input_tokens || 0;
+	output.usage.output = event.message.usage.output_tokens || 0;
+	output.usage.cacheRead = event.message.usage.cache_read_input_tokens || 0;
+	output.usage.cacheWrite = event.message.usage.cache_creation_input_tokens || 0;
+	output.usage.cacheWrite1h = event.message.usage.cache_creation?.ephemeral_1h_input_tokens || 0;
+	output.usage.totalTokens =
+		output.usage.input + output.usage.output + output.usage.cacheRead + output.usage.cacheWrite;
+	calculateCost(model, output.usage);
+}
+
+function applyAnthropicMessageDelta(
+	ctx: AnthropicStreamDispatchContext,
+	event: Extract<RawMessageStreamEvent, { type: "message_delta" }>,
+): void {
+	const { output, model } = ctx;
+	if (event.delta.stop_reason) {
+		const stopReasonResult = mapStopReason(event.delta.stop_reason, event.delta.stop_details);
+		output.stopReason = stopReasonResult.stopReason;
+		if (stopReasonResult.errorMessage) {
+			output.errorMessage = stopReasonResult.errorMessage;
+		}
+	}
+	applyAnthropicMessageDeltaUsage(output, event);
+	calculateCost(model, output.usage);
+}
+
+function applyAnthropicMessageDeltaUsage(
+	output: AssistantMessage,
+	event: Extract<RawMessageStreamEvent, { type: "message_delta" }>,
+): void {
+	if (event.usage.input_tokens != null) output.usage.input = event.usage.input_tokens;
+	if (event.usage.output_tokens != null) output.usage.output = event.usage.output_tokens;
+	if (event.usage.cache_read_input_tokens != null) {
+		output.usage.cacheRead = event.usage.cache_read_input_tokens;
+	}
+	if (event.usage.cache_creation_input_tokens != null) {
+		output.usage.cacheWrite = event.usage.cache_creation_input_tokens;
+	}
+	output.usage.totalTokens =
+		output.usage.input + output.usage.output + output.usage.cacheRead + output.usage.cacheWrite;
 }
 
 export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOptions> = (
@@ -622,114 +657,164 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 	const stream = new AssistantMessageEventStream();
 
 	(async () => {
-		const output: AssistantMessage = {
-			role: "assistant",
-			content: [],
-			api: model.api as Api,
-			provider: model.provider,
-			model: model.id,
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
-			stopReason: "stop",
-			timestamp: Date.now(),
-		};
+		const output = createInitialAnthropicOutput(model);
 
 		try {
-			let client: Anthropic;
-			let isOAuth: boolean;
-
-			if (options?.client) {
-				client = options.client;
-				isOAuth = false;
-			} else {
-				const apiKey = options?.apiKey;
-				if (!apiKey) {
-					throw new Error(`No API key for provider: ${model.provider}`);
-				}
-
-				let copilotDynamicHeaders: Record<string, string> | undefined;
-				if (model.provider === "github-copilot") {
-					const hasImages = hasCopilotVisionInput(context.messages);
-					copilotDynamicHeaders = buildCopilotDynamicHeaders({
-						messages: context.messages,
-						hasImages,
-					});
-				}
-
-				const cacheRetention = options?.cacheRetention ?? resolveCacheRetention();
-				const cacheSessionId = cacheRetention === "none" ? undefined : options?.sessionId;
-
-				const created = createClient(
-					model,
-					apiKey,
-					options?.interleavedThinking ?? true,
-					shouldUseFineGrainedToolStreamingBeta(model, context),
-					options?.headers,
-					copilotDynamicHeaders,
-					cacheSessionId,
-				);
-				client = created.client;
-				isOAuth = created.isOAuthToken;
-			}
-			let params = buildParams(model, context, isOAuth, options);
-			const nextParams = await options?.onPayload?.(params, model);
-			if (nextParams !== undefined) {
-				params = nextParams as MessageCreateParamsStreaming;
-			}
-			const requestOptions = {
-				...(options?.signal ? { signal: options.signal } : {}),
-				...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
-				maxRetries: options?.maxRetries ?? 0,
-			};
+			const { client, isOAuth } = await resolveAnthropicClient(model, context, options);
+			const params = await resolveAnthropicParams(model, context, isOAuth, options);
+			const requestOptions = buildAnthropicRequestOptions(options);
 			const response = await client.messages.create({ ...params, stream: true }, requestOptions).asResponse();
 			await options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, model);
 			stream.push({ type: "start", partial: output });
 
-			const blocks = output.content as AnthropicStreamBlock[];
-			const dispatchCtx: AnthropicStreamDispatchContext = {
-				output,
-				stream,
-				blocks,
-				model,
-				context,
-				isOAuth,
-			};
+			const dispatchCtx = createAnthropicDispatchContext(output, stream, model, context, isOAuth);
+			await consumeAnthropicResponse(response, dispatchCtx, options);
 
-			for await (const event of iterateAnthropicEvents(response, options?.signal)) {
-				dispatchAnthropicStreamEvent(dispatchCtx, event);
-			}
-
-			if (options?.signal?.aborted) {
-				throw new Error("Request was aborted");
-			}
-
-			if (output.stopReason === "aborted" || output.stopReason === "error") {
-				throw new Error(output.errorMessage || "An unknown error occurred");
-			}
-
+			assertAnthropicStreamNotAborted(options, output);
 			stream.push({ type: "done", reason: output.stopReason, message: output });
 			stream.end();
 		} catch (error) {
-			for (const block of output.content) {
-				delete (block as { index?: number }).index;
-				// partialJson is only a streaming scratch buffer; never persist it.
-				delete (block as { partialJson?: string }).partialJson;
-			}
-			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-			output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
-			stream.push({ type: "error", reason: output.stopReason, error: output });
-			stream.end();
+			reportAnthropicStreamError(stream, output, options, error);
 		}
 	})();
 
 	return stream;
 };
+
+function createInitialAnthropicOutput(model: Model<"anthropic-messages">): AssistantMessage {
+	return {
+		role: "assistant",
+		content: [],
+		api: model.api as Api,
+		provider: model.provider,
+		model: model.id,
+		usage: {
+			input: 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 0,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		},
+		stopReason: "stop",
+		timestamp: Date.now(),
+	};
+}
+
+async function resolveAnthropicClient(
+	model: Model<"anthropic-messages">,
+	context: Context,
+	options: AnthropicOptions | undefined,
+): Promise<{ client: Anthropic; isOAuth: boolean }> {
+	if (options?.client) {
+		return { client: options.client, isOAuth: false };
+	}
+
+	const apiKey = options?.apiKey;
+	if (!apiKey) {
+		throw new Error(`No API key for provider: ${model.provider}`);
+	}
+
+	const dynamicHeaders = buildCopilotDynamicHeadersForModel(model, context);
+	const cacheRetention = options?.cacheRetention ?? resolveCacheRetention();
+	const cacheSessionId = cacheRetention === "none" ? undefined : options?.sessionId;
+	return createClient(
+		model,
+		apiKey,
+		options?.interleavedThinking ?? true,
+		shouldUseFineGrainedToolStreamingBeta(model, context),
+		options?.headers,
+		dynamicHeaders,
+		cacheSessionId,
+	);
+}
+
+function buildCopilotDynamicHeadersForModel(
+	model: Model<"anthropic-messages">,
+	context: Context,
+): Record<string, string> | undefined {
+	if (model.provider !== "github-copilot") return undefined;
+	const hasImages = hasCopilotVisionInput(context.messages);
+	return buildCopilotDynamicHeaders({
+		messages: context.messages,
+		hasImages,
+	});
+}
+
+async function resolveAnthropicParams(
+	model: Model<"anthropic-messages">,
+	context: Context,
+	isOAuth: boolean,
+	options: AnthropicOptions | undefined,
+): Promise<MessageCreateParamsStreaming> {
+	let params = buildParams(model, context, isOAuth, options);
+	const nextParams = await options?.onPayload?.(params, model);
+	if (nextParams !== undefined) {
+		params = nextParams as MessageCreateParamsStreaming;
+	}
+	return params;
+}
+
+function buildAnthropicRequestOptions(options: AnthropicOptions | undefined) {
+	return {
+		...(options?.signal ? { signal: options.signal } : {}),
+		...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
+		maxRetries: options?.maxRetries ?? 0,
+	};
+}
+
+function createAnthropicDispatchContext(
+	output: AssistantMessage,
+	stream: AssistantMessageEventStream,
+	model: Model<"anthropic-messages">,
+	context: Context,
+	isOAuth: boolean,
+): AnthropicStreamDispatchContext {
+	return {
+		output,
+		stream,
+		blocks: output.content as AnthropicStreamBlock[],
+		model,
+		context,
+		isOAuth,
+	};
+}
+
+async function consumeAnthropicResponse(
+	response: Response,
+	dispatchCtx: AnthropicStreamDispatchContext,
+	options: AnthropicOptions | undefined,
+): Promise<void> {
+	for await (const event of iterateAnthropicEvents(response, options?.signal)) {
+		dispatchAnthropicStreamEvent(dispatchCtx, event);
+	}
+}
+
+function assertAnthropicStreamNotAborted(options: AnthropicOptions | undefined, output: AssistantMessage): void {
+	if (options?.signal?.aborted) {
+		throw new Error("Request was aborted");
+	}
+	if (output.stopReason === "aborted" || output.stopReason === "error") {
+		throw new Error(output.errorMessage || "An unknown error occurred");
+	}
+}
+
+function reportAnthropicStreamError(
+	stream: AssistantMessageEventStream,
+	output: AssistantMessage,
+	options: AnthropicOptions | undefined,
+	error: unknown,
+): void {
+	for (const block of output.content) {
+		delete (block as { index?: number }).index;
+		// partialJson is only a streaming scratch buffer; never persist it.
+		delete (block as { partialJson?: string }).partialJson;
+	}
+	output.stopReason = options?.signal?.aborted ? "aborted" : "error";
+	output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+	stream.push({ type: "error", reason: output.stopReason, error: output });
+	stream.end();
+}
 
 /**
  * Map ThinkingLevel to Anthropic effort levels for adaptive thinking.
@@ -927,6 +1012,22 @@ function buildParams(
 		stream: true,
 	};
 
+	applyAnthropicSystemPrompt(params, context, isOAuthToken, cacheControl);
+	applyAnthropicTemperature(params, options, compat);
+	applyAnthropicTools(params, context, isOAuthToken, compat, cacheControl);
+	applyAnthropicThinking(params, model, options);
+	applyAnthropicMetadata(params, options);
+	applyAnthropicToolChoice(params, options);
+
+	return params;
+}
+
+function applyAnthropicSystemPrompt(
+	params: MessageCreateParamsStreaming,
+	context: Context,
+	isOAuthToken: boolean,
+	cacheControl: CacheControlEphemeral | undefined,
+): void {
 	// For OAuth tokens, we MUST include Claude Code identity
 	if (isOAuthToken) {
 		params.system = [
@@ -943,7 +1044,9 @@ function buildParams(
 				...(cacheControl ? { cache_control: cacheControl } : {}),
 			});
 		}
-	} else if (context.systemPrompt) {
+		return;
+	}
+	if (context.systemPrompt) {
 		// Add cache control to system prompt for non-OAuth tokens
 		params.system = [
 			{
@@ -953,68 +1056,112 @@ function buildParams(
 			},
 		];
 	}
+}
 
+function applyAnthropicTemperature(
+	params: MessageCreateParamsStreaming,
+	options: AnthropicOptions | undefined,
+	compat: Required<Omit<AnthropicMessagesCompat, "forceAdaptiveThinking">>,
+): void {
 	// Temperature is incompatible with extended thinking and unsupported on Claude Opus 4.7+.
 	if (options?.temperature !== undefined && !options?.thinkingEnabled && compat.supportsTemperature) {
 		params.temperature = options.temperature;
 	}
+}
 
-	if (context.tools && context.tools.length > 0) {
-		params.tools = convertTools(
-			context.tools,
-			isOAuthToken,
-			compat.supportsEagerToolInputStreaming,
-			compat.supportsCacheControlOnTools ? cacheControl : undefined,
-		);
-	}
+function applyAnthropicTools(
+	params: MessageCreateParamsStreaming,
+	context: Context,
+	isOAuthToken: boolean,
+	compat: Required<Omit<AnthropicMessagesCompat, "forceAdaptiveThinking">>,
+	cacheControl: CacheControlEphemeral | undefined,
+): void {
+	if (!context.tools || context.tools.length === 0) return;
+	params.tools = convertTools(
+		context.tools,
+		isOAuthToken,
+		compat.supportsEagerToolInputStreaming,
+		compat.supportsCacheControlOnTools ? cacheControl : undefined,
+	);
+}
 
+function applyAnthropicThinking(
+	params: MessageCreateParamsStreaming,
+	model: Model<"anthropic-messages">,
+	options: AnthropicOptions | undefined,
+): void {
 	// Configure thinking mode: adaptive, budget-based, or explicitly disabled.
-	if (model.reasoning) {
-		if (options?.thinkingEnabled) {
-			// Default to "summarized" so Opus 4.7 and Mythos Preview behave like
-			// older Claude 4 models (whose API default is also "summarized").
-			const display: AnthropicThinkingDisplay = options.thinkingDisplay ?? "summarized";
-			if (model.compat?.forceAdaptiveThinking === true) {
-				// Adaptive thinking: Claude decides when and how much to think.
-				params.thinking = { type: "adaptive", display };
-				if (options.effort) {
-					// The Anthropic SDK types can lag newly supported effort values such as "xhigh".
-					params.output_config =
-						options.effort === "xhigh"
-							? ({ effort: options.effort } as unknown as NonNullable<
-									MessageCreateParamsStreaming["output_config"]
-								>)
-							: { effort: options.effort };
-				}
-			} else {
-				// Budget-based thinking for older models
-				params.thinking = {
-					type: "enabled",
-					budget_tokens: options.thinkingBudgetTokens || 1024,
-					display,
-				};
-			}
-		} else if (options?.thinkingEnabled === false && model.thinkingLevelMap?.off !== null) {
-			params.thinking = { type: "disabled" };
-		}
-	}
+	if (!model.reasoning) return;
 
-	if (options?.metadata) {
-		const userId = options.metadata.user_id;
-		if (typeof userId === "string") {
-			params.metadata = { user_id: userId };
-		}
-	}
-
-	if (options?.toolChoice) {
-		if (typeof options.toolChoice === "string") {
-			params.tool_choice = { type: options.toolChoice };
+	if (options?.thinkingEnabled) {
+		// Default to "summarized" so Opus 4.7 and Mythos Preview behave like
+		// older Claude 4 models (whose API default is also "summarized").
+		const display: AnthropicThinkingDisplay = options.thinkingDisplay ?? "summarized";
+		if (model.compat?.forceAdaptiveThinking === true) {
+			applyAnthropicAdaptiveThinking(params, options, display);
 		} else {
-			params.tool_choice = options.toolChoice;
+			applyAnthropicBudgetThinking(params, options, display);
 		}
+		return;
 	}
 
-	return params;
+	if (options?.thinkingEnabled === false && model.thinkingLevelMap?.off !== null) {
+		params.thinking = { type: "disabled" };
+	}
+}
+
+function applyAnthropicAdaptiveThinking(
+	params: MessageCreateParamsStreaming,
+	options: AnthropicOptions,
+	display: AnthropicThinkingDisplay,
+): void {
+	// Adaptive thinking: Claude decides when and how much to think.
+	params.thinking = { type: "adaptive", display };
+	if (options.effort) {
+		// The Anthropic SDK types can lag newly supported effort values such as "xhigh".
+		params.output_config =
+			options.effort === "xhigh"
+				? ({ effort: options.effort } as unknown as NonNullable<
+						MessageCreateParamsStreaming["output_config"]
+					>)
+				: { effort: options.effort };
+	}
+}
+
+function applyAnthropicBudgetThinking(
+	params: MessageCreateParamsStreaming,
+	options: AnthropicOptions,
+	display: AnthropicThinkingDisplay,
+): void {
+	// Budget-based thinking for older models
+	params.thinking = {
+		type: "enabled",
+		budget_tokens: options.thinkingBudgetTokens || 1024,
+		display,
+	};
+}
+
+function applyAnthropicMetadata(
+	params: MessageCreateParamsStreaming,
+	options: AnthropicOptions | undefined,
+): void {
+	if (!options?.metadata) return;
+	const userId = options.metadata.user_id;
+	if (typeof userId === "string") {
+		params.metadata = { user_id: userId };
+	}
+}
+
+function applyAnthropicToolChoice(
+	params: MessageCreateParamsStreaming,
+	options: AnthropicOptions | undefined,
+): void {
+	if (!options?.toolChoice) return;
+	if (typeof options.toolChoice === "string") {
+		params.tool_choice = { type: options.toolChoice };
+	} else {
+		params.tool_choice = options.toolChoice;
+	}
 }
 
 // Normalize tool call IDs to match Anthropic's required pattern and length

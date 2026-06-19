@@ -730,21 +730,7 @@ function buildAssistantMessage(
 		content: compat.requiresAssistantAfterToolResult ? "" : null,
 	};
 
-	const assistantTextParts = msg.content
-		.filter(isTextContentBlock)
-		.filter((block) => block.text.trim().length > 0)
-		.map(
-			(block) =>
-				({
-					type: "text",
-					text: sanitizeSurrogates(block.text),
-				}) satisfies ChatCompletionContentPartText,
-		);
-	const assistantText = assistantTextParts.map((part) => part.text).join("");
-
-	const nonEmptyThinkingBlocks = msg.content
-		.filter(isThinkingContentBlock)
-		.filter((block) => block.thinking.trim().length > 0);
+	const { assistantText, assistantTextParts, nonEmptyThinkingBlocks } = partitionAssistantContent(msg.content);
 
 	if (nonEmptyThinkingBlocks.length > 0) {
 		applyAssistantThinking(assistantMsg, nonEmptyThinkingBlocks, assistantText, assistantTextParts, model, compat);
@@ -757,37 +743,9 @@ function buildAssistantMessage(
 		assistantMsg.content = assistantText;
 	}
 
-	const toolCalls = msg.content.filter(isToolCallBlock);
-	if (toolCalls.length > 0) {
-		assistantMsg.tool_calls = toolCalls.map((tc) => ({
-			id: tc.id,
-			type: "function" as const,
-			function: {
-				name: tc.name,
-				arguments: JSON.stringify(tc.arguments),
-			},
-		}));
-		const reasoningDetails = toolCalls
-			.filter((tc) => tc.thoughtSignature)
-			.map((tc) => {
-				try {
-					return JSON.parse(tc.thoughtSignature!);
-				} catch {
-					return null;
-				}
-			})
-			.filter(Boolean);
-		if (reasoningDetails.length > 0) {
-			(assistantMsg as any).reasoning_details = reasoningDetails;
-		}
-	}
-	if (
-		compat.requiresReasoningContentOnAssistantMessages &&
-		model.reasoning &&
-		(assistantMsg as { reasoning_content?: string }).reasoning_content === undefined
-	) {
-		(assistantMsg as { reasoning_content?: string }).reasoning_content = "";
-	}
+	applyAssistantToolCalls(assistantMsg, msg.content);
+	applyAssistantReasoningContent(assistantMsg, model, compat);
+
 	// Skip assistant messages that have no content and no tool calls.
 	// Some providers require "either content or tool_calls, but not none".
 	// Other providers also don't accept empty assistant messages.
@@ -798,6 +756,73 @@ function buildAssistantMessage(
 		return undefined;
 	}
 	return assistantMsg;
+}
+
+function partitionAssistantContent(content: Extract<Message, { role: "assistant" }>["content"]): {
+	assistantText: string;
+	assistantTextParts: ChatCompletionContentPartText[];
+	nonEmptyThinkingBlocks: ThinkingContent[];
+} {
+	const assistantTextParts = content
+		.filter(isTextContentBlock)
+		.filter((block) => block.text.trim().length > 0)
+		.map(
+			(block) =>
+				({
+					type: "text",
+					text: sanitizeSurrogates(block.text),
+				}) satisfies ChatCompletionContentPartText,
+		);
+	const assistantText = assistantTextParts.map((part) => part.text).join("");
+
+	const nonEmptyThinkingBlocks = content
+		.filter(isThinkingContentBlock)
+		.filter((block) => block.thinking.trim().length > 0);
+
+	return { assistantText, assistantTextParts, nonEmptyThinkingBlocks };
+}
+
+function applyAssistantToolCalls(
+	assistantMsg: ChatCompletionAssistantMessageParam,
+	content: Extract<Message, { role: "assistant" }>["content"],
+): void {
+	const toolCalls = content.filter(isToolCallBlock);
+	if (toolCalls.length === 0) return;
+	assistantMsg.tool_calls = toolCalls.map((tc) => ({
+		id: tc.id,
+		type: "function" as const,
+		function: {
+			name: tc.name,
+			arguments: JSON.stringify(tc.arguments),
+		},
+	}));
+	const reasoningDetails = toolCalls
+		.filter((tc) => tc.thoughtSignature)
+		.map((tc) => {
+			try {
+				return JSON.parse(tc.thoughtSignature!);
+			} catch {
+				return null;
+			}
+		})
+		.filter(Boolean);
+	if (reasoningDetails.length > 0) {
+		(assistantMsg as any).reasoning_details = reasoningDetails;
+	}
+}
+
+function applyAssistantReasoningContent(
+	assistantMsg: ChatCompletionAssistantMessageParam,
+	model: Model<"openai-completions">,
+	compat: ResolvedOpenAICompletionsCompat,
+): void {
+	if (
+		compat.requiresReasoningContentOnAssistantMessages &&
+		model.reasoning &&
+		(assistantMsg as { reasoning_content?: string }).reasoning_content === undefined
+	) {
+		(assistantMsg as { reasoning_content?: string }).reasoning_content = "";
+	}
 }
 
 /**
@@ -814,12 +839,9 @@ function applyAssistantThinking(
 	compat: ResolvedOpenAICompletionsCompat,
 ): void {
 	if (compat.requiresThinkingAsText) {
-		// Convert thinking blocks to plain text (no tags to avoid model mimicking them)
-		const thinkingText = nonEmptyThinkingBlocks.map((block) => sanitizeSurrogates(block.thinking)).join("\n\n");
-		assistantMsg.content = [{ type: "text", text: thinkingText }, ...assistantTextParts];
+		applyAssistantThinkingAsText(assistantMsg, nonEmptyThinkingBlocks, assistantTextParts);
 		return;
 	}
-
 	// Always send assistant content as a plain string (OpenAI Chat Completions
 	// API standard format). Sending as an array of {type:"text", text:"..."}
 	// objects is non-standard and causes some models (e.g. DeepSeek V3.2 via
@@ -828,7 +850,24 @@ function applyAssistantThinking(
 	if (assistantText.length > 0) {
 		assistantMsg.content = assistantText;
 	}
+	applyAssistantThinkingSignature(assistantMsg, nonEmptyThinkingBlocks, model);
+}
 
+function applyAssistantThinkingAsText(
+	assistantMsg: ChatCompletionAssistantMessageParam,
+	nonEmptyThinkingBlocks: ThinkingContent[],
+	assistantTextParts: ChatCompletionContentPartText[],
+): void {
+	// Convert thinking blocks to plain text (no tags to avoid model mimicking them)
+	const thinkingText = nonEmptyThinkingBlocks.map((block) => sanitizeSurrogates(block.thinking)).join("\n\n");
+	assistantMsg.content = [{ type: "text", text: thinkingText }, ...assistantTextParts];
+}
+
+function applyAssistantThinkingSignature(
+	assistantMsg: ChatCompletionAssistantMessageParam,
+	nonEmptyThinkingBlocks: ThinkingContent[],
+	model: Model<"openai-completions">,
+): void {
 	// Use the signature from the first thinking block if available (for llama.cpp server + gpt-oss)
 	let signature = nonEmptyThinkingBlocks[0].thinkingSignature;
 	if (model.provider === "opencode-go" && signature === "reasoning") {
@@ -872,26 +911,34 @@ function processConsecutiveToolResults(
 	}
 
 	if (imageBlocks.length > 0) {
-		if (compat.requiresAssistantAfterToolResult) {
-			messages.push({
-				role: "assistant",
-				content: "I have processed the tool results.",
-			});
-		}
-		messages.push({
-			role: "user",
-			content: [
-				{
-					type: "text",
-					text: "Attached image(s) from tool result:",
-				},
-				...imageBlocks,
-			],
-		});
+		appendToolResultImageAttachment(messages, imageBlocks, compat);
 		return { messages, nextIndex: j - 1, lastRole: "user" };
 	}
 
 	return { messages, nextIndex: j - 1, lastRole: "toolResult" };
+}
+
+function appendToolResultImageAttachment(
+	messages: ChatCompletionMessageParam[],
+	imageBlocks: Array<{ type: "image_url"; image_url: { url: string } }>,
+	compat: ResolvedOpenAICompletionsCompat,
+): void {
+	if (compat.requiresAssistantAfterToolResult) {
+		messages.push({
+			role: "assistant",
+			content: "I have processed the tool results.",
+		});
+	}
+	messages.push({
+		role: "user",
+		content: [
+			{
+				type: "text",
+				text: "Attached image(s) from tool result:",
+			},
+			...imageBlocks,
+		],
+	});
 }
 
 /**

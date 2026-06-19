@@ -97,89 +97,117 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOpt
 	const stream = new AssistantMessageEventStream();
 
 	(async () => {
-		const output: AssistantMessage = {
-			role: "assistant",
-			content: [],
-			api: "bedrock-converse-stream" as Api,
-			provider: model.provider,
-			model: model.id,
-			usage: {
-				input: 0,
-				output: 0,
-				cacheRead: 0,
-				cacheWrite: 0,
-				totalTokens: 0,
-				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-			},
-			stopReason: "stop",
-			timestamp: Date.now(),
-		};
-
+		const output = createInitialBedrockOutput(model);
 		const blocks = output.content as Block[];
 
 		try {
+			const commandInput = await buildBedrockCommandInput(model, context, options);
+			const nextCommandInput = await options?.onPayload?.(commandInput, model);
+			const finalCommandInput = (nextCommandInput ?? commandInput) as typeof commandInput;
+			const command = new ConverseStreamCommand(finalCommandInput);
+
 			const client = createBedrockRuntimeClient(model, options);
 			if (options.headers && Object.keys(options.headers).length > 0) {
 				addCustomHeadersMiddleware(client, options.headers);
 			}
-			const cacheRetention = resolveCacheRetention(options.cacheRetention);
-			const inferenceMaxTokens = options.maxTokens ?? (isAnthropicClaudeModel(model) ? model.maxTokens : undefined);
-			let commandInput = {
-				modelId: model.id,
-				messages: convertMessages(context, model, cacheRetention),
-				system: buildSystemPrompt(context.systemPrompt, model, cacheRetention),
-				inferenceConfig: {
-					...(inferenceMaxTokens !== undefined && { maxTokens: inferenceMaxTokens }),
-					...(options.temperature !== undefined && { temperature: options.temperature }),
-				},
-				toolConfig: convertToolConfig(context.tools, options.toolChoice),
-				additionalModelRequestFields: buildAdditionalModelRequestFields(model, options),
-				...(options.requestMetadata !== undefined && { requestMetadata: options.requestMetadata }),
-			};
-			const nextCommandInput = await options?.onPayload?.(commandInput, model);
-			if (nextCommandInput !== undefined) {
-				commandInput = nextCommandInput as typeof commandInput;
-			}
-			const command = new ConverseStreamCommand(commandInput);
 
 			const response = await client.send(command, { abortSignal: options.signal });
-			if (response.$metadata.httpStatusCode !== undefined) {
-				const responseHeaders: Record<string, string> = {};
-				if (response.$metadata.requestId) {
-					responseHeaders["x-amzn-requestid"] = response.$metadata.requestId;
-				}
-				await options?.onResponse?.({ status: response.$metadata.httpStatusCode, headers: responseHeaders }, model);
-			}
+			await notifyBedrockResponseMetadata(options, response, model);
 
 			for await (const item of response.stream!) {
 				dispatchBedrockStreamItem(item, blocks, output, stream, model);
 			}
 
-			if (options.signal?.aborted) {
-				throw new Error("Request was aborted");
-			}
-
-			if (output.stopReason === "error" || output.stopReason === "aborted") {
-				throw new Error("An unknown error occurred");
-			}
-
+			assertBedrockStreamSuccess(options, output);
 			stream.push({ type: "done", reason: output.stopReason, message: output });
 			stream.end();
 		} catch (error) {
-			for (const block of output.content) {
-				delete (block as Block).index;
-				// partialJson is only a streaming scratch buffer; never persist it.
-				delete (block as Block).partialJson;
-			}
-			output.stopReason = options.signal?.aborted ? "aborted" : "error";
-			output.errorMessage = formatBedrockError(error);
-			stream.push({ type: "error", reason: output.stopReason, error: output });
-			stream.end();
+			reportBedrockStreamError(stream, output, options, error);
 		}
 	})();
 
 	return stream;
 };
+
+function createInitialBedrockOutput(model: Model<"bedrock-converse-stream">): AssistantMessage {
+	return {
+		role: "assistant",
+		content: [],
+		api: "bedrock-converse-stream" as Api,
+		provider: model.provider,
+		model: model.id,
+		usage: {
+			input: 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 0,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		},
+		stopReason: "stop",
+		timestamp: Date.now(),
+	};
+}
+
+async function buildBedrockCommandInput(
+	model: Model<"bedrock-converse-stream">,
+	context: Context,
+	options: BedrockOptions,
+) {
+	const cacheRetention = resolveCacheRetention(options.cacheRetention);
+	const inferenceMaxTokens = options.maxTokens ?? (isAnthropicClaudeModel(model) ? model.maxTokens : undefined);
+	return {
+		modelId: model.id,
+		messages: convertMessages(context, model, cacheRetention),
+		system: buildSystemPrompt(context.systemPrompt, model, cacheRetention),
+		inferenceConfig: {
+			...(inferenceMaxTokens !== undefined && { maxTokens: inferenceMaxTokens }),
+			...(options.temperature !== undefined && { temperature: options.temperature }),
+		},
+		toolConfig: convertToolConfig(context.tools, options.toolChoice),
+		additionalModelRequestFields: buildAdditionalModelRequestFields(model, options),
+		...(options.requestMetadata !== undefined && { requestMetadata: options.requestMetadata }),
+	};
+}
+
+async function notifyBedrockResponseMetadata(
+	options: BedrockOptions,
+	response: { $metadata: { httpStatusCode?: number; requestId?: string } },
+	model: Model<"bedrock-converse-stream">,
+): Promise<void> {
+	if (response.$metadata.httpStatusCode === undefined) return;
+	const responseHeaders: Record<string, string> = {};
+	if (response.$metadata.requestId) {
+		responseHeaders["x-amzn-requestid"] = response.$metadata.requestId;
+	}
+	await options?.onResponse?.({ status: response.$metadata.httpStatusCode, headers: responseHeaders }, model);
+}
+
+function assertBedrockStreamSuccess(options: BedrockOptions, output: AssistantMessage): void {
+	if (options.signal?.aborted) {
+		throw new Error("Request was aborted");
+	}
+	if (output.stopReason === "error" || output.stopReason === "aborted") {
+		throw new Error("An unknown error occurred");
+	}
+}
+
+function reportBedrockStreamError(
+	stream: AssistantMessageEventStream,
+	output: AssistantMessage,
+	options: BedrockOptions,
+	error: unknown,
+): void {
+	for (const block of output.content) {
+		delete (block as Block).index;
+		// partialJson is only a streaming scratch buffer; never persist it.
+		delete (block as Block).partialJson;
+	}
+	output.stopReason = options.signal?.aborted ? "aborted" : "error";
+	output.errorMessage = formatBedrockError(error);
+	stream.push({ type: "error", reason: output.stopReason, error: output });
+	stream.end();
+}
 
 /**
  * Human-readable prefixes for Bedrock SDK exception names.
@@ -333,10 +361,7 @@ function dispatchBedrockStreamItem(
 ): void {
 	throwIfBedrockStreamException(item);
 	if (item.messageStart) {
-		if (item.messageStart.role !== ConversationRole.ASSISTANT) {
-			throw new Error("Unexpected assistant message start but got user message start instead");
-		}
-		stream.push({ type: "start", partial: output });
+		applyBedrockMessageStart(item.messageStart, output, stream);
 		return;
 	}
 	if (item.contentBlockStart) {
@@ -358,6 +383,17 @@ function dispatchBedrockStreamItem(
 	if (item.metadata) {
 		handleMetadata(item.metadata, model, output);
 	}
+}
+
+function applyBedrockMessageStart(
+	messageStart: { role: string },
+	output: AssistantMessage,
+	stream: AssistantMessageEventStream,
+): void {
+	if (messageStart.role !== ConversationRole.ASSISTANT) {
+		throw new Error("Unexpected assistant message start but got user message start instead");
+	}
+	stream.push({ type: "start", partial: output });
 }
 
 function ensureBedrockTextBlock(
@@ -442,18 +478,33 @@ function applyBedrockReasoningDelta(
 		index,
 	);
 	if (thinkingBlock.type !== "thinking") return;
-	if (reasoningContent.text) {
-		thinkingBlock.thinking += reasoningContent.text;
-		stream.push({
-			type: "thinking_delta",
-			contentIndex: thinkingIndex,
-			delta: reasoningContent.text,
-			partial: output,
-		});
-	}
-	if (reasoningContent.signature) {
-		thinkingBlock.thinkingSignature = (thinkingBlock.thinkingSignature || "") + reasoningContent.signature;
-	}
+	applyBedrockReasoningText(thinkingBlock, reasoningContent, thinkingIndex, output, stream);
+	applyBedrockReasoningSignature(thinkingBlock, reasoningContent);
+}
+
+function applyBedrockReasoningText(
+	thinkingBlock: Block,
+	reasoningContent: NonNullable<ContentBlockDeltaEvent["delta"]>["reasoningContent"],
+	thinkingIndex: number,
+	output: AssistantMessage,
+	stream: AssistantMessageEventStream,
+): void {
+	if (!reasoningContent.text) return;
+	thinkingBlock.thinking += reasoningContent.text;
+	stream.push({
+		type: "thinking_delta",
+		contentIndex: thinkingIndex,
+		delta: reasoningContent.text,
+		partial: output,
+	});
+}
+
+function applyBedrockReasoningSignature(
+	thinkingBlock: Block,
+	reasoningContent: NonNullable<ContentBlockDeltaEvent["delta"]>["reasoningContent"],
+): void {
+	if (!reasoningContent.signature) return;
+	thinkingBlock.thinkingSignature = (thinkingBlock.thinkingSignature || "") + reasoningContent.signature;
 }
 
 function handleContentBlockStart(
@@ -464,19 +515,17 @@ function handleContentBlockStart(
 ): void {
 	const index = event.contentBlockIndex!;
 	const start = event.start;
-
-	if (start?.toolUse) {
-		const block: Block = {
-			type: "toolCall",
-			id: start.toolUse.toolUseId || "",
-			name: start.toolUse.name || "",
-			arguments: {},
-			partialJson: "",
-			index,
-		};
-		output.content.push(block);
-		stream.push({ type: "toolcall_start", contentIndex: blocks.length - 1, partial: output });
-	}
+	if (!start?.toolUse) return;
+	const block: Block = {
+		type: "toolCall",
+		id: start.toolUse.toolUseId || "",
+		name: start.toolUse.name || "",
+		arguments: {},
+		partialJson: "",
+		index,
+	};
+	output.content.push(block);
+	stream.push({ type: "toolcall_start", contentIndex: blocks.length - 1, partial: output });
 }
 
 function handleContentBlockDelta(
@@ -909,45 +958,65 @@ function buildAdditionalModelRequestFields(
 		return undefined;
 	}
 
-	if (isAnthropicClaudeModel(model)) {
-		// GovCloud Bedrock currently rejects the Claude thinking.display field.
-		// Omit it there until the GovCloud Converse schema catches up.
-		const display = isGovCloudBedrockTarget(model, options) ? undefined : (options.thinkingDisplay ?? "summarized");
-		const result: Record<string, any> = supportsAdaptiveThinking(model.id, model.name)
-			? {
-					thinking: { type: "adaptive", ...(display !== undefined ? { display } : {}) },
-					output_config: { effort: mapThinkingLevelToEffort(model, options.reasoning) },
-				}
-			: (() => {
-					const defaultBudgets: Record<ThinkingLevel, number> = {
-						minimal: 1024,
-						low: 2048,
-						medium: 8192,
-						high: 16384,
-						xhigh: 16384, // Claude doesn't support xhigh, clamp to high
-					};
+	if (!isAnthropicClaudeModel(model)) return undefined;
+	return buildAnthropicClaudeAdditionalFields(model, options);
+}
 
-					// Custom budgets override defaults (xhigh not in ThinkingBudgets, use high)
-					const level = options.reasoning === "xhigh" ? "high" : options.reasoning;
-					const budget = options.thinkingBudgets?.[level] ?? defaultBudgets[options.reasoning];
+function buildAnthropicClaudeAdditionalFields(
+	model: Model<"bedrock-converse-stream">,
+	options: BedrockOptions,
+): Record<string, any> {
+	// GovCloud Bedrock currently rejects the Claude thinking.display field.
+	// Omit it there until the GovCloud Converse schema catches up.
+	const display = isGovCloudBedrockTarget(model, options) ? undefined : (options.thinkingDisplay ?? "summarized");
+	const isAdaptive = supportsAdaptiveThinking(model.id, model.name);
+	const result: Record<string, any> = isAdaptive
+		? buildAdaptiveThinkingFields(model, options, display)
+		: buildBudgetThinkingFields(options, display);
 
-					return {
-						thinking: {
-							type: "enabled",
-							budget_tokens: budget,
-							...(display !== undefined ? { display } : {}),
-						},
-					};
-				})();
-
-		if (!supportsAdaptiveThinking(model.id, model.name) && (options.interleavedThinking ?? true)) {
-			result.anthropic_beta = ["interleaved-thinking-2025-05-14"];
-		}
-
-		return result;
+	if (!isAdaptive && (options.interleavedThinking ?? true)) {
+		result.anthropic_beta = ["interleaved-thinking-2025-05-14"];
 	}
+	return result;
+}
 
-	return undefined;
+function buildAdaptiveThinkingFields(
+	model: Model<"bedrock-converse-stream">,
+	options: BedrockOptions,
+	display: BedrockThinkingDisplay | undefined,
+): Record<string, any> {
+	return {
+		thinking: { type: "adaptive", ...(display !== undefined ? { display } : {}) },
+		output_config: { effort: mapThinkingLevelToEffort(model, options.reasoning!) },
+	};
+}
+
+function buildBudgetThinkingFields(
+	options: BedrockOptions,
+	display: BedrockThinkingDisplay | undefined,
+): Record<string, any> {
+	const budget = resolveBedrockBudgetTokens(options);
+	return {
+		thinking: {
+			type: "enabled",
+			budget_tokens: budget,
+			...(display !== undefined ? { display } : {}),
+		},
+	};
+}
+
+function resolveBedrockBudgetTokens(options: BedrockOptions): number {
+	const defaultBudgets: Record<ThinkingLevel, number> = {
+		minimal: 1024,
+		low: 2048,
+		medium: 8192,
+		high: 16384,
+		xhigh: 16384, // Claude doesn't support xhigh, clamp to high
+	};
+
+	// Custom budgets override defaults (xhigh not in ThinkingBudgets, use high)
+	const level = options.reasoning === "xhigh" ? "high" : options.reasoning!;
+	return options.thinkingBudgets?.[level] ?? defaultBudgets[options.reasoning!];
 }
 
 function createImageBlock(mimeType: string, data: string) {

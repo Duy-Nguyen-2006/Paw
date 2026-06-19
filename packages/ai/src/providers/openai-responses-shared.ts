@@ -126,49 +126,69 @@ function appendResponsesAssistantBlocks<TApi extends Api>(
 
 	for (const block of msg.content) {
 		if (block.type === "thinking") {
-			if (block.thinkingSignature) {
-				const reasoningItem = JSON.parse(block.thinkingSignature) as ResponseReasoningItem;
-				output.push(reasoningItem);
-			}
+			appendResponsesThinkingBlock(output, block);
 			continue;
 		}
 		if (block.type === "text") {
-			const textBlock = block as TextContent;
-			const parsedSignature = parseTextSignature(textBlock.textSignature);
-			const fallbackMessageId = textBlockIndex === 0 ? `msg_pi_${msgIndex}` : `msg_pi_${msgIndex}_${textBlockIndex}`;
+			appendResponsesTextBlock(output, block, msgIndex, textBlockIndex);
 			textBlockIndex++;
-			let msgId = parsedSignature?.id;
-			if (!msgId) {
-				msgId = fallbackMessageId;
-			} else if (msgId.length > 64) {
-				msgId = `msg_${shortHash(msgId)}`;
-			}
-			output.push({
-				type: "message",
-				role: "assistant",
-				content: [{ type: "output_text", text: sanitizeSurrogates(textBlock.text), annotations: [] }],
-				status: "completed",
-				id: msgId,
-				phase: parsedSignature?.phase,
-			} satisfies ResponseOutputMessage);
 			continue;
 		}
 		if (block.type === "toolCall") {
-			const toolCall = block as ToolCall;
-			const [callId, itemIdRaw] = toolCall.id.split("|");
-			let itemId: string | undefined = itemIdRaw;
-			if (isDifferentModel && itemId?.startsWith("fc_")) {
-				itemId = undefined;
-			}
-			output.push({
-				type: "function_call",
-				id: itemId,
-				call_id: callId,
-				name: toolCall.name,
-				arguments: JSON.stringify(toolCall.arguments),
-			});
+			appendResponsesToolCallBlock(output, block, isDifferentModel);
 		}
 	}
+}
+
+function appendResponsesThinkingBlock(output: ResponseInput, block: ThinkingContent): void {
+	if (!block.thinkingSignature) return;
+	const reasoningItem = JSON.parse(block.thinkingSignature) as ResponseReasoningItem;
+	output.push(reasoningItem);
+}
+
+function appendResponsesTextBlock(
+	output: ResponseInput,
+	block: TextContent,
+	msgIndex: number,
+	textBlockIndex: number,
+): void {
+	const textBlock = block as TextContent;
+	const parsedSignature = parseTextSignature(textBlock.textSignature);
+	const fallbackMessageId = textBlockIndex === 0 ? `msg_pi_${msgIndex}` : `msg_pi_${msgIndex}_${textBlockIndex}`;
+	let msgId = parsedSignature?.id;
+	if (!msgId) {
+		msgId = fallbackMessageId;
+	} else if (msgId.length > 64) {
+		msgId = `msg_${shortHash(msgId)}`;
+	}
+	output.push({
+		type: "message",
+		role: "assistant",
+		content: [{ type: "output_text", text: sanitizeSurrogates(textBlock.text), annotations: [] }],
+		status: "completed",
+		id: msgId,
+		phase: parsedSignature?.phase,
+	} satisfies ResponseOutputMessage);
+}
+
+function appendResponsesToolCallBlock(
+	output: ResponseInput,
+	block: ToolCall,
+	isDifferentModel: boolean,
+): void {
+	const toolCall = block as ToolCall;
+	const [callId, itemIdRaw] = toolCall.id.split("|");
+	let itemId: string | undefined = itemIdRaw;
+	if (isDifferentModel && itemId?.startsWith("fc_")) {
+		itemId = undefined;
+	}
+	output.push({
+		type: "function_call",
+		id: itemId,
+		call_id: callId,
+		name: toolCall.name,
+		arguments: JSON.stringify(toolCall.arguments),
+	});
 }
 
 function appendResponsesToolResultMessage<TApi extends Api>(
@@ -186,23 +206,7 @@ function appendResponsesToolResultMessage<TApi extends Api>(
 
 	let output: string | ResponseFunctionCallOutputItemList;
 	if (hasImages && model.input.includes("image")) {
-		const contentParts: ResponseFunctionCallOutputItemList = [];
-		if (hasText) {
-			contentParts.push({
-				type: "input_text",
-				text: sanitizeSurrogates(textResult),
-			});
-		}
-		for (const block of msg.content) {
-			if (block.type === "image") {
-				contentParts.push({
-					type: "input_image",
-					detail: "auto",
-					image_url: `data:${block.mimeType};base64,${block.data}`,
-				});
-			}
-		}
-		output = contentParts;
+		output = buildResponsesToolResultImageOutput(msg.content, textResult, hasText);
 	} else {
 		output = sanitizeSurrogates(hasText ? textResult : "(see attached image)");
 	}
@@ -212,6 +216,30 @@ function appendResponsesToolResultMessage<TApi extends Api>(
 		call_id: callId,
 		output,
 	});
+}
+
+function buildResponsesToolResultImageOutput(
+	content: Extract<Message, { role: "toolResult" }>["content"],
+	textResult: string,
+	hasText: boolean,
+): ResponseFunctionCallOutputItemList {
+	const contentParts: ResponseFunctionCallOutputItemList = [];
+	if (hasText) {
+		contentParts.push({
+			type: "input_text",
+			text: sanitizeSurrogates(textResult),
+		});
+	}
+	for (const block of content) {
+		if (block.type === "image") {
+			contentParts.push({
+				type: "input_image",
+				detail: "auto",
+				image_url: `data:${block.mimeType};base64,${block.data}`,
+			});
+		}
+	}
+	return contentParts;
 }
 
 export function convertResponsesMessages<TApi extends Api>(
@@ -450,20 +478,15 @@ function dispatchResponsesStreamEvent<TApi extends Api>(
 	state: ResponsesStreamState<TApi>,
 	event: ResponseStreamEvent,
 ): void {
-	const { currentItem, currentBlock, stream, output, blockIndex } = state;
-
 	switch (event.type) {
 		case "response.created":
-			output.responseId = event.response.id;
+			applyResponsesCreatedEvent(state, event);
 			break;
 		case "response.output_item.added":
 			handleResponsesOutputItemAdded(state, event.item);
 			break;
 		case "response.reasoning_summary_part.added":
-			if (currentItem?.type === "reasoning") {
-				currentItem.summary = currentItem.summary || [];
-				currentItem.summary.push(event.part);
-			}
+			applyResponsesReasoningSummaryPartAdded(state, event);
 			break;
 		case "response.reasoning_summary_text.delta":
 			appendReasoningSummaryDelta(state, event.delta);
@@ -472,83 +495,22 @@ function dispatchResponsesStreamEvent<TApi extends Api>(
 			appendReasoningSummaryDelta(state, "\n\n", "\n\n");
 			break;
 		case "response.reasoning_text.delta":
-			if (currentItem?.type === "reasoning" && currentBlock?.type === "thinking") {
-				currentBlock.thinking += event.delta;
-				stream.push({
-					type: "thinking_delta",
-					contentIndex: blockIndex(),
-					delta: event.delta,
-					partial: output,
-				});
-			}
+			applyResponsesReasoningTextDelta(state, event);
 			break;
 		case "response.content_part.added":
-			if (currentItem?.type === "message") {
-				currentItem.content = currentItem.content || [];
-				if (event.part.type === "output_text" || event.part.type === "refusal") {
-					currentItem.content.push(event.part);
-				}
-			}
+			applyResponsesContentPartAdded(state, event);
 			break;
 		case "response.output_text.delta":
-			if (currentItem?.type === "message" && currentBlock?.type === "text" && currentItem.content?.length) {
-				const lastPart = currentItem.content[currentItem.content.length - 1];
-				if (lastPart?.type === "output_text") {
-					currentBlock.text += event.delta;
-					lastPart.text += event.delta;
-					stream.push({
-						type: "text_delta",
-						contentIndex: blockIndex(),
-						delta: event.delta,
-						partial: output,
-					});
-				}
-			}
+			applyResponsesOutputTextDelta(state, event);
 			break;
 		case "response.refusal.delta":
-			if (currentItem?.type === "message" && currentBlock?.type === "text" && currentItem.content?.length) {
-				const lastPart = currentItem.content[currentItem.content.length - 1];
-				if (lastPart?.type === "refusal") {
-					currentBlock.text += event.delta;
-					lastPart.refusal += event.delta;
-					stream.push({
-						type: "text_delta",
-						contentIndex: blockIndex(),
-						delta: event.delta,
-						partial: output,
-					});
-				}
-			}
+			applyResponsesRefusalDelta(state, event);
 			break;
 		case "response.function_call_arguments.delta":
-			if (currentItem?.type === "function_call" && currentBlock?.type === "toolCall") {
-				currentBlock.partialJson += event.delta;
-				currentBlock.arguments = parseStreamingJson(currentBlock.partialJson);
-				stream.push({
-					type: "toolcall_delta",
-					contentIndex: blockIndex(),
-					delta: event.delta,
-					partial: output,
-				});
-			}
+			applyResponsesFunctionCallArgumentsDelta(state, event);
 			break;
 		case "response.function_call_arguments.done":
-			if (currentItem?.type === "function_call" && currentBlock?.type === "toolCall") {
-				const previousPartialJson = currentBlock.partialJson;
-				currentBlock.partialJson = event.arguments;
-				currentBlock.arguments = parseStreamingJson(currentBlock.partialJson);
-				if (event.arguments.startsWith(previousPartialJson)) {
-					const delta = event.arguments.slice(previousPartialJson.length);
-					if (delta.length > 0) {
-						stream.push({
-							type: "toolcall_delta",
-							contentIndex: blockIndex(),
-							delta,
-							partial: output,
-						});
-					}
-				}
-			}
+			applyResponsesFunctionCallArgumentsDone(state, event);
 			break;
 		case "response.output_item.done":
 			handleResponsesOutputItemDone(state, event.item);
@@ -558,19 +520,139 @@ function dispatchResponsesStreamEvent<TApi extends Api>(
 			break;
 		case "error":
 			throw new Error(`Error Code ${event.code}: ${event.message}`);
-		case "response.failed": {
-			const error = event.response?.error;
-			const details = event.response?.incomplete_details;
-			const msg = error
-				? `${error.code || "unknown"}: ${error.message || "no message"}`
-				: details?.reason
-					? `incomplete: ${details.reason}`
-					: "Unknown error (no error details in response)";
-			throw new Error(msg);
-		}
+		case "response.failed":
+			throwResponsesFailedError(event);
+			break;
 		default:
 			break;
 	}
+}
+
+function applyResponsesCreatedEvent<TApi extends Api>(
+	state: ResponsesStreamState<TApi>,
+	event: Extract<ResponseStreamEvent, { type: "response.created" }>,
+): void {
+	state.output.responseId = event.response.id;
+}
+
+function applyResponsesReasoningSummaryPartAdded<TApi extends Api>(
+	state: ResponsesStreamState<TApi>,
+	event: Extract<ResponseStreamEvent, { type: "response.reasoning_summary_part.added" }>,
+): void {
+	if (state.currentItem?.type !== "reasoning") return;
+	state.currentItem.summary = state.currentItem.summary || [];
+	state.currentItem.summary.push(event.part);
+}
+
+function applyResponsesReasoningTextDelta<TApi extends Api>(
+	state: ResponsesStreamState<TApi>,
+	event: Extract<ResponseStreamEvent, { type: "response.reasoning_text.delta" }>,
+): void {
+	const { currentItem, currentBlock, stream, output, blockIndex } = state;
+	if (currentItem?.type !== "reasoning" || currentBlock?.type !== "thinking") return;
+	currentBlock.thinking += event.delta;
+	stream.push({
+		type: "thinking_delta",
+		contentIndex: blockIndex(),
+		delta: event.delta,
+		partial: output,
+	});
+}
+
+function applyResponsesContentPartAdded<TApi extends Api>(
+	state: ResponsesStreamState<TApi>,
+	event: Extract<ResponseStreamEvent, { type: "response.content_part.added" }>,
+): void {
+	if (state.currentItem?.type !== "message") return;
+	state.currentItem.content = state.currentItem.content || [];
+	if (event.part.type === "output_text" || event.part.type === "refusal") {
+		state.currentItem.content.push(event.part);
+	}
+}
+
+function applyResponsesOutputTextDelta<TApi extends Api>(
+	state: ResponsesStreamState<TApi>,
+	event: Extract<ResponseStreamEvent, { type: "response.output_text.delta" }>,
+): void {
+	const { currentItem, currentBlock, stream, output, blockIndex } = state;
+	if (currentItem?.type !== "message" || currentBlock?.type !== "text" || !currentItem.content?.length) return;
+	const lastPart = currentItem.content[currentItem.content.length - 1];
+	if (lastPart?.type !== "output_text") return;
+	currentBlock.text += event.delta;
+	lastPart.text += event.delta;
+	stream.push({
+		type: "text_delta",
+		contentIndex: blockIndex(),
+		delta: event.delta,
+		partial: output,
+	});
+}
+
+function applyResponsesRefusalDelta<TApi extends Api>(
+	state: ResponsesStreamState<TApi>,
+	event: Extract<ResponseStreamEvent, { type: "response.refusal.delta" }>,
+): void {
+	const { currentItem, currentBlock, stream, output, blockIndex } = state;
+	if (currentItem?.type !== "message" || currentBlock?.type !== "text" || !currentItem.content?.length) return;
+	const lastPart = currentItem.content[currentItem.content.length - 1];
+	if (lastPart?.type !== "refusal") return;
+	currentBlock.text += event.delta;
+	lastPart.refusal += event.delta;
+	stream.push({
+		type: "text_delta",
+		contentIndex: blockIndex(),
+		delta: event.delta,
+		partial: output,
+	});
+}
+
+function applyResponsesFunctionCallArgumentsDelta<TApi extends Api>(
+	state: ResponsesStreamState<TApi>,
+	event: Extract<ResponseStreamEvent, { type: "response.function_call_arguments.delta" }>,
+): void {
+	const { currentItem, currentBlock, stream, output, blockIndex } = state;
+	if (currentItem?.type !== "function_call" || currentBlock?.type !== "toolCall") return;
+	currentBlock.partialJson += event.delta;
+	currentBlock.arguments = parseStreamingJson(currentBlock.partialJson);
+	stream.push({
+		type: "toolcall_delta",
+		contentIndex: blockIndex(),
+		delta: event.delta,
+		partial: output,
+	});
+}
+
+function applyResponsesFunctionCallArgumentsDone<TApi extends Api>(
+	state: ResponsesStreamState<TApi>,
+	event: Extract<ResponseStreamEvent, { type: "response.function_call_arguments.done" }>,
+): void {
+	const { currentItem, currentBlock, stream, output, blockIndex } = state;
+	if (currentItem?.type !== "function_call" || currentBlock?.type !== "toolCall") return;
+	const previousPartialJson = currentBlock.partialJson;
+	currentBlock.partialJson = event.arguments;
+	currentBlock.arguments = parseStreamingJson(currentBlock.partialJson);
+	if (event.arguments.startsWith(previousPartialJson)) {
+		const delta = event.arguments.slice(previousPartialJson.length);
+		if (delta.length > 0) {
+			stream.push({
+				type: "toolcall_delta",
+				contentIndex: blockIndex(),
+				delta,
+				partial: output,
+			});
+		}
+	}
+}
+
+function throwResponsesFailedError(event: Extract<ResponseStreamEvent, { type: "response.failed" }>): never {
+	const error = event.response?.error;
+	const details = event.response?.incomplete_details;
+	const msg = error
+		? `${error.code || "unknown"}: ${error.message || "no message"}`
+		: details?.reason
+			? `incomplete: ${details.reason}`
+			: "Unknown error (no error details in response)";
+	throw new Error(msg);
 }
 
 export async function processResponsesStream<TApi extends Api>(
