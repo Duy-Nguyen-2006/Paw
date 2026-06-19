@@ -2,27 +2,8 @@ import type { ChildProcess, ChildProcessByStdio } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-
-function getEnv(): NodeJS.ProcessEnv {
-	if (process.platform !== "linux" || Object.keys(process.env).length > 0) {
-		return process.env;
-	}
-	try {
-		const data = readFileSync("/proc/self/environ", "utf-8");
-		const env: NodeJS.ProcessEnv = {};
-		for (const entry of data.split("\0")) {
-			const idx = entry.indexOf("=");
-			if (idx > 0) {
-				env[entry.slice(0, idx)] = entry.slice(idx + 1);
-			}
-		}
-		return env;
-	} catch {
-		return process.env;
-	}
-}
-
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { getPackageManagerProcessEnv } from "./package-manager-env.ts";
 import type { Readable } from "node:stream";
 import { globSync } from "glob";
 import ignore from "ignore";
@@ -2560,7 +2541,7 @@ export class DefaultPackageManager implements PackageManager {
 	}
 
 	private spawnCommand(command: string, args: string[], options?: { cwd?: string }): ChildProcess {
-		const env = getEnv();
+		const env = getPackageManagerProcessEnv();
 		return spawnProcess(command, args, {
 			cwd: options?.cwd,
 			stdio: isStdoutTakenOver() ? ["ignore", 2, 2] : "inherit",
@@ -2573,7 +2554,7 @@ export class DefaultPackageManager implements PackageManager {
 		args: string[],
 		options?: { cwd?: string; env?: Record<string, string> },
 	): ChildProcessByStdio<null, Readable, Readable> {
-		const baseEnv = getEnv();
+		const baseEnv = getPackageManagerProcessEnv();
 		const env = options?.env ? { ...baseEnv, ...options.env } : baseEnv;
 		return spawnProcess(command, args, {
 			cwd: options?.cwd,
@@ -2641,7 +2622,7 @@ export class DefaultPackageManager implements PackageManager {
 	}
 
 	private runCommandSync(command: string, args: string[]): string {
-		const env = getEnv();
+		const env = getPackageManagerProcessEnv();
 		const result = spawnProcessSync(command, args, {
 			stdio: ["ignore", "pipe", "pipe"],
 			encoding: "utf-8",
