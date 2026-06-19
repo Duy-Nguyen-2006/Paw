@@ -18,6 +18,7 @@ import type {
 	AssistantMessage,
 	Context,
 	ImageContent,
+	Message,
 	Model,
 	StopReason,
 	TextContent,
@@ -84,8 +85,134 @@ export interface ConvertResponsesToolsOptions {
 }
 
 // =============================================================================
-// Message conversion
+// Message conversion (helpers reduce convertResponsesMessages S3776)
 // =============================================================================
+
+function appendResponsesUserMessage(messages: ResponseInput, msg: Extract<Message, { role: "user" }>): void {
+	if (typeof msg.content === "string") {
+		messages.push({
+			role: "user",
+			content: [{ type: "input_text", text: sanitizeSurrogates(msg.content) }],
+		});
+		return;
+	}
+	const content: ResponseInputContent[] = msg.content.map((item): ResponseInputContent => {
+		if (item.type === "text") {
+			return {
+				type: "input_text",
+				text: sanitizeSurrogates(item.text),
+			} satisfies ResponseInputText;
+		}
+		return {
+			type: "input_image",
+			detail: "auto",
+			image_url: `data:${item.mimeType};base64,${item.data}`,
+		} satisfies ResponseInputImage;
+	});
+	if (content.length === 0) return;
+	messages.push({ role: "user", content });
+}
+
+function appendResponsesAssistantBlocks<TApi extends Api>(
+	output: ResponseInput,
+	msg: Extract<Message, { role: "assistant" }>,
+	model: Model<TApi>,
+	msgIndex: number,
+): void {
+	const assistantMsg = msg as AssistantMessage;
+	const isDifferentModel =
+		assistantMsg.model !== model.id && assistantMsg.provider === model.provider && assistantMsg.api === model.api;
+	let textBlockIndex = 0;
+
+	for (const block of msg.content) {
+		if (block.type === "thinking") {
+			if (block.thinkingSignature) {
+				const reasoningItem = JSON.parse(block.thinkingSignature) as ResponseReasoningItem;
+				output.push(reasoningItem);
+			}
+			continue;
+		}
+		if (block.type === "text") {
+			const textBlock = block as TextContent;
+			const parsedSignature = parseTextSignature(textBlock.textSignature);
+			const fallbackMessageId = textBlockIndex === 0 ? `msg_pi_${msgIndex}` : `msg_pi_${msgIndex}_${textBlockIndex}`;
+			textBlockIndex++;
+			let msgId = parsedSignature?.id;
+			if (!msgId) {
+				msgId = fallbackMessageId;
+			} else if (msgId.length > 64) {
+				msgId = `msg_${shortHash(msgId)}`;
+			}
+			output.push({
+				type: "message",
+				role: "assistant",
+				content: [{ type: "output_text", text: sanitizeSurrogates(textBlock.text), annotations: [] }],
+				status: "completed",
+				id: msgId,
+				phase: parsedSignature?.phase,
+			} satisfies ResponseOutputMessage);
+			continue;
+		}
+		if (block.type === "toolCall") {
+			const toolCall = block as ToolCall;
+			const [callId, itemIdRaw] = toolCall.id.split("|");
+			let itemId: string | undefined = itemIdRaw;
+			if (isDifferentModel && itemId?.startsWith("fc_")) {
+				itemId = undefined;
+			}
+			output.push({
+				type: "function_call",
+				id: itemId,
+				call_id: callId,
+				name: toolCall.name,
+				arguments: JSON.stringify(toolCall.arguments),
+			});
+		}
+	}
+}
+
+function appendResponsesToolResultMessage<TApi extends Api>(
+	messages: ResponseInput,
+	msg: Extract<Message, { role: "toolResult" }>,
+	model: Model<TApi>,
+): void {
+	const textResult = msg.content
+		.filter((c): c is TextContent => c.type === "text")
+		.map((c) => c.text)
+		.join("\n");
+	const hasImages = msg.content.some((c): c is ImageContent => c.type === "image");
+	const hasText = textResult.length > 0;
+	const [callId] = msg.toolCallId.split("|");
+
+	let output: string | ResponseFunctionCallOutputItemList;
+	if (hasImages && model.input.includes("image")) {
+		const contentParts: ResponseFunctionCallOutputItemList = [];
+		if (hasText) {
+			contentParts.push({
+				type: "input_text",
+				text: sanitizeSurrogates(textResult),
+			});
+		}
+		for (const block of msg.content) {
+			if (block.type === "image") {
+				contentParts.push({
+					type: "input_image",
+					detail: "auto",
+					image_url: `data:${block.mimeType};base64,${block.data}`,
+				});
+			}
+		}
+		output = contentParts;
+	} else {
+		output = sanitizeSurrogates(hasText ? textResult : "(see attached image)");
+	}
+
+	messages.push({
+		type: "function_call_output",
+		call_id: callId,
+		output,
+	});
+}
 
 export function convertResponsesMessages<TApi extends Api>(
 	model: Model<TApi>,
@@ -135,130 +262,14 @@ export function convertResponsesMessages<TApi extends Api>(
 	let msgIndex = 0;
 	for (const msg of transformedMessages) {
 		if (msg.role === "user") {
-			if (typeof msg.content === "string") {
-				messages.push({
-					role: "user",
-					content: [{ type: "input_text", text: sanitizeSurrogates(msg.content) }],
-				});
-			} else {
-				const content: ResponseInputContent[] = msg.content.map((item): ResponseInputContent => {
-					if (item.type === "text") {
-						return {
-							type: "input_text",
-							text: sanitizeSurrogates(item.text),
-						} satisfies ResponseInputText;
-					}
-					return {
-						type: "input_image",
-						detail: "auto",
-						image_url: `data:${item.mimeType};base64,${item.data}`,
-					} satisfies ResponseInputImage;
-				});
-				if (content.length === 0) continue;
-				messages.push({
-					role: "user",
-					content,
-				});
-			}
+			appendResponsesUserMessage(messages, msg);
 		} else if (msg.role === "assistant") {
 			const output: ResponseInput = [];
-			const assistantMsg = msg as AssistantMessage;
-			const isDifferentModel =
-				assistantMsg.model !== model.id &&
-				assistantMsg.provider === model.provider &&
-				assistantMsg.api === model.api;
-			let textBlockIndex = 0;
-
-			for (const block of msg.content) {
-				if (block.type === "thinking") {
-					if (block.thinkingSignature) {
-						const reasoningItem = JSON.parse(block.thinkingSignature) as ResponseReasoningItem;
-						output.push(reasoningItem);
-					}
-				} else if (block.type === "text") {
-					const textBlock = block as TextContent;
-					const parsedSignature = parseTextSignature(textBlock.textSignature);
-					const fallbackMessageId =
-						textBlockIndex === 0 ? `msg_pi_${msgIndex}` : `msg_pi_${msgIndex}_${textBlockIndex}`;
-					textBlockIndex++;
-					// OpenAI requires id to be max 64 characters
-					let msgId = parsedSignature?.id;
-					if (!msgId) {
-						msgId = fallbackMessageId;
-					} else if (msgId.length > 64) {
-						msgId = `msg_${shortHash(msgId)}`;
-					}
-					output.push({
-						type: "message",
-						role: "assistant",
-						content: [{ type: "output_text", text: sanitizeSurrogates(textBlock.text), annotations: [] }],
-						status: "completed",
-						id: msgId,
-						phase: parsedSignature?.phase,
-					} satisfies ResponseOutputMessage);
-				} else if (block.type === "toolCall") {
-					const toolCall = block as ToolCall;
-					const [callId, itemIdRaw] = toolCall.id.split("|");
-					let itemId: string | undefined = itemIdRaw;
-
-					// For different-model messages, set id to undefined to avoid pairing validation.
-					// OpenAI tracks which fc_xxx IDs were paired with rs_xxx reasoning items.
-					// By omitting the id, we avoid triggering that validation (like cross-provider does).
-					if (isDifferentModel && itemId?.startsWith("fc_")) {
-						itemId = undefined;
-					}
-
-					output.push({
-						type: "function_call",
-						id: itemId,
-						call_id: callId,
-						name: toolCall.name,
-						arguments: JSON.stringify(toolCall.arguments),
-					});
-				}
-			}
+			appendResponsesAssistantBlocks(output, msg, model, msgIndex);
 			if (output.length === 0) continue;
 			messages.push(...output);
 		} else if (msg.role === "toolResult") {
-			const textResult = msg.content
-				.filter((c): c is TextContent => c.type === "text")
-				.map((c) => c.text)
-				.join("\n");
-			const hasImages = msg.content.some((c): c is ImageContent => c.type === "image");
-			const hasText = textResult.length > 0;
-			const [callId] = msg.toolCallId.split("|");
-
-			let output: string | ResponseFunctionCallOutputItemList;
-			if (hasImages && model.input.includes("image")) {
-				const contentParts: ResponseFunctionCallOutputItemList = [];
-
-				if (hasText) {
-					contentParts.push({
-						type: "input_text",
-						text: sanitizeSurrogates(textResult),
-					});
-				}
-
-				for (const block of msg.content) {
-					if (block.type === "image") {
-						contentParts.push({
-							type: "input_image",
-							detail: "auto",
-							image_url: `data:${block.mimeType};base64,${block.data}`,
-						});
-					}
-				}
-
-				output = contentParts;
-			} else {
-				output = sanitizeSurrogates(hasText ? textResult : "(see attached image)");
-			}
-
-			messages.push({
-				type: "function_call_output",
-				call_id: callId,
-				output,
-			});
+			appendResponsesToolResultMessage(messages, msg, model);
 		}
 		msgIndex++;
 	}
@@ -285,81 +296,182 @@ export function convertResponsesTools(tools: Tool[], options?: ConvertResponsesT
 // Stream processing
 // =============================================================================
 
-export async function processResponsesStream<TApi extends Api>(
-	openaiStream: AsyncIterable<ResponseStreamEvent>,
-	output: AssistantMessage,
-	stream: AssistantMessageEventStream,
-	model: Model<TApi>,
-	options?: OpenAIResponsesStreamOptions,
-): Promise<void> {
-	let currentItem: ResponseReasoningItem | ResponseOutputMessage | ResponseFunctionToolCall | null = null;
-	let currentBlock: ThinkingContent | TextContent | (ToolCall & { partialJson: string }) | null = null;
-	const blocks = output.content;
-	const blockIndex = () => blocks.length - 1;
+type ResponsesStreamBlock = ThinkingContent | TextContent | (ToolCall & { partialJson: string });
 
-	for await (const event of openaiStream) {
-		if (event.type === "response.created") {
+interface ResponsesStreamState<TApi extends Api> {
+	currentItem: ResponseReasoningItem | ResponseOutputMessage | ResponseFunctionToolCall | null;
+	currentBlock: ResponsesStreamBlock | null;
+	output: AssistantMessage;
+	stream: AssistantMessageEventStream;
+	model: Model<TApi>;
+	options?: OpenAIResponsesStreamOptions;
+	blockIndex: () => number;
+}
+
+function handleResponsesOutputItemAdded<TApi extends Api>(
+	state: ResponsesStreamState<TApi>,
+	item: Extract<ResponseStreamEvent, { type: "response.output_item.added" }>["item"],
+): void {
+	if (!item) return;
+	const { output, stream, blockIndex } = state;
+	if (item.type === "reasoning") {
+		state.currentItem = item;
+		state.currentBlock = { type: "thinking", thinking: "" };
+		output.content.push(state.currentBlock);
+		stream.push({ type: "thinking_start", contentIndex: blockIndex(), partial: output });
+	} else if (item.type === "message") {
+		state.currentItem = item;
+		state.currentBlock = { type: "text", text: "" };
+		output.content.push(state.currentBlock);
+		stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
+	} else if (item.type === "function_call") {
+		state.currentItem = item;
+		state.currentBlock = {
+			type: "toolCall",
+			id: `${item.call_id}|${item.id}`,
+			name: item.name,
+			arguments: {},
+			partialJson: item.arguments || "",
+		};
+		output.content.push(state.currentBlock);
+		stream.push({ type: "toolcall_start", contentIndex: blockIndex(), partial: output });
+	}
+}
+
+function appendReasoningSummaryDelta<TApi extends Api>(
+	state: ResponsesStreamState<TApi>,
+	delta: string,
+	separator?: string,
+): void {
+	const { currentItem, currentBlock, stream, output, blockIndex } = state;
+	if (currentItem?.type !== "reasoning" || currentBlock?.type !== "thinking") return;
+	currentItem.summary = currentItem.summary || [];
+	const lastPart = currentItem.summary[currentItem.summary.length - 1];
+	if (!lastPart) return;
+	const append = separator ?? delta;
+	currentBlock.thinking += append;
+	if (separator) lastPart.text += separator;
+	else lastPart.text += delta;
+	stream.push({
+		type: "thinking_delta",
+		contentIndex: blockIndex(),
+		delta: append,
+		partial: output,
+	});
+}
+
+function handleResponsesOutputItemDone<TApi extends Api>(
+	state: ResponsesStreamState<TApi>,
+	item: Extract<ResponseStreamEvent, { type: "response.output_item.done" }>["item"],
+): void {
+	const { currentBlock, stream, output, blockIndex } = state;
+	if (item.type === "reasoning" && currentBlock?.type === "thinking") {
+		const summaryText = item.summary?.map((s) => s.text).join("\n\n") || "";
+		const contentText = item.content?.map((c) => c.text).join("\n\n") || "";
+		currentBlock.thinking = summaryText || contentText || currentBlock.thinking;
+		currentBlock.thinkingSignature = JSON.stringify(item);
+		stream.push({
+			type: "thinking_end",
+			contentIndex: blockIndex(),
+			content: currentBlock.thinking,
+			partial: output,
+		});
+		state.currentBlock = null;
+		return;
+	}
+	if (item.type === "message" && currentBlock?.type === "text") {
+		currentBlock.text = item.content.map((c) => (c.type === "output_text" ? c.text : c.refusal)).join("");
+		currentBlock.textSignature = encodeTextSignatureV1(item.id, item.phase ?? undefined);
+		stream.push({
+			type: "text_end",
+			contentIndex: blockIndex(),
+			content: currentBlock.text,
+			partial: output,
+		});
+		state.currentBlock = null;
+		return;
+	}
+	if (item.type === "function_call") {
+		const args =
+			currentBlock?.type === "toolCall" && currentBlock.partialJson
+				? parseStreamingJson(currentBlock.partialJson)
+				: parseStreamingJson(item.arguments || "{}");
+		let toolCall: ToolCall;
+		if (currentBlock?.type === "toolCall") {
+			currentBlock.arguments = args;
+			delete (currentBlock as { partialJson?: string }).partialJson;
+			toolCall = currentBlock;
+		} else {
+			toolCall = {
+				type: "toolCall",
+				id: `${item.call_id}|${item.id}`,
+				name: item.name,
+				arguments: args,
+			};
+		}
+		state.currentBlock = null;
+		stream.push({ type: "toolcall_end", contentIndex: blockIndex(), toolCall, partial: output });
+	}
+}
+
+function applyResponsesCompletedEvent<TApi extends Api>(
+	state: ResponsesStreamState<TApi>,
+	response: NonNullable<Extract<ResponseStreamEvent, { type: "response.completed" }>["response"]>,
+): void {
+	const { output, model, options } = state;
+	if (response?.id) {
+		output.responseId = response.id;
+	}
+	if (response?.usage) {
+		const cachedTokens = response.usage.input_tokens_details?.cached_tokens || 0;
+		output.usage = {
+			input: (response.usage.input_tokens || 0) - cachedTokens,
+			output: response.usage.output_tokens || 0,
+			cacheRead: cachedTokens,
+			cacheWrite: 0,
+			totalTokens: response.usage.total_tokens || 0,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		};
+	}
+	calculateCost(model, output.usage);
+	if (options?.applyServiceTierPricing) {
+		const serviceTier = options.resolveServiceTier
+			? options.resolveServiceTier(response?.service_tier, options.serviceTier)
+			: (response?.service_tier ?? options.serviceTier);
+		options.applyServiceTierPricing(output.usage, serviceTier);
+	}
+	output.stopReason = mapStopReason(response?.status);
+	if (output.content.some((b) => b.type === "toolCall") && output.stopReason === "stop") {
+		output.stopReason = "toolUse";
+	}
+}
+
+function dispatchResponsesStreamEvent<TApi extends Api>(
+	state: ResponsesStreamState<TApi>,
+	event: ResponseStreamEvent,
+): void {
+	const { currentItem, currentBlock, stream, output, blockIndex } = state;
+
+	switch (event.type) {
+		case "response.created":
 			output.responseId = event.response.id;
-		} else if (event.type === "response.output_item.added") {
-			const item = event.item;
-			if (item.type === "reasoning") {
-				currentItem = item;
-				currentBlock = { type: "thinking", thinking: "" };
-				output.content.push(currentBlock);
-				stream.push({ type: "thinking_start", contentIndex: blockIndex(), partial: output });
-			} else if (item.type === "message") {
-				currentItem = item;
-				currentBlock = { type: "text", text: "" };
-				output.content.push(currentBlock);
-				stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
-			} else if (item.type === "function_call") {
-				currentItem = item;
-				currentBlock = {
-					type: "toolCall",
-					id: `${item.call_id}|${item.id}`,
-					name: item.name,
-					arguments: {},
-					partialJson: item.arguments || "",
-				};
-				output.content.push(currentBlock);
-				stream.push({ type: "toolcall_start", contentIndex: blockIndex(), partial: output });
-			}
-		} else if (event.type === "response.reasoning_summary_part.added") {
+			break;
+		case "response.output_item.added":
+			handleResponsesOutputItemAdded(state, event.item);
+			break;
+		case "response.reasoning_summary_part.added":
 			if (currentItem?.type === "reasoning") {
 				currentItem.summary = currentItem.summary || [];
 				currentItem.summary.push(event.part);
 			}
-		} else if (event.type === "response.reasoning_summary_text.delta") {
-			if (currentItem?.type === "reasoning" && currentBlock?.type === "thinking") {
-				currentItem.summary = currentItem.summary || [];
-				const lastPart = currentItem.summary[currentItem.summary.length - 1];
-				if (lastPart) {
-					currentBlock.thinking += event.delta;
-					lastPart.text += event.delta;
-					stream.push({
-						type: "thinking_delta",
-						contentIndex: blockIndex(),
-						delta: event.delta,
-						partial: output,
-					});
-				}
-			}
-		} else if (event.type === "response.reasoning_summary_part.done") {
-			if (currentItem?.type === "reasoning" && currentBlock?.type === "thinking") {
-				currentItem.summary = currentItem.summary || [];
-				const lastPart = currentItem.summary[currentItem.summary.length - 1];
-				if (lastPart) {
-					currentBlock.thinking += "\n\n";
-					lastPart.text += "\n\n";
-					stream.push({
-						type: "thinking_delta",
-						contentIndex: blockIndex(),
-						delta: "\n\n",
-						partial: output,
-					});
-				}
-			}
-		} else if (event.type === "response.reasoning_text.delta") {
+			break;
+		case "response.reasoning_summary_text.delta":
+			appendReasoningSummaryDelta(state, event.delta);
+			break;
+		case "response.reasoning_summary_part.done":
+			appendReasoningSummaryDelta(state, "\n\n", "\n\n");
+			break;
+		case "response.reasoning_text.delta":
 			if (currentItem?.type === "reasoning" && currentBlock?.type === "thinking") {
 				currentBlock.thinking += event.delta;
 				stream.push({
@@ -369,19 +481,17 @@ export async function processResponsesStream<TApi extends Api>(
 					partial: output,
 				});
 			}
-		} else if (event.type === "response.content_part.added") {
+			break;
+		case "response.content_part.added":
 			if (currentItem?.type === "message") {
 				currentItem.content = currentItem.content || [];
-				// Filter out ReasoningText, only accept output_text and refusal
 				if (event.part.type === "output_text" || event.part.type === "refusal") {
 					currentItem.content.push(event.part);
 				}
 			}
-		} else if (event.type === "response.output_text.delta") {
-			if (currentItem?.type === "message" && currentBlock?.type === "text") {
-				if (!currentItem.content || currentItem.content.length === 0) {
-					continue;
-				}
+			break;
+		case "response.output_text.delta":
+			if (currentItem?.type === "message" && currentBlock?.type === "text" && currentItem.content?.length) {
 				const lastPart = currentItem.content[currentItem.content.length - 1];
 				if (lastPart?.type === "output_text") {
 					currentBlock.text += event.delta;
@@ -394,11 +504,9 @@ export async function processResponsesStream<TApi extends Api>(
 					});
 				}
 			}
-		} else if (event.type === "response.refusal.delta") {
-			if (currentItem?.type === "message" && currentBlock?.type === "text") {
-				if (!currentItem.content || currentItem.content.length === 0) {
-					continue;
-				}
+			break;
+		case "response.refusal.delta":
+			if (currentItem?.type === "message" && currentBlock?.type === "text" && currentItem.content?.length) {
 				const lastPart = currentItem.content[currentItem.content.length - 1];
 				if (lastPart?.type === "refusal") {
 					currentBlock.text += event.delta;
@@ -411,7 +519,8 @@ export async function processResponsesStream<TApi extends Api>(
 					});
 				}
 			}
-		} else if (event.type === "response.function_call_arguments.delta") {
+			break;
+		case "response.function_call_arguments.delta":
 			if (currentItem?.type === "function_call" && currentBlock?.type === "toolCall") {
 				currentBlock.partialJson += event.delta;
 				currentBlock.arguments = parseStreamingJson(currentBlock.partialJson);
@@ -422,12 +531,12 @@ export async function processResponsesStream<TApi extends Api>(
 					partial: output,
 				});
 			}
-		} else if (event.type === "response.function_call_arguments.done") {
+			break;
+		case "response.function_call_arguments.done":
 			if (currentItem?.type === "function_call" && currentBlock?.type === "toolCall") {
 				const previousPartialJson = currentBlock.partialJson;
 				currentBlock.partialJson = event.arguments;
 				currentBlock.arguments = parseStreamingJson(currentBlock.partialJson);
-
 				if (event.arguments.startsWith(previousPartialJson)) {
 					const delta = event.arguments.slice(previousPartialJson.length);
 					if (delta.length > 0) {
@@ -440,88 +549,16 @@ export async function processResponsesStream<TApi extends Api>(
 					}
 				}
 			}
-		} else if (event.type === "response.output_item.done") {
-			const item = event.item;
-
-			if (item.type === "reasoning" && currentBlock?.type === "thinking") {
-				const summaryText = item.summary?.map((s) => s.text).join("\n\n") || "";
-				const contentText = item.content?.map((c) => c.text).join("\n\n") || "";
-				currentBlock.thinking = summaryText || contentText || currentBlock.thinking;
-				currentBlock.thinkingSignature = JSON.stringify(item);
-				stream.push({
-					type: "thinking_end",
-					contentIndex: blockIndex(),
-					content: currentBlock.thinking,
-					partial: output,
-				});
-				currentBlock = null;
-			} else if (item.type === "message" && currentBlock?.type === "text") {
-				currentBlock.text = item.content.map((c) => (c.type === "output_text" ? c.text : c.refusal)).join("");
-				currentBlock.textSignature = encodeTextSignatureV1(item.id, item.phase ?? undefined);
-				stream.push({
-					type: "text_end",
-					contentIndex: blockIndex(),
-					content: currentBlock.text,
-					partial: output,
-				});
-				currentBlock = null;
-			} else if (item.type === "function_call") {
-				const args =
-					currentBlock?.type === "toolCall" && currentBlock.partialJson
-						? parseStreamingJson(currentBlock.partialJson)
-						: parseStreamingJson(item.arguments || "{}");
-
-				let toolCall: ToolCall;
-				if (currentBlock?.type === "toolCall") {
-					// Finalize in-place and strip the scratch buffer so replay only
-					// carries parsed arguments.
-					currentBlock.arguments = args;
-					delete (currentBlock as { partialJson?: string }).partialJson;
-					toolCall = currentBlock;
-				} else {
-					toolCall = {
-						type: "toolCall",
-						id: `${item.call_id}|${item.id}`,
-						name: item.name,
-						arguments: args,
-					};
-				}
-
-				currentBlock = null;
-				stream.push({ type: "toolcall_end", contentIndex: blockIndex(), toolCall, partial: output });
-			}
-		} else if (event.type === "response.completed") {
-			const response = event.response;
-			if (response?.id) {
-				output.responseId = response.id;
-			}
-			if (response?.usage) {
-				const cachedTokens = response.usage.input_tokens_details?.cached_tokens || 0;
-				output.usage = {
-					// OpenAI includes cached tokens in input_tokens, so subtract to get non-cached input
-					input: (response.usage.input_tokens || 0) - cachedTokens,
-					output: response.usage.output_tokens || 0,
-					cacheRead: cachedTokens,
-					cacheWrite: 0,
-					totalTokens: response.usage.total_tokens || 0,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				};
-			}
-			calculateCost(model, output.usage);
-			if (options?.applyServiceTierPricing) {
-				const serviceTier = options.resolveServiceTier
-					? options.resolveServiceTier(response?.service_tier, options.serviceTier)
-					: (response?.service_tier ?? options.serviceTier);
-				options.applyServiceTierPricing(output.usage, serviceTier);
-			}
-			// Map status to stop reason
-			output.stopReason = mapStopReason(response?.status);
-			if (output.content.some((b) => b.type === "toolCall") && output.stopReason === "stop") {
-				output.stopReason = "toolUse";
-			}
-		} else if (event.type === "error") {
+			break;
+		case "response.output_item.done":
+			handleResponsesOutputItemDone(state, event.item);
+			break;
+		case "response.completed":
+			applyResponsesCompletedEvent(state, event.response);
+			break;
+		case "error":
 			throw new Error(`Error Code ${event.code}: ${event.message}`);
-		} else if (event.type === "response.failed") {
+		case "response.failed": {
 			const error = event.response?.error;
 			const details = event.response?.incomplete_details;
 			const msg = error
@@ -531,6 +568,30 @@ export async function processResponsesStream<TApi extends Api>(
 					: "Unknown error (no error details in response)";
 			throw new Error(msg);
 		}
+		default:
+			break;
+	}
+}
+
+export async function processResponsesStream<TApi extends Api>(
+	openaiStream: AsyncIterable<ResponseStreamEvent>,
+	output: AssistantMessage,
+	stream: AssistantMessageEventStream,
+	model: Model<TApi>,
+	options?: OpenAIResponsesStreamOptions,
+): Promise<void> {
+	const state: ResponsesStreamState<TApi> = {
+		currentItem: null,
+		currentBlock: null,
+		output,
+		stream,
+		model,
+		options,
+		blockIndex: () => output.content.length - 1,
+	};
+
+	for await (const event of openaiStream) {
+		dispatchResponsesStreamEvent(state, event);
 	}
 }
 

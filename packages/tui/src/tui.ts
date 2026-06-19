@@ -7,6 +7,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { performance } from "node:perf_hooks";
 import { isKeyRelease, matchesKey } from "./keys.ts";
+import { resolveNextFocusForNonOverlayTarget, resolveNextFocusWhenClearing } from "./tui-focus-helpers.ts";
 import type { Terminal } from "./terminal.ts";
 import { isOsc11BackgroundColorResponse, parseOsc11BackgroundColor, type RgbColor } from "./terminal-colors.ts";
 import { deleteKittyImage, getCapabilities, isImageLine, setCellDimensions } from "./terminal-image.ts";
@@ -389,35 +390,30 @@ export class TUI extends Container {
 			: undefined;
 		const nextFocusIsOverlay = nextFocus ? this.overlayStack.some((entry) => entry.component === nextFocus) : false;
 		const restoreState = this.getVisibleOverlayFocusRestore();
-		if (nextFocus && !nextFocusIsOverlay) {
-			if (restoreState.status === "blocked" && restoreState.blockedBy === previousFocus) {
-				if (restoreState.resume.status === "focus-target" || !this.isComponentMounted(restoreState.blockedBy)) {
-					nextFocus = this.resolveBlockedOverlayFocusResume(restoreState);
-				} else {
-					this.overlayFocusRestore = {
-						status: "blocked",
-						overlay: restoreState.overlay,
-						blockedBy: nextFocus,
-						resume: restoreState.resume,
-					};
-				}
-			} else if (
-				previousFocusedOverlay &&
-				restoreState.status !== "inactive" &&
-				restoreState.overlay === previousFocusedOverlay &&
-				!this.isOverlayFocusAncestor(previousFocusedOverlay, nextFocus)
-			) {
-				this.overlayFocusRestore = {
-					status: "blocked",
-					overlay: previousFocusedOverlay,
-					blockedBy: nextFocus,
-					resume: { status: "restore-overlay" },
-				};
-			}
-		} else if (nextFocus === null) {
-			if (restoreState.status === "blocked" && restoreState.blockedBy === previousFocus) {
-				nextFocus = this.resolveBlockedOverlayFocusResume(restoreState);
-			} else if (overlayFocusRestore === "clear") {
+		const nonOverlay = resolveNextFocusForNonOverlayTarget<OverlayStackEntry>({
+			nextFocus,
+			nextFocusIsOverlay,
+			previousFocus,
+			previousFocusedOverlay,
+			restoreState,
+			isOverlayFocusAncestor: (entry, comp) => this.isOverlayFocusAncestor(entry, comp),
+			isComponentMounted: (comp) => this.isComponentMounted(comp),
+			resolveBlockedResume: (state) => this.resolveBlockedOverlayFocusResume(state),
+		});
+		nextFocus = nonOverlay.nextFocus;
+		if (nonOverlay.overlayFocusRestore !== "unchanged") {
+			this.overlayFocusRestore = nonOverlay.overlayFocusRestore;
+		}
+		if (component === null) {
+			const clearing = resolveNextFocusWhenClearing<OverlayStackEntry>({
+				nextFocus,
+				previousFocus,
+				restoreState,
+				overlayFocusRestorePolicy: overlayFocusRestore,
+				resolveBlockedResume: (state) => this.resolveBlockedOverlayFocusResume(state),
+			});
+			nextFocus = clearing.nextFocus;
+			if (clearing.clearRestore) {
 				this.clearOverlayFocusRestore();
 			}
 		}

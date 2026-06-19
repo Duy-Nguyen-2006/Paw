@@ -138,6 +138,66 @@ function truncateFragmentToWidth(text: string, maxWidth: number): { text: string
 	return { text: result, width };
 }
 
+type TruncateAccumState = {
+	result: string;
+	pendingAnsi: string;
+	visibleSoFar: number;
+	keptWidth: number;
+	keepContiguousPrefix: boolean;
+	overflowed: boolean;
+};
+
+function accumulateTruncateSegment(
+	state: TruncateAccumState,
+	segment: string,
+	width: number,
+	targetWidth: number,
+	maxWidth: number,
+): void {
+	if (state.keepContiguousPrefix && state.keptWidth + width <= targetWidth) {
+		if (state.pendingAnsi) {
+			state.result += state.pendingAnsi;
+			state.pendingAnsi = "";
+		}
+		state.result += segment;
+		state.keptWidth += width;
+	} else {
+		state.keepContiguousPrefix = false;
+		state.pendingAnsi = "";
+	}
+	state.visibleSoFar += width;
+	if (state.visibleSoFar > maxWidth) {
+		state.overflowed = true;
+	}
+}
+
+function truncateGraphemeSimple(
+	text: string,
+	targetWidth: number,
+	maxWidth: number,
+): { result: string; keptWidth: number; visibleSoFar: number; overflowed: boolean; exhausted: boolean } {
+	let result = "";
+	let keptWidth = 0;
+	let visibleSoFar = 0;
+	let keepContiguousPrefix = true;
+	let overflowed = false;
+	for (const { segment } of graphemeSegmenter.segment(text)) {
+		const width = graphemeWidth(segment);
+		if (keepContiguousPrefix && keptWidth + width <= targetWidth) {
+			result += segment;
+			keptWidth += width;
+		} else {
+			keepContiguousPrefix = false;
+		}
+		visibleSoFar += width;
+		if (visibleSoFar > maxWidth) {
+			overflowed = true;
+			break;
+		}
+	}
+	return { result, keptWidth, visibleSoFar, overflowed, exhausted: !overflowed };
+}
+
 function finalizeTruncatedResult(
 	prefix: string,
 	prefixWidth: number,
@@ -406,111 +466,112 @@ class AnsiCodeTracker {
 			return;
 		}
 
-		// Parse parameters (can be semicolon-separated)
 		const parts = params.split(";");
 		let i = 0;
 		while (i < parts.length) {
 			const code = Number.parseInt(parts[i], 10);
-
-			// Handle 256-color and RGB codes which consume multiple parameters
-			if (code === 38 || code === 48) {
-				// 38;5;N (256 color fg) or 38;2;R;G;B (RGB fg)
-				// 48;5;N (256 color bg) or 48;2;R;G;B (RGB bg)
-				if (parts[i + 1] === "5" && parts[i + 2] !== undefined) {
-					// 256 color: 38;5;N or 48;5;N
-					const colorCode = `${parts[i]};${parts[i + 1]};${parts[i + 2]}`;
-					if (code === 38) {
-						this.fgColor = colorCode;
-					} else {
-						this.bgColor = colorCode;
-					}
-					i += 3;
-					continue;
-				} else if (parts[i + 1] === "2" && parts[i + 4] !== undefined) {
-					// RGB color: 38;2;R;G;B or 48;2;R;G;B
-					const colorCode = `${parts[i]};${parts[i + 1]};${parts[i + 2]};${parts[i + 3]};${parts[i + 4]}`;
-					if (code === 38) {
-						this.fgColor = colorCode;
-					} else {
-						this.bgColor = colorCode;
-					}
-					i += 5;
-					continue;
-				}
+			const extendedAdvance = this.applyExtendedColorCode(parts, i, code);
+			if (extendedAdvance > 0) {
+				i += extendedAdvance;
+				continue;
 			}
-
-			// Standard SGR codes
-			switch (code) {
-				case 0:
-					this.reset();
-					break;
-				case 1:
-					this.bold = true;
-					break;
-				case 2:
-					this.dim = true;
-					break;
-				case 3:
-					this.italic = true;
-					break;
-				case 4:
-					this.underline = true;
-					break;
-				case 5:
-					this.blink = true;
-					break;
-				case 7:
-					this.inverse = true;
-					break;
-				case 8:
-					this.hidden = true;
-					break;
-				case 9:
-					this.strikethrough = true;
-					break;
-				case 21:
-					this.bold = false;
-					break; // Some terminals
-				case 22:
-					this.bold = false;
-					this.dim = false;
-					break;
-				case 23:
-					this.italic = false;
-					break;
-				case 24:
-					this.underline = false;
-					break;
-				case 25:
-					this.blink = false;
-					break;
-				case 27:
-					this.inverse = false;
-					break;
-				case 28:
-					this.hidden = false;
-					break;
-				case 29:
-					this.strikethrough = false;
-					break;
-				case 39:
-					this.fgColor = null;
-					break; // Default fg
-				case 49:
-					this.bgColor = null;
-					break; // Default bg
-				default:
-					// Standard foreground colors 30-37, 90-97
-					if ((code >= 30 && code <= 37) || (code >= 90 && code <= 97)) {
-						this.fgColor = String(code);
-					}
-					// Standard background colors 40-47, 100-107
-					else if ((code >= 40 && code <= 47) || (code >= 100 && code <= 107)) {
-						this.bgColor = String(code);
-					}
-					break;
-			}
+			this.applyStandardSgrCode(code);
 			i++;
+		}
+	}
+
+	private applyExtendedColorCode(parts: string[], i: number, code: number): number {
+		if (code !== 38 && code !== 48) {
+			return 0;
+		}
+		if (parts[i + 1] === "5" && parts[i + 2] !== undefined) {
+			const colorCode = `${parts[i]};${parts[i + 1]};${parts[i + 2]}`;
+			if (code === 38) {
+				this.fgColor = colorCode;
+			} else {
+				this.bgColor = colorCode;
+			}
+			return 3;
+		}
+		if (parts[i + 1] === "2" && parts[i + 4] !== undefined) {
+			const colorCode = `${parts[i]};${parts[i + 1]};${parts[i + 2]};${parts[i + 3]};${parts[i + 4]}`;
+			if (code === 38) {
+				this.fgColor = colorCode;
+			} else {
+				this.bgColor = colorCode;
+			}
+			return 5;
+		}
+		return 0;
+	}
+
+	private applyStandardSgrCode(code: number): void {
+		switch (code) {
+			case 0:
+				this.reset();
+				break;
+			case 1:
+				this.bold = true;
+				break;
+			case 2:
+				this.dim = true;
+				break;
+			case 3:
+				this.italic = true;
+				break;
+			case 4:
+				this.underline = true;
+				break;
+			case 5:
+				this.blink = true;
+				break;
+			case 7:
+				this.inverse = true;
+				break;
+			case 8:
+				this.hidden = true;
+				break;
+			case 9:
+				this.strikethrough = true;
+				break;
+			case 21:
+				this.bold = false;
+				break;
+			case 22:
+				this.bold = false;
+				this.dim = false;
+				break;
+			case 23:
+				this.italic = false;
+				break;
+			case 24:
+				this.underline = false;
+				break;
+			case 25:
+				this.blink = false;
+				break;
+			case 27:
+				this.inverse = false;
+				break;
+			case 28:
+				this.hidden = false;
+				break;
+			case 29:
+				this.strikethrough = false;
+				break;
+			case 39:
+				this.fgColor = null;
+				break;
+			case 49:
+				this.bgColor = null;
+				break;
+			default:
+				if ((code >= 30 && code <= 37) || (code >= 90 && code <= 97)) {
+					this.fgColor = String(code);
+				} else if ((code >= 40 && code <= 47) || (code >= 100 && code <= 107)) {
+					this.bgColor = String(code);
+				}
+				break;
 		}
 	}
 
@@ -949,99 +1010,65 @@ export function truncateToWidth(
 	}
 
 	const targetWidth = maxWidth - ellipsisWidth;
-	let result = "";
-	let pendingAnsi = "";
-	let visibleSoFar = 0;
-	let keptWidth = 0;
-	let keepContiguousPrefix = true;
-	let overflowed = false;
-	let exhaustedInput = false;
 	const hasAnsi = text.includes("\x1b");
 	const hasTabs = text.includes("\t");
 
 	if (!hasAnsi && !hasTabs) {
-		for (const { segment } of graphemeSegmenter.segment(text)) {
-			const width = graphemeWidth(segment);
-			if (keepContiguousPrefix && keptWidth + width <= targetWidth) {
-				result += segment;
-				keptWidth += width;
-			} else {
-				keepContiguousPrefix = false;
-			}
-			visibleSoFar += width;
-			if (visibleSoFar > maxWidth) {
-				overflowed = true;
-				break;
-			}
+		const simple = truncateGraphemeSimple(text, targetWidth, maxWidth);
+		if (!simple.overflowed) {
+			return pad ? text + " ".repeat(Math.max(0, maxWidth - simple.visibleSoFar)) : text;
 		}
-		exhaustedInput = !overflowed;
-	} else {
-		let i = 0;
-		while (i < text.length) {
-			const ansi = extractAnsiCode(text, i);
-			if (ansi) {
-				pendingAnsi += ansi.code;
-				i += ansi.length;
-				continue;
-			}
-
-			if (text[i] === "\t") {
-				if (keepContiguousPrefix && keptWidth + 3 <= targetWidth) {
-					if (pendingAnsi) {
-						result += pendingAnsi;
-						pendingAnsi = "";
-					}
-					result += "\t";
-					keptWidth += 3;
-				} else {
-					keepContiguousPrefix = false;
-					pendingAnsi = "";
-				}
-				visibleSoFar += 3;
-				if (visibleSoFar > maxWidth) {
-					overflowed = true;
-					break;
-				}
-				i++;
-				continue;
-			}
-
-			let end = i;
-			while (end < text.length && text[end] !== "\t") {
-				const nextAnsi = extractAnsiCode(text, end);
-				if (nextAnsi) {
-					break;
-				}
-				end++;
-			}
-
-			for (const { segment } of graphemeSegmenter.segment(text.slice(i, end))) {
-				const width = graphemeWidth(segment);
-				if (keepContiguousPrefix && keptWidth + width <= targetWidth) {
-					if (pendingAnsi) {
-						result += pendingAnsi;
-						pendingAnsi = "";
-					}
-					result += segment;
-					keptWidth += width;
-				} else {
-					keepContiguousPrefix = false;
-					pendingAnsi = "";
-				}
-
-				visibleSoFar += width;
-				if (visibleSoFar > maxWidth) {
-					overflowed = true;
-					break;
-				}
-			}
-			if (overflowed) {
-				break;
-			}
-			i = end;
-		}
-		exhaustedInput = i >= text.length;
+		return finalizeTruncatedResult(simple.result, simple.keptWidth, ellipsis, ellipsisWidth, maxWidth, pad);
 	}
+
+	const state: TruncateAccumState = {
+		result: "",
+		pendingAnsi: "",
+		visibleSoFar: 0,
+		keptWidth: 0,
+		keepContiguousPrefix: true,
+		overflowed: false,
+	};
+	let i = 0;
+	while (i < text.length) {
+		const ansi = extractAnsiCode(text, i);
+		if (ansi) {
+			state.pendingAnsi += ansi.code;
+			i += ansi.length;
+			continue;
+		}
+
+		if (text[i] === "\t") {
+			accumulateTruncateSegment(state, "\t", 3, targetWidth, maxWidth);
+			if (state.overflowed) {
+				break;
+			}
+			i++;
+			continue;
+		}
+
+		let end = i;
+		while (end < text.length && text[end] !== "\t") {
+			const nextAnsi = extractAnsiCode(text, end);
+			if (nextAnsi) {
+				break;
+			}
+			end++;
+		}
+
+		for (const { segment } of graphemeSegmenter.segment(text.slice(i, end))) {
+			accumulateTruncateSegment(state, segment, graphemeWidth(segment), targetWidth, maxWidth);
+			if (state.overflowed) {
+				break;
+			}
+		}
+		if (state.overflowed) {
+			break;
+		}
+		i = end;
+	}
+	const exhaustedInput = i >= text.length;
+	const { result, keptWidth, visibleSoFar, overflowed } = state;
 
 	if (!overflowed && exhaustedInput) {
 		return pad ? text + " ".repeat(Math.max(0, maxWidth - visibleSoFar)) : text;

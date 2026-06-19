@@ -1252,6 +1252,69 @@ export class DefaultPackageManager implements PackageManager {
 		return results.filter((result): result is PackageUpdate => result !== undefined);
 	}
 
+	private createInstallMissingHandler(
+		parsed: ParsedSource,
+		scope: SourceScope,
+		sourceStr: string,
+		onMissing?: (source: string) => Promise<MissingSourceAction>,
+	): () => Promise<boolean> {
+		return async (): Promise<boolean> => {
+			if (isOfflineModeEnabled()) {
+				return false;
+			}
+			if (!onMissing) {
+				await this.installParsedSource(parsed, scope);
+				return true;
+			}
+			const action = await onMissing(sourceStr);
+			if (action === "skip") return false;
+			if (action === "error") throw new Error(`Missing source: ${sourceStr}`);
+			await this.installParsedSource(parsed, scope);
+			return true;
+		};
+	}
+
+	private async resolveNpmPackageSource(
+		parsed: NpmSource,
+		scope: SourceScope,
+		filter: PackageFilter | undefined,
+		metadata: PathMetadata,
+		accumulator: ResourceAccumulator,
+		installMissing: () => Promise<boolean>,
+	): Promise<boolean> {
+		let installedPath = this.getNpmInstallPath(parsed, scope);
+		const needsInstall =
+			!existsSync(installedPath) || !(await this.installedNpmMatchesConfiguredVersion(parsed, installedPath));
+		if (needsInstall) {
+			const installed = await installMissing();
+			if (!installed) return false;
+			installedPath = this.getNpmInstallPath(parsed, scope);
+		}
+		metadata.baseDir = installedPath;
+		this.collectPackageResources(installedPath, accumulator, filter, metadata);
+		return true;
+	}
+
+	private async resolveGitPackageSource(
+		parsed: GitSource,
+		scope: SourceScope,
+		sourceStr: string,
+		filter: PackageFilter | undefined,
+		metadata: PathMetadata,
+		accumulator: ResourceAccumulator,
+		installMissing: () => Promise<boolean>,
+	): Promise<void> {
+		const installedPath = this.getGitInstallPath(parsed, scope);
+		if (!existsSync(installedPath)) {
+			const installed = await installMissing();
+			if (!installed) return;
+		} else if (scope === "temporary" && !parsed.pinned && !isOfflineModeEnabled()) {
+			await this.refreshTemporaryGitSource(parsed, sourceStr);
+		}
+		metadata.baseDir = installedPath;
+		this.collectPackageResources(installedPath, accumulator, filter, metadata);
+	}
+
 	private async resolvePackageSources(
 		sources: Array<{ pkg: PackageSource; scope: SourceScope }>,
 		accumulator: ResourceAccumulator,
@@ -1269,45 +1332,16 @@ export class DefaultPackageManager implements PackageManager {
 				continue;
 			}
 
-			const installMissing = async (): Promise<boolean> => {
-				if (isOfflineModeEnabled()) {
-					return false;
-				}
-				if (!onMissing) {
-					await this.installParsedSource(parsed, scope);
-					return true;
-				}
-				const action = await onMissing(sourceStr);
-				if (action === "skip") return false;
-				if (action === "error") throw new Error(`Missing source: ${sourceStr}`);
-				await this.installParsedSource(parsed, scope);
-				return true;
-			};
+			const installMissing = this.createInstallMissingHandler(parsed, scope, sourceStr, onMissing);
 
 			if (parsed.type === "npm") {
-				let installedPath = this.getNpmInstallPath(parsed, scope);
-				const needsInstall =
-					!existsSync(installedPath) || !(await this.installedNpmMatchesConfiguredVersion(parsed, installedPath));
-				if (needsInstall) {
-					const installed = await installMissing();
-					if (!installed) continue;
-					installedPath = this.getNpmInstallPath(parsed, scope);
-				}
-				metadata.baseDir = installedPath;
-				this.collectPackageResources(installedPath, accumulator, filter, metadata);
+				const ok = await this.resolveNpmPackageSource(parsed, scope, filter, metadata, accumulator, installMissing);
+				if (!ok) continue;
 				continue;
 			}
 
 			if (parsed.type === "git") {
-				const installedPath = this.getGitInstallPath(parsed, scope);
-				if (!existsSync(installedPath)) {
-					const installed = await installMissing();
-					if (!installed) continue;
-				} else if (scope === "temporary" && !parsed.pinned && !isOfflineModeEnabled()) {
-					await this.refreshTemporaryGitSource(parsed, sourceStr);
-				}
-				metadata.baseDir = installedPath;
-				this.collectPackageResources(installedPath, accumulator, filter, metadata);
+				await this.resolveGitPackageSource(parsed, scope, sourceStr, filter, metadata, accumulator, installMissing);
 			}
 		}
 	}

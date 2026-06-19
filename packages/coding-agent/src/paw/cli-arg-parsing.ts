@@ -114,3 +114,24 @@ export function pawCliParseRepeatableScalarOption(
 
 	return { values, nextIndex: index };
 }
+
+export function pawCliCollectRepeatableScalarOption(
+	commandLabel: string,
+	optionName: string,
+	args: readonly string[],
+	startIndex: number,
+): PawCliParsedArgsBase | { values: string[]; nextIndex: number } {
+	const values: string[] = [];
+	let index = startIndex;
+
+	while (index < args.length && args[index] === optionName) {
+		const scalar = pawCliReadScalarOptionValue(commandLabel, optionName, args, index, new Set());
+		if ("kind" in scalar) {
+			return scalar;
+		}
+		values.push(scalar.value);
+		index = scalar.nextIndex;
+	}
+
+	return { values, nextIndex: index };
+}

@@ -479,90 +479,101 @@ function stripSymbolKeys(value: unknown): unknown {
 	return value;
 }
 
-function toChatMessages(messages: Message[], supportsImages: boolean): ChatCompletionStreamRequestMessage[] {
-	const result: ChatCompletionStreamRequestMessage[] = [];
+function toMistralUserChatMessage(
+	msg: Extract<Message, { role: "user" }>,
+	supportsImages: boolean,
+): ChatCompletionStreamRequestMessage | undefined {
+	if (typeof msg.content === "string") {
+		return { role: "user", content: sanitizeSurrogates(msg.content) };
+	}
+	const hadImages = msg.content.some((item) => item.type === "image");
+	const content: ContentChunk[] = msg.content
+		.filter((item) => item.type === "text" || supportsImages)
+		.map((item) => {
+			if (item.type === "text") return { type: "text", text: sanitizeSurrogates(item.text) };
+			return { type: "image_url", imageUrl: `data:${item.mimeType};base64,${item.data}` };
+		});
+	if (content.length > 0) return { role: "user", content };
+	if (hadImages && !supportsImages) {
+		return { role: "user", content: "(image omitted: model does not support images)" };
+	}
+	return undefined;
+}
 
-	for (const msg of messages) {
-		if (msg.role === "user") {
-			if (typeof msg.content === "string") {
-				result.push({ role: "user", content: sanitizeSurrogates(msg.content) });
-				continue;
-			}
-			const hadImages = msg.content.some((item) => item.type === "image");
-			const content: ContentChunk[] = msg.content
-				.filter((item) => item.type === "text" || supportsImages)
-				.map((item) => {
-					if (item.type === "text") return { type: "text", text: sanitizeSurrogates(item.text) };
-					return { type: "image_url", imageUrl: `data:${item.mimeType};base64,${item.data}` };
-				});
-			if (content.length > 0) {
-				result.push({ role: "user", content });
-				continue;
-			}
-			if (hadImages && !supportsImages) {
-				result.push({ role: "user", content: "(image omitted: model does not support images)" });
+function toMistralAssistantChatMessage(
+	msg: Extract<Message, { role: "assistant" }>,
+): ChatCompletionStreamRequestMessage | undefined {
+	const contentParts: ContentChunk[] = [];
+	const toolCalls: Array<{ id: string; type: "function"; function: { name: string; arguments: string } }> = [];
+	for (const block of msg.content) {
+		if (block.type === "text") {
+			if (block.text.trim().length > 0) {
+				contentParts.push({ type: "text", text: sanitizeSurrogates(block.text) });
 			}
 			continue;
 		}
-
-		if (msg.role === "assistant") {
-			const contentParts: ContentChunk[] = [];
-			const toolCalls: Array<{ id: string; type: "function"; function: { name: string; arguments: string } }> = [];
-
-			for (const block of msg.content) {
-				if (block.type === "text") {
-					if (block.text.trim().length > 0) {
-						contentParts.push({ type: "text", text: sanitizeSurrogates(block.text) });
-					}
-					continue;
-				}
-				if (block.type === "thinking") {
-					if (block.thinking.trim().length > 0) {
-						contentParts.push({
-							type: "thinking",
-							thinking: [{ type: "text", text: sanitizeSurrogates(block.thinking) }],
-						});
-					}
-					continue;
-				}
-				toolCalls.push({
-					id: block.id,
-					type: "function",
-					function: { name: block.name, arguments: JSON.stringify(block.arguments || {}) },
+		if (block.type === "thinking") {
+			if (block.thinking.trim().length > 0) {
+				contentParts.push({
+					type: "thinking",
+					thinking: [{ type: "text", text: sanitizeSurrogates(block.thinking) }],
 				});
 			}
-
-			const assistantMessage: ChatCompletionStreamRequestMessage = { role: "assistant" };
-			if (contentParts.length > 0) assistantMessage.content = contentParts;
-			if (toolCalls.length > 0) assistantMessage.toolCalls = toolCalls;
-			if (contentParts.length > 0 || toolCalls.length > 0) result.push(assistantMessage);
 			continue;
 		}
-
-		const toolContent: ContentChunk[] = [];
-		const textResult = msg.content
-			.filter((part) => part.type === "text")
-			.map((part) => (part.type === "text" ? sanitizeSurrogates(part.text) : ""))
-			.join("\n");
-		const hasImages = msg.content.some((part) => part.type === "image");
-		const toolText = buildToolResultText(textResult, hasImages, supportsImages, msg.isError);
-		toolContent.push({ type: "text", text: toolText });
-		for (const part of msg.content) {
-			if (!supportsImages) continue;
-			if (part.type !== "image") continue;
-			toolContent.push({
-				type: "image_url",
-				imageUrl: `data:${part.mimeType};base64,${part.data}`,
-			});
-		}
-		result.push({
-			role: "tool",
-			toolCallId: msg.toolCallId,
-			name: msg.toolName,
-			content: toolContent,
+		toolCalls.push({
+			id: block.id,
+			type: "function",
+			function: { name: block.name, arguments: JSON.stringify(block.arguments || {}) },
 		});
 	}
+	if (contentParts.length === 0 && toolCalls.length === 0) return undefined;
+	const assistantMessage: ChatCompletionStreamRequestMessage = { role: "assistant" };
+	if (contentParts.length > 0) assistantMessage.content = contentParts;
+	if (toolCalls.length > 0) assistantMessage.toolCalls = toolCalls;
+	return assistantMessage;
+}
 
+function toMistralToolChatMessage(
+	msg: Extract<Message, { role: "toolResult" }>,
+	supportsImages: boolean,
+): ChatCompletionStreamRequestMessage {
+	const toolContent: ContentChunk[] = [];
+	const textResult = msg.content
+		.filter((part) => part.type === "text")
+		.map((part) => (part.type === "text" ? sanitizeSurrogates(part.text) : ""))
+		.join("\n");
+	const hasImages = msg.content.some((part) => part.type === "image");
+	toolContent.push({ type: "text", text: buildToolResultText(textResult, hasImages, supportsImages, msg.isError) });
+	for (const part of msg.content) {
+		if (!supportsImages || part.type !== "image") continue;
+		toolContent.push({ type: "image_url", imageUrl: `data:${part.mimeType};base64,${part.data}` });
+	}
+	return {
+		role: "tool",
+		toolCallId: msg.toolCallId,
+		name: msg.toolName,
+		content: toolContent,
+	};
+}
+
+function toChatMessages(messages: Message[], supportsImages: boolean): ChatCompletionStreamRequestMessage[] {
+	const result: ChatCompletionStreamRequestMessage[] = [];
+	for (const msg of messages) {
+		if (msg.role === "user") {
+			const converted = toMistralUserChatMessage(msg, supportsImages);
+			if (converted) result.push(converted);
+			continue;
+		}
+		if (msg.role === "assistant") {
+			const converted = toMistralAssistantChatMessage(msg);
+			if (converted) result.push(converted);
+			continue;
+		}
+		if (msg.role === "toolResult") {
+			result.push(toMistralToolChatMessage(msg, supportsImages));
+		}
+	}
 	return result;
 }
 

@@ -66,27 +66,17 @@ export async function scanPawRepoForSecrets(
 	while (queue.length > 0 && scannedFiles < maxFiles) {
 		const current = queue.shift();
 		if (current === undefined) break;
-		if (pathHasSkippedDirSegment(relative(root, current))) continue;
-
-		const entries = await readdirSafe(current);
-		for (const entry of entries) {
-			if (scannedFiles >= maxFiles) break;
-			const scanOutcome = await scanOneSecretEntry({
-				root,
-				current,
-				entry,
-				config,
-				maxBytes,
-			});
-			if (scanOutcome.kind === "enqueue") {
-				queue.push(scanOutcome.path);
-				continue;
-			}
-			if (scanOutcome.kind === "scanned") {
-				scannedFiles += 1;
-				findings.push(...scanOutcome.findings);
-			}
-		}
+		const walkOutcome = await walkPawSecretScanDirectory({
+			root,
+			current,
+			config,
+			maxBytes,
+			maxFiles,
+			scannedFiles,
+		});
+		scannedFiles = walkOutcome.scannedFiles;
+		findings.push(...walkOutcome.findings);
+		queue.push(...walkOutcome.enqueuePaths);
 	}
 	const blocked = findings.some((finding) => finding.severity === "block");
 	return { ok: findings.length === 0, blocked, scannedFiles, findings };
@@ -94,6 +84,45 @@ export async function scanPawRepoForSecrets(
 
 function pathHasSkippedDirSegment(relPath: string): boolean {
 	return relPath.split(/[/\\]/).some((segment) => SKIP_DIRS.has(segment));
+}
+
+async function walkPawSecretScanDirectory(input: {
+	root: string;
+	current: string;
+	config: PawSecretsConfig;
+	maxBytes: number;
+	maxFiles: number;
+	scannedFiles: number;
+}): Promise<{ scannedFiles: number; findings: PawSecretScanFinding[]; enqueuePaths: string[] }> {
+	if (pathHasSkippedDirSegment(relative(input.root, input.current))) {
+		return { scannedFiles: input.scannedFiles, findings: [], enqueuePaths: [] };
+	}
+
+	const enqueuePaths: string[] = [];
+	const findings: PawSecretScanFinding[] = [];
+	let scannedFiles = input.scannedFiles;
+	const entries = await readdirSafe(input.current);
+
+	for (const entry of entries) {
+		if (scannedFiles >= input.maxFiles) break;
+		const scanOutcome = await scanOneSecretEntry({
+			root: input.root,
+			current: input.current,
+			entry,
+			config: input.config,
+			maxBytes: input.maxBytes,
+		});
+		if (scanOutcome.kind === "enqueue") {
+			enqueuePaths.push(scanOutcome.path);
+			continue;
+		}
+		if (scanOutcome.kind === "scanned") {
+			scannedFiles += 1;
+			findings.push(...scanOutcome.findings);
+		}
+	}
+
+	return { scannedFiles, findings, enqueuePaths };
 }
 
 type SecretEntryScanOutcome =

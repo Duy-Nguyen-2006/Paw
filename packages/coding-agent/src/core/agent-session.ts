@@ -60,22 +60,14 @@ import {
 	ExtensionRunner,
 	type ExtensionUIContext,
 	type InputSource,
-	type MessageEndEvent,
-	type MessageStartEvent,
-	type MessageUpdateEvent,
 	type ReplacedSessionContext,
 	type SessionBeforeCompactResult,
 	type SessionBeforeTreeResult,
 	type SessionStartEvent,
 	type ShutdownHandler,
 	type ToolDefinition,
-	type ToolExecutionEndEvent,
-	type ToolExecutionStartEvent,
-	type ToolExecutionUpdateEvent,
 	type ToolInfo,
 	type TreePreparation,
-	type TurnEndEvent,
-	type TurnStartEvent,
 	wrapRegisteredTools,
 } from "./extensions/index.ts";
 import { emitSessionShutdownEvent } from "./extensions/runner.ts";
@@ -91,6 +83,8 @@ import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.ts";
 import { type BuildSystemPromptOptions, buildSystemPrompt } from "./system-prompt.ts";
 import { type BashOperations, createLocalBashOperations } from "./tools/bash.ts";
 import { createAllToolDefinitions } from "./tools/index.ts";
+import { applyCompactionToSession, emitCompactionExtensionEvents } from "./agent-session-compaction-apply.ts";
+import { emitAgentEventToExtensions } from "./agent-session-extension-events.ts";
 import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.ts";
 
 // ============================================================================
@@ -587,74 +581,13 @@ export class AgentSession {
 	private async _emitExtensionEvent(event: AgentEvent): Promise<void> {
 		if (event.type === "agent_start") {
 			this._turnIndex = 0;
-			await this._extensionRunner.emit({ type: "agent_start" });
-		} else if (event.type === "agent_end") {
-			await this._extensionRunner.emit({ type: "agent_end", messages: event.messages });
-		} else if (event.type === "turn_start") {
-			const extensionEvent: TurnStartEvent = {
-				type: "turn_start",
-				turnIndex: this._turnIndex,
-				timestamp: Date.now(),
-			};
-			await this._extensionRunner.emit(extensionEvent);
-		} else if (event.type === "turn_end") {
-			const extensionEvent: TurnEndEvent = {
-				type: "turn_end",
-				turnIndex: this._turnIndex,
-				message: event.message,
-				toolResults: event.toolResults,
-			};
-			await this._extensionRunner.emit(extensionEvent);
-			this._turnIndex++;
-		} else if (event.type === "message_start") {
-			const extensionEvent: MessageStartEvent = {
-				type: "message_start",
-				message: event.message,
-			};
-			await this._extensionRunner.emit(extensionEvent);
-		} else if (event.type === "message_update") {
-			const extensionEvent: MessageUpdateEvent = {
-				type: "message_update",
-				message: event.message,
-				assistantMessageEvent: event.assistantMessageEvent,
-			};
-			await this._extensionRunner.emit(extensionEvent);
-		} else if (event.type === "message_end") {
-			const extensionEvent: MessageEndEvent = {
-				type: "message_end",
-				message: event.message,
-			};
-			const replacement = await this._extensionRunner.emitMessageEnd(extensionEvent);
-			if (replacement) {
-				this._replaceMessageInPlace(event.message, replacement);
-			}
-		} else if (event.type === "tool_execution_start") {
-			const extensionEvent: ToolExecutionStartEvent = {
-				type: "tool_execution_start",
-				toolCallId: event.toolCallId,
-				toolName: event.toolName,
-				args: event.args,
-			};
-			await this._extensionRunner.emit(extensionEvent);
-		} else if (event.type === "tool_execution_update") {
-			const extensionEvent: ToolExecutionUpdateEvent = {
-				type: "tool_execution_update",
-				toolCallId: event.toolCallId,
-				toolName: event.toolName,
-				args: event.args,
-				partialResult: event.partialResult,
-			};
-			await this._extensionRunner.emit(extensionEvent);
-		} else if (event.type === "tool_execution_end") {
-			const extensionEvent: ToolExecutionEndEvent = {
-				type: "tool_execution_end",
-				toolCallId: event.toolCallId,
-				toolName: event.toolName,
-				result: event.result,
-				isError: event.isError,
-			};
-			await this._extensionRunner.emit(extensionEvent);
 		}
+		this._turnIndex = await emitAgentEventToExtensions(
+			this._extensionRunner,
+			event,
+			this._turnIndex,
+			(target, replacement) => this._replaceMessageInPlace(target, replacement),
+		);
 	}
 
 	/**
@@ -1741,30 +1674,16 @@ export class AgentSession {
 				throw new Error("Compaction cancelled");
 			}
 
-			this.sessionManager.appendCompaction(summary, firstKeptEntryId, tokensBefore, details, fromExtension);
-			const newEntries = this.sessionManager.getEntries();
-			const sessionContext = this.sessionManager.buildSessionContext();
-			this.agent.state.messages = sessionContext.messages;
-
-			// Get the saved compaction entry for the extension event
-			const savedCompactionEntry = newEntries.find((e) => e.type === "compaction" && e.summary === summary) as
-				| CompactionEntry
-				| undefined;
-
-			if (this._extensionRunner && savedCompactionEntry) {
-				await this._extensionRunner.emit({
-					type: "session_compact",
-					compactionEntry: savedCompactionEntry,
-					fromExtension,
-				});
-			}
-
-			const compactionResult = {
+			const { compactionResult, savedCompactionEntry } = applyCompactionToSession(
+				this.sessionManager,
+				this.agent,
 				summary,
 				firstKeptEntryId,
 				tokensBefore,
 				details,
-			};
+				fromExtension,
+			);
+			await emitCompactionExtensionEvents(this._extensionRunner, savedCompactionEntry, fromExtension);
 			this._emit({
 				type: "compaction_end",
 				reason: "manual",
@@ -2047,30 +1966,16 @@ export class AgentSession {
 				return false;
 			}
 
-			this.sessionManager.appendCompaction(summary, firstKeptEntryId, tokensBefore, details, fromExtension);
-			const newEntries = this.sessionManager.getEntries();
-			const sessionContext = this.sessionManager.buildSessionContext();
-			this.agent.state.messages = sessionContext.messages;
-
-			// Get the saved compaction entry for the extension event
-			const savedCompactionEntry = newEntries.find((e) => e.type === "compaction" && e.summary === summary) as
-				| CompactionEntry
-				| undefined;
-
-			if (this._extensionRunner && savedCompactionEntry) {
-				await this._extensionRunner.emit({
-					type: "session_compact",
-					compactionEntry: savedCompactionEntry,
-					fromExtension,
-				});
-			}
-
-			const result: CompactionResult = {
+			const { compactionResult: result, savedCompactionEntry } = applyCompactionToSession(
+				this.sessionManager,
+				this.agent,
 				summary,
 				firstKeptEntryId,
 				tokensBefore,
 				details,
-			};
+				fromExtension,
+			);
+			await emitCompactionExtensionEvents(this._extensionRunner, savedCompactionEntry, fromExtension);
 			this._emit({ type: "compaction_end", reason, result, aborted: false, willRetry });
 
 			if (willRetry) {

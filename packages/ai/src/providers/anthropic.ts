@@ -445,6 +445,175 @@ function yieldAnthropicEvent(
 	}
 }
 
+type AnthropicStreamBlock = (ThinkingContent | TextContent | (ToolCall & { partialJson: string })) & { index: number };
+
+interface AnthropicStreamDispatchContext {
+	output: AssistantMessage;
+	stream: AssistantMessageEventStream;
+	blocks: AnthropicStreamBlock[];
+	model: Model<"anthropic-messages">;
+	context: Context;
+	isOAuth: boolean;
+}
+
+function findAnthropicBlockByIndex(blocks: AnthropicStreamBlock[], index: number): AnthropicStreamBlock | undefined {
+	return blocks.find((b) => b.index === index);
+}
+
+function handleAnthropicContentBlockStart(
+	ctx: AnthropicStreamDispatchContext,
+	event: Extract<RawMessageStreamEvent, { type: "content_block_start" }>,
+): void {
+	const { output, stream, isOAuth, context } = ctx;
+	const blockType = event.content_block.type;
+	if (blockType === "text") {
+		const block: AnthropicStreamBlock = { type: "text", text: "", index: event.index };
+		output.content.push(block);
+		stream.push({ type: "text_start", contentIndex: output.content.length - 1, partial: output });
+		return;
+	}
+	if (blockType === "thinking") {
+		const block: AnthropicStreamBlock = {
+			type: "thinking",
+			thinking: "",
+			thinkingSignature: "",
+			index: event.index,
+		};
+		output.content.push(block);
+		stream.push({ type: "thinking_start", contentIndex: output.content.length - 1, partial: output });
+		return;
+	}
+	if (blockType === "redacted_thinking") {
+		const block: AnthropicStreamBlock = {
+			type: "thinking",
+			thinking: "[Reasoning redacted]",
+			thinkingSignature: event.content_block.data,
+			redacted: true,
+			index: event.index,
+		};
+		output.content.push(block);
+		stream.push({ type: "thinking_start", contentIndex: output.content.length - 1, partial: output });
+		return;
+	}
+	if (blockType === "tool_use") {
+		const block: AnthropicStreamBlock = {
+			type: "toolCall",
+			id: event.content_block.id,
+			name: isOAuth ? fromClaudeCodeName(event.content_block.name, context.tools) : event.content_block.name,
+			arguments: (event.content_block.input as Record<string, unknown>) ?? {},
+			partialJson: "",
+			index: event.index,
+		};
+		output.content.push(block);
+		stream.push({ type: "toolcall_start", contentIndex: output.content.length - 1, partial: output });
+	}
+}
+
+function handleAnthropicContentBlockDelta(
+	ctx: AnthropicStreamDispatchContext,
+	event: Extract<RawMessageStreamEvent, { type: "content_block_delta" }>,
+): void {
+	const { blocks, stream, output } = ctx;
+	const block = findAnthropicBlockByIndex(blocks, event.index);
+	if (!block) return;
+	const contentIndex = blocks.indexOf(block);
+
+	if (event.delta.type === "text_delta" && block.type === "text") {
+		block.text += event.delta.text;
+		stream.push({ type: "text_delta", contentIndex, delta: event.delta.text, partial: output });
+		return;
+	}
+	if (event.delta.type === "thinking_delta" && block.type === "thinking") {
+		block.thinking += event.delta.thinking;
+		stream.push({ type: "thinking_delta", contentIndex, delta: event.delta.thinking, partial: output });
+		return;
+	}
+	if (event.delta.type === "input_json_delta" && block.type === "toolCall") {
+		block.partialJson += event.delta.partial_json;
+		block.arguments = parseStreamingJson(block.partialJson);
+		stream.push({ type: "toolcall_delta", contentIndex, delta: event.delta.partial_json, partial: output });
+		return;
+	}
+	if (event.delta.type === "signature_delta" && block.type === "thinking") {
+		block.thinkingSignature = block.thinkingSignature || "";
+		block.thinkingSignature += event.delta.signature;
+	}
+}
+
+function handleAnthropicContentBlockStop(
+	ctx: AnthropicStreamDispatchContext,
+	event: Extract<RawMessageStreamEvent, { type: "content_block_stop" }>,
+): void {
+	const { blocks, stream, output } = ctx;
+	const block = findAnthropicBlockByIndex(blocks, event.index);
+	if (!block) return;
+	const contentIndex = blocks.indexOf(block);
+	delete (block as { index?: number }).index;
+
+	if (block.type === "text") {
+		stream.push({ type: "text_end", contentIndex, content: block.text, partial: output });
+		return;
+	}
+	if (block.type === "thinking") {
+		stream.push({ type: "thinking_end", contentIndex, content: block.thinking, partial: output });
+		return;
+	}
+	if (block.type === "toolCall") {
+		block.arguments = parseStreamingJson(block.partialJson);
+		delete (block as { partialJson?: string }).partialJson;
+		stream.push({ type: "toolcall_end", contentIndex, toolCall: block, partial: output });
+	}
+}
+
+function dispatchAnthropicStreamEvent(ctx: AnthropicStreamDispatchContext, event: RawMessageStreamEvent): void {
+	const { output, model } = ctx;
+
+	if (event.type === "message_start") {
+		output.responseId = event.message.id;
+		output.usage.input = event.message.usage.input_tokens || 0;
+		output.usage.output = event.message.usage.output_tokens || 0;
+		output.usage.cacheRead = event.message.usage.cache_read_input_tokens || 0;
+		output.usage.cacheWrite = event.message.usage.cache_creation_input_tokens || 0;
+		output.usage.cacheWrite1h = event.message.usage.cache_creation?.ephemeral_1h_input_tokens || 0;
+		output.usage.totalTokens =
+			output.usage.input + output.usage.output + output.usage.cacheRead + output.usage.cacheWrite;
+		calculateCost(model, output.usage);
+		return;
+	}
+	if (event.type === "content_block_start") {
+		handleAnthropicContentBlockStart(ctx, event);
+		return;
+	}
+	if (event.type === "content_block_delta") {
+		handleAnthropicContentBlockDelta(ctx, event);
+		return;
+	}
+	if (event.type === "content_block_stop") {
+		handleAnthropicContentBlockStop(ctx, event);
+		return;
+	}
+	if (event.type === "message_delta") {
+		if (event.delta.stop_reason) {
+			const stopReasonResult = mapStopReason(event.delta.stop_reason, event.delta.stop_details);
+			output.stopReason = stopReasonResult.stopReason;
+			if (stopReasonResult.errorMessage) {
+				output.errorMessage = stopReasonResult.errorMessage;
+			}
+		}
+		if (event.usage.input_tokens != null) output.usage.input = event.usage.input_tokens;
+		if (event.usage.output_tokens != null) output.usage.output = event.usage.output_tokens;
+		if (event.usage.cache_read_input_tokens != null) {
+			output.usage.cacheRead = event.usage.cache_read_input_tokens;
+		}
+		if (event.usage.cache_creation_input_tokens != null) {
+			output.usage.cacheWrite = event.usage.cache_creation_input_tokens;
+		}
+		output.usage.totalTokens =
+			output.usage.input + output.usage.output + output.usage.cacheRead + output.usage.cacheWrite;
+		calculateCost(model, output.usage);
+	}
+}
+
 export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 	model: Model<"anthropic-messages">,
 	context: Context,
@@ -522,170 +691,18 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 			await options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, model);
 			stream.push({ type: "start", partial: output });
 
-			type Block = (ThinkingContent | TextContent | (ToolCall & { partialJson: string })) & { index: number };
-			const blocks = output.content as Block[];
+			const blocks = output.content as AnthropicStreamBlock[];
+			const dispatchCtx: AnthropicStreamDispatchContext = {
+				output,
+				stream,
+				blocks,
+				model,
+				context,
+				isOAuth,
+			};
 
 			for await (const event of iterateAnthropicEvents(response, options?.signal)) {
-				if (event.type === "message_start") {
-					output.responseId = event.message.id;
-					// Capture initial token usage from message_start event
-					// This ensures we have input token counts even if the stream is aborted early
-					output.usage.input = event.message.usage.input_tokens || 0;
-					output.usage.output = event.message.usage.output_tokens || 0;
-					output.usage.cacheRead = event.message.usage.cache_read_input_tokens || 0;
-					output.usage.cacheWrite = event.message.usage.cache_creation_input_tokens || 0;
-					output.usage.cacheWrite1h = event.message.usage.cache_creation?.ephemeral_1h_input_tokens || 0;
-					// Anthropic doesn't provide total_tokens, compute from components
-					output.usage.totalTokens =
-						output.usage.input + output.usage.output + output.usage.cacheRead + output.usage.cacheWrite;
-					calculateCost(model, output.usage);
-				} else if (event.type === "content_block_start") {
-					if (event.content_block.type === "text") {
-						const block: Block = {
-							type: "text",
-							text: "",
-							index: event.index,
-						};
-						output.content.push(block);
-						stream.push({ type: "text_start", contentIndex: output.content.length - 1, partial: output });
-					} else if (event.content_block.type === "thinking") {
-						const block: Block = {
-							type: "thinking",
-							thinking: "",
-							thinkingSignature: "",
-							index: event.index,
-						};
-						output.content.push(block);
-						stream.push({ type: "thinking_start", contentIndex: output.content.length - 1, partial: output });
-					} else if (event.content_block.type === "redacted_thinking") {
-						const block: Block = {
-							type: "thinking",
-							thinking: "[Reasoning redacted]",
-							thinkingSignature: event.content_block.data,
-							redacted: true,
-							index: event.index,
-						};
-						output.content.push(block);
-						stream.push({ type: "thinking_start", contentIndex: output.content.length - 1, partial: output });
-					} else if (event.content_block.type === "tool_use") {
-						const block: Block = {
-							type: "toolCall",
-							id: event.content_block.id,
-							name: isOAuth
-								? fromClaudeCodeName(event.content_block.name, context.tools)
-								: event.content_block.name,
-							arguments: (event.content_block.input as Record<string, any>) ?? {},
-							partialJson: "",
-							index: event.index,
-						};
-						output.content.push(block);
-						stream.push({ type: "toolcall_start", contentIndex: output.content.length - 1, partial: output });
-					}
-				} else if (event.type === "content_block_delta") {
-					if (event.delta.type === "text_delta") {
-						const index = blocks.findIndex((b) => b.index === event.index);
-						const block = blocks[index];
-						if (block && block.type === "text") {
-							block.text += event.delta.text;
-							stream.push({
-								type: "text_delta",
-								contentIndex: index,
-								delta: event.delta.text,
-								partial: output,
-							});
-						}
-					} else if (event.delta.type === "thinking_delta") {
-						const index = blocks.findIndex((b) => b.index === event.index);
-						const block = blocks[index];
-						if (block && block.type === "thinking") {
-							block.thinking += event.delta.thinking;
-							stream.push({
-								type: "thinking_delta",
-								contentIndex: index,
-								delta: event.delta.thinking,
-								partial: output,
-							});
-						}
-					} else if (event.delta.type === "input_json_delta") {
-						const index = blocks.findIndex((b) => b.index === event.index);
-						const block = blocks[index];
-						if (block && block.type === "toolCall") {
-							block.partialJson += event.delta.partial_json;
-							block.arguments = parseStreamingJson(block.partialJson);
-							stream.push({
-								type: "toolcall_delta",
-								contentIndex: index,
-								delta: event.delta.partial_json,
-								partial: output,
-							});
-						}
-					} else if (event.delta.type === "signature_delta") {
-						const index = blocks.findIndex((b) => b.index === event.index);
-						const block = blocks[index];
-						if (block && block.type === "thinking") {
-							block.thinkingSignature = block.thinkingSignature || "";
-							block.thinkingSignature += event.delta.signature;
-						}
-					}
-				} else if (event.type === "content_block_stop") {
-					const index = blocks.findIndex((b) => b.index === event.index);
-					const block = blocks[index];
-					if (block) {
-						delete (block as any).index;
-						if (block.type === "text") {
-							stream.push({
-								type: "text_end",
-								contentIndex: index,
-								content: block.text,
-								partial: output,
-							});
-						} else if (block.type === "thinking") {
-							stream.push({
-								type: "thinking_end",
-								contentIndex: index,
-								content: block.thinking,
-								partial: output,
-							});
-						} else if (block.type === "toolCall") {
-							block.arguments = parseStreamingJson(block.partialJson);
-							// Finalize in-place and strip the scratch buffer so replay only
-							// carries parsed arguments.
-							delete (block as { partialJson?: string }).partialJson;
-							stream.push({
-								type: "toolcall_end",
-								contentIndex: index,
-								toolCall: block,
-								partial: output,
-							});
-						}
-					}
-				} else if (event.type === "message_delta") {
-					if (event.delta.stop_reason) {
-						const stopReasonResult = mapStopReason(event.delta.stop_reason, event.delta.stop_details);
-						output.stopReason = stopReasonResult.stopReason;
-						if (stopReasonResult.errorMessage) {
-							output.errorMessage = stopReasonResult.errorMessage;
-						}
-					}
-					// Only update usage fields if present (not null).
-					// Preserves input_tokens from message_start when proxies omit it in message_delta.
-					if (event.usage.input_tokens != null) {
-						output.usage.input = event.usage.input_tokens;
-					}
-					if (event.usage.output_tokens != null) {
-						output.usage.output = event.usage.output_tokens;
-					}
-					if (event.usage.cache_read_input_tokens != null) {
-						output.usage.cacheRead = event.usage.cache_read_input_tokens;
-					}
-					if (event.usage.cache_creation_input_tokens != null) {
-						output.usage.cacheWrite = event.usage.cache_creation_input_tokens;
-					}
-					// Anthropic doesn't provide total_tokens, compute from components
-					output.usage.totalTokens =
-						output.usage.input + output.usage.output + output.usage.cacheRead + output.usage.cacheWrite;
-					calculateCost(model, output.usage);
-				}
+				dispatchAnthropicStreamEvent(dispatchCtx, event);
 			}
 
 			if (options?.signal?.aborted) {
@@ -1005,6 +1022,121 @@ function normalizeToolCallId(id: string): string {
 	return id.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64);
 }
 
+function appendAnthropicUserParam(params: MessageParam[], msg: Extract<Message, { role: "user" }>): void {
+	if (typeof msg.content === "string") {
+		if (msg.content.trim().length > 0) {
+			params.push({ role: "user", content: sanitizeSurrogates(msg.content) });
+		}
+		return;
+	}
+	const blocks: ContentBlockParam[] = msg.content.map((item) => {
+		if (item.type === "text") {
+			return { type: "text", text: sanitizeSurrogates(item.text) };
+		}
+		return {
+			type: "image",
+			source: {
+				type: "base64",
+				media_type: item.mimeType as "image/jpeg" | "image/png" | "image/gif" | "image/webp",
+				data: item.data,
+			},
+		};
+	});
+	const filteredBlocks = blocks.filter((b) => (b.type === "text" ? b.text.trim().length > 0 : true));
+	if (filteredBlocks.length === 0) return;
+	params.push({ role: "user", content: filteredBlocks });
+}
+
+function appendAnthropicThinkingBlock(
+	blocks: ContentBlockParam[],
+	block: ThinkingContent,
+	allowEmptySignature: boolean,
+): void {
+	if (block.redacted) {
+		blocks.push({ type: "redacted_thinking", data: block.thinkingSignature! });
+		return;
+	}
+	if (block.thinking.trim().length === 0) return;
+	if (!block.thinkingSignature || block.thinkingSignature.trim().length === 0) {
+		blocks.push(
+			allowEmptySignature
+				? { type: "thinking", thinking: sanitizeSurrogates(block.thinking), signature: "" }
+				: { type: "text", text: sanitizeSurrogates(block.thinking) },
+		);
+		return;
+	}
+	blocks.push({
+		type: "thinking",
+		thinking: sanitizeSurrogates(block.thinking),
+		signature: block.thinkingSignature,
+	});
+}
+
+function appendAnthropicAssistantParam(
+	params: MessageParam[],
+	msg: Extract<Message, { role: "assistant" }>,
+	isOAuthToken: boolean,
+	allowEmptySignature: boolean,
+): void {
+	const blocks: ContentBlockParam[] = [];
+	for (const block of msg.content) {
+		if (block.type === "text") {
+			if (block.text.trim().length === 0) continue;
+			blocks.push({ type: "text", text: sanitizeSurrogates(block.text) });
+		} else if (block.type === "thinking") {
+			appendAnthropicThinkingBlock(blocks, block, allowEmptySignature);
+		} else if (block.type === "toolCall") {
+			blocks.push({
+				type: "tool_use",
+				id: block.id,
+				name: isOAuthToken ? toClaudeCodeName(block.name) : block.name,
+				input: block.arguments ?? {},
+			});
+		}
+	}
+	if (blocks.length === 0) return;
+	params.push({ role: "assistant", content: blocks });
+}
+
+function collectAnthropicToolResultBatch(
+	transformedMessages: Message[],
+	startIndex: number,
+): { params: MessageParam; nextIndex: number } {
+	const toolResults: ContentBlockParam[] = [];
+	let j = startIndex;
+	for (; j < transformedMessages.length && transformedMessages[j].role === "toolResult"; j++) {
+		const toolMsg = transformedMessages[j] as ToolResultMessage;
+		toolResults.push({
+			type: "tool_result",
+			tool_use_id: toolMsg.toolCallId,
+			content: convertContentBlocks(toolMsg.content),
+			is_error: toolMsg.isError,
+		});
+	}
+	return {
+		params: { role: "user", content: toolResults },
+		nextIndex: j - 1,
+	};
+}
+
+function applyAnthropicCacheControlToParams(params: MessageParam[], cacheControl: CacheControlEphemeral): void {
+	if (params.length === 0) return;
+	const lastMessage = params[params.length - 1];
+	if (lastMessage.role !== "user") return;
+	if (Array.isArray(lastMessage.content)) {
+		const lastBlock = lastMessage.content[lastMessage.content.length - 1];
+		if (lastBlock && (lastBlock.type === "text" || lastBlock.type === "image" || lastBlock.type === "tool_result")) {
+			(lastBlock as { cache_control?: CacheControlEphemeral }).cache_control = cacheControl;
+		}
+		return;
+	}
+	if (typeof lastMessage.content === "string") {
+		lastMessage.content = [
+			{ type: "text", text: lastMessage.content, cache_control: cacheControl },
+		] as MessageParam["content"];
+	}
+}
+
 function convertMessages(
 	messages: Message[],
 	model: Model<"anthropic-messages">,
@@ -1019,160 +1151,19 @@ function convertMessages(
 
 	for (let i = 0; i < transformedMessages.length; i++) {
 		const msg = transformedMessages[i];
-
 		if (msg.role === "user") {
-			if (typeof msg.content === "string") {
-				if (msg.content.trim().length > 0) {
-					params.push({
-						role: "user",
-						content: sanitizeSurrogates(msg.content),
-					});
-				}
-			} else {
-				const blocks: ContentBlockParam[] = msg.content.map((item) => {
-					if (item.type === "text") {
-						return {
-							type: "text",
-							text: sanitizeSurrogates(item.text),
-						};
-					} else {
-						return {
-							type: "image",
-							source: {
-								type: "base64",
-								media_type: item.mimeType as "image/jpeg" | "image/png" | "image/gif" | "image/webp",
-								data: item.data,
-							},
-						};
-					}
-				});
-				const filteredBlocks = blocks.filter((b) => {
-					if (b.type === "text") {
-						return b.text.trim().length > 0;
-					}
-					return true;
-				});
-				if (filteredBlocks.length === 0) continue;
-				params.push({
-					role: "user",
-					content: filteredBlocks,
-				});
-			}
+			appendAnthropicUserParam(params, msg);
 		} else if (msg.role === "assistant") {
-			const blocks: ContentBlockParam[] = [];
-
-			for (const block of msg.content) {
-				if (block.type === "text") {
-					if (block.text.trim().length === 0) continue;
-					blocks.push({
-						type: "text",
-						text: sanitizeSurrogates(block.text),
-					});
-				} else if (block.type === "thinking") {
-					// Redacted thinking: pass the opaque payload back as redacted_thinking
-					if (block.redacted) {
-						blocks.push({
-							type: "redacted_thinking",
-							data: block.thinkingSignature!,
-						});
-						continue;
-					}
-					if (block.thinking.trim().length === 0) continue;
-					// If thinking signature is missing/empty (e.g., from aborted stream),
-					// convert to plain text for Anthropic. Some compatible providers emit
-					// and accept empty signatures, so let marked models preserve the block.
-					if (!block.thinkingSignature || block.thinkingSignature.trim().length === 0) {
-						blocks.push(
-							allowEmptySignature
-								? {
-										type: "thinking",
-										thinking: sanitizeSurrogates(block.thinking),
-										signature: "",
-									}
-								: {
-										type: "text",
-										text: sanitizeSurrogates(block.thinking),
-									},
-						);
-					} else {
-						blocks.push({
-							type: "thinking",
-							thinking: sanitizeSurrogates(block.thinking),
-							signature: block.thinkingSignature,
-						});
-					}
-				} else if (block.type === "toolCall") {
-					blocks.push({
-						type: "tool_use",
-						id: block.id,
-						name: isOAuthToken ? toClaudeCodeName(block.name) : block.name,
-						input: block.arguments ?? {},
-					});
-				}
-			}
-			if (blocks.length === 0) continue;
-			params.push({
-				role: "assistant",
-				content: blocks,
-			});
+			appendAnthropicAssistantParam(params, msg, isOAuthToken, allowEmptySignature);
 		} else if (msg.role === "toolResult") {
-			// Collect all consecutive toolResult messages, needed for z.ai Anthropic endpoint
-			const toolResults: ContentBlockParam[] = [];
-
-			// Add the current tool result
-			toolResults.push({
-				type: "tool_result",
-				tool_use_id: msg.toolCallId,
-				content: convertContentBlocks(msg.content),
-				is_error: msg.isError,
-			});
-
-			// Look ahead for consecutive toolResult messages
-			let j = i + 1;
-			while (j < transformedMessages.length && transformedMessages[j].role === "toolResult") {
-				const nextMsg = transformedMessages[j] as ToolResultMessage; // We know it's a toolResult
-				toolResults.push({
-					type: "tool_result",
-					tool_use_id: nextMsg.toolCallId,
-					content: convertContentBlocks(nextMsg.content),
-					is_error: nextMsg.isError,
-				});
-				j++;
-			}
-
-			// Skip the messages we've already processed
-			i = j - 1;
-
-			// Add a single user message with all tool results
-			params.push({
-				role: "user",
-				content: toolResults,
-			});
+			const batch = collectAnthropicToolResultBatch(transformedMessages, i);
+			params.push(batch.params);
+			i = batch.nextIndex;
 		}
 	}
 
-	// Add cache_control to the last user message to cache conversation history
-	if (cacheControl && params.length > 0) {
-		const lastMessage = params[params.length - 1];
-		if (lastMessage.role === "user") {
-			if (Array.isArray(lastMessage.content)) {
-				const lastBlock = lastMessage.content[lastMessage.content.length - 1];
-				if (
-					lastBlock &&
-					(lastBlock.type === "text" || lastBlock.type === "image" || lastBlock.type === "tool_result")
-				) {
-					(lastBlock as any).cache_control = cacheControl;
-				}
-			} else if (typeof lastMessage.content === "string") {
-				lastMessage.content = [
-					{
-						type: "text",
-						text: lastMessage.content,
-						cache_control: cacheControl,
-					},
-				] as any;
-			}
-		}
+	if (cacheControl) {
+		applyAnthropicCacheControlToParams(params, cacheControl);
 	}
 
 	return params;

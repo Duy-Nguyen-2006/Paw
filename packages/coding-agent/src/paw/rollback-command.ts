@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { lstat, mkdir, readdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { basename, dirname, relative, resolve } from "node:path";
 import { APP_NAME } from "../config.ts";
 import {

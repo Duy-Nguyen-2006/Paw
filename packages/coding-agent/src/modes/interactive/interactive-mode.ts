@@ -125,6 +125,7 @@ import { TreeSelectorComponent } from "./components/tree-selector.ts";
 import { TrustSelectorComponent } from "./components/trust-selector.ts";
 import { UserMessageComponent } from "./components/user-message.ts";
 import { UserMessageSelectorComponent } from "./components/user-message-selector.ts";
+import { matchBuiltinSlashCommand, runSlashCommandAction, type SlashCommandAction } from "./interactive-slash-dispatch.ts";
 import {
 	detectTerminalBackgroundTheme,
 	getAvailableThemes,
@@ -2546,136 +2547,84 @@ export class InteractiveMode {
 		};
 	}
 
+	private buildBuiltinSlashActions(): {
+		exact: Record<string, SlashCommandAction>;
+		prefix: Array<{ prefix: string; action: SlashCommandAction }>;
+	} {
+		const exact: Record<string, SlashCommandAction> = {
+			"/settings": { kind: "sync", run: () => this.showSettingsSelector() },
+			"/share": { kind: "async", run: () => this.handleShareCommand() },
+			"/copy": { kind: "async", run: () => this.handleCopyCommand() },
+			"/session": { kind: "sync", run: () => this.handleSessionCommand() },
+			"/changelog": { kind: "sync", run: () => this.handleChangelogCommand() },
+			"/hotkeys": { kind: "sync", run: () => this.handleHotkeysCommand() },
+			"/fork": { kind: "sync", run: () => this.showUserMessageSelector() },
+			"/tree": { kind: "sync", run: () => this.showTreeSelector() },
+			"/trust": { kind: "sync", run: () => this.showTrustSelector() },
+			"/login": { kind: "sync", run: () => this.showOAuthSelector("login") },
+			"/logout": { kind: "sync", run: () => this.showOAuthSelector("logout") },
+			"/debug": { kind: "sync", run: () => this.handleDebugCommand() },
+			"/arminsayshi": { kind: "sync", run: () => this.handleArminSaysHi() },
+			"/dementedelves": { kind: "sync", run: () => this.handleDementedDelves() },
+			"/resume": { kind: "sync", run: () => this.showSessionSelector() },
+			"/scoped-models": { kind: "async", run: () => this.showModelsSelector() },
+			"/clone": { kind: "async", run: () => this.handleCloneCommand() },
+			"/new": { kind: "async", run: () => this.handleClearCommand() },
+			"/reload": { kind: "async", run: () => this.handleReloadCommand() },
+			"/quit": { kind: "async", run: () => this.shutdown() },
+		};
+		const prefix: Array<{ prefix: string; action: SlashCommandAction }> = [
+			{
+				prefix: "/model",
+				action: {
+					kind: "prefix",
+					prefix: "/model",
+					run: (arg) => this.handleModelCommand(arg || undefined),
+				},
+			},
+			{
+				prefix: "/export",
+				action: { kind: "asyncWithText", run: (t) => this.handleExportCommand(t) },
+			},
+			{
+				prefix: "/import",
+				action: { kind: "asyncWithText", run: (t) => this.handleImportCommand(t) },
+			},
+			{
+				prefix: "/name",
+				action: { kind: "syncWithText", run: (t) => this.handleNameCommand(t) },
+			},
+			{
+				prefix: "/compact",
+				action: {
+					kind: "prefix",
+					prefix: "/compact",
+					run: (arg) => this.handleCompactCommand(arg || undefined),
+				},
+			},
+		];
+		return { exact, prefix };
+	}
+
+	private async tryDispatchBuiltinSlashCommand(text: string): Promise<boolean> {
+		if (!text.startsWith("/")) {
+			return false;
+		}
+		const { exact, prefix } = this.buildBuiltinSlashActions();
+		const action = matchBuiltinSlashCommand(text, exact, prefix);
+		if (!action) {
+			return false;
+		}
+		await runSlashCommandAction(action, text);
+		this.editor.setText("");
+		return true;
+	}
+
 	private async handleEditorSubmit(text: string): Promise<void> {
 		text = text.trim();
 		if (!text) return;
 
-		// Handle commands
-		if (text === "/settings") {
-			this.showSettingsSelector();
-			this.editor.setText("");
-			return;
-		}
-		if (text === "/scoped-models") {
-			this.editor.setText("");
-			await this.showModelsSelector();
-			return;
-		}
-		if (text === "/model" || text.startsWith("/model ")) {
-			const searchTerm = text.startsWith("/model ") ? text.slice(7).trim() : undefined;
-			this.editor.setText("");
-			await this.handleModelCommand(searchTerm);
-			return;
-		}
-		if (text === "/export" || text.startsWith("/export ")) {
-			await this.handleExportCommand(text);
-			this.editor.setText("");
-			return;
-		}
-		if (text === "/import" || text.startsWith("/import ")) {
-			await this.handleImportCommand(text);
-			this.editor.setText("");
-			return;
-		}
-		if (text === "/share") {
-			await this.handleShareCommand();
-			this.editor.setText("");
-			return;
-		}
-		if (text === "/copy") {
-			await this.handleCopyCommand();
-			this.editor.setText("");
-			return;
-		}
-		if (text === "/name" || text.startsWith("/name ")) {
-			this.handleNameCommand(text);
-			this.editor.setText("");
-			return;
-		}
-		if (text === "/session") {
-			this.handleSessionCommand();
-			this.editor.setText("");
-			return;
-		}
-		if (text === "/changelog") {
-			this.handleChangelogCommand();
-			this.editor.setText("");
-			return;
-		}
-		if (text === "/hotkeys") {
-			this.handleHotkeysCommand();
-			this.editor.setText("");
-			return;
-		}
-		if (text === "/fork") {
-			this.showUserMessageSelector();
-			this.editor.setText("");
-			return;
-		}
-		if (text === "/clone") {
-			this.editor.setText("");
-			await this.handleCloneCommand();
-			return;
-		}
-		if (text === "/tree") {
-			this.showTreeSelector();
-			this.editor.setText("");
-			return;
-		}
-		if (text === "/trust") {
-			this.showTrustSelector();
-			this.editor.setText("");
-			return;
-		}
-		if (text === "/login") {
-			this.showOAuthSelector("login");
-			this.editor.setText("");
-			return;
-		}
-		if (text === "/logout") {
-			this.showOAuthSelector("logout");
-			this.editor.setText("");
-			return;
-		}
-		if (text === "/new") {
-			this.editor.setText("");
-			await this.handleClearCommand();
-			return;
-		}
-		if (text === "/compact" || text.startsWith("/compact ")) {
-			const customInstructions = text.startsWith("/compact ") ? text.slice(9).trim() : undefined;
-			this.editor.setText("");
-			await this.handleCompactCommand(customInstructions);
-			return;
-		}
-		if (text === "/reload") {
-			this.editor.setText("");
-			await this.handleReloadCommand();
-			return;
-		}
-		if (text === "/debug") {
-			this.handleDebugCommand();
-			this.editor.setText("");
-			return;
-		}
-		if (text === "/arminsayshi") {
-			this.handleArminSaysHi();
-			this.editor.setText("");
-			return;
-		}
-		if (text === "/dementedelves") {
-			this.handleDementedDelves();
-			this.editor.setText("");
-			return;
-		}
-		if (text === "/resume") {
-			this.showSessionSelector();
-			this.editor.setText("");
-			return;
-		}
-		if (text === "/quit") {
-			this.editor.setText("");
-			await this.shutdown();
+		if (await this.tryDispatchBuiltinSlashCommand(text)) {
 			return;
 		}
 
@@ -2738,6 +2687,283 @@ export class InteractiveMode {
 		});
 	}
 
+	private createToolExecutionComponent(
+		toolName: string,
+		toolCallId: string,
+		args: Record<string, unknown>,
+	): ToolExecutionComponent {
+		const component = new ToolExecutionComponent(
+			toolName,
+			toolCallId,
+			args,
+			{
+				showImages: this.settingsManager.getShowImages(),
+				imageWidthCells: this.settingsManager.getImageWidthCells(),
+			},
+			this.getRegisteredToolDefinition(toolName),
+			this.ui,
+			this.sessionManager.getCwd(),
+		);
+		component.setExpanded(this.toolOutputExpanded);
+		return component;
+	}
+
+	private onAgentEventAgentStart(): void {
+		this.pendingTools.clear();
+		if (this.settingsManager.getShowTerminalProgress()) {
+			this.ui.terminal.setProgress(true);
+		}
+		if (this.retryEscapeHandler) {
+			this.defaultEditor.onEscape = this.retryEscapeHandler;
+			this.retryEscapeHandler = undefined;
+		}
+		if (this.retryCountdown) {
+			this.retryCountdown.dispose();
+			this.retryCountdown = undefined;
+		}
+		if (this.retryLoader) {
+			this.retryLoader.stop();
+			this.retryLoader = undefined;
+		}
+		this.stopWorkingLoader();
+		if (this.workingVisible) {
+			this.loadingAnimation = this.createWorkingLoader();
+			this.statusContainer.addChild(this.loadingAnimation);
+		}
+		this.ui.requestRender();
+	}
+
+	private onAgentEventMessageStart(event: Extract<AgentSessionEvent, { type: "message_start" }>): void {
+		const { message } = event;
+		if (message.role === "custom" || message.role === "user") {
+			this.addMessageToChat(message);
+			if (message.role === "user") {
+				this.updatePendingMessagesDisplay();
+			}
+			this.ui.requestRender();
+			return;
+		}
+		if (message.role !== "assistant") {
+			return;
+		}
+		this.streamingComponent = new AssistantMessageComponent(
+			undefined,
+			this.hideThinkingBlock,
+			this.getMarkdownThemeWithSettings(),
+			this.hiddenThinkingLabel,
+		);
+		this.streamingMessage = message;
+		this.chatContainer.addChild(this.streamingComponent);
+		this.streamingComponent.updateContent(this.streamingMessage);
+		this.ui.requestRender();
+	}
+
+	private onAgentEventMessageUpdate(event: Extract<AgentSessionEvent, { type: "message_update" }>): void {
+		if (!this.streamingComponent || event.message.role !== "assistant") {
+			return;
+		}
+		this.streamingMessage = event.message;
+		this.streamingComponent.updateContent(this.streamingMessage);
+		for (const content of this.streamingMessage.content) {
+			if (content.type !== "toolCall") {
+				continue;
+			}
+			const existing = this.pendingTools.get(content.id);
+			if (!existing) {
+				const component = this.createToolExecutionComponent(content.name, content.id, content.arguments);
+				this.chatContainer.addChild(component);
+				this.pendingTools.set(content.id, component);
+			} else {
+				existing.updateArgs(content.arguments);
+			}
+		}
+		this.ui.requestRender();
+	}
+
+	private onAgentEventMessageEnd(event: Extract<AgentSessionEvent, { type: "message_end" }>): void {
+		if (event.message.role === "user") {
+			return;
+		}
+		if (!this.streamingComponent || event.message.role !== "assistant") {
+			this.ui.requestRender();
+			return;
+		}
+		this.streamingMessage = event.message;
+		let errorMessage: string | undefined;
+		if (this.streamingMessage.stopReason === "aborted") {
+			const retryAttempt = this.session.retryAttempt;
+			errorMessage =
+				retryAttempt > 0
+					? `Aborted after ${retryAttempt} retry attempt${retryAttempt > 1 ? "s" : ""}`
+					: "Operation aborted";
+			this.streamingMessage.errorMessage = errorMessage;
+		}
+		this.streamingComponent.updateContent(this.streamingMessage);
+		if (this.streamingMessage.stopReason === "aborted" || this.streamingMessage.stopReason === "error") {
+			if (!errorMessage) {
+				errorMessage = this.streamingMessage.errorMessage || "Error";
+			}
+			for (const [, component] of this.pendingTools.entries()) {
+				component.updateResult({
+					content: [{ type: "text", text: errorMessage }],
+					isError: true,
+				});
+			}
+			this.pendingTools.clear();
+		} else {
+			for (const [, component] of this.pendingTools.entries()) {
+				component.setArgsComplete();
+			}
+		}
+		this.streamingComponent = undefined;
+		this.streamingMessage = undefined;
+		this.footer.invalidate();
+		this.ui.requestRender();
+	}
+
+	private onAgentEventToolExecutionStart(
+		event: Extract<AgentSessionEvent, { type: "tool_execution_start" }>,
+	): void {
+		let component = this.pendingTools.get(event.toolCallId);
+		if (!component) {
+			component = this.createToolExecutionComponent(event.toolName, event.toolCallId, event.args);
+			this.chatContainer.addChild(component);
+			this.pendingTools.set(event.toolCallId, component);
+		}
+		component.markExecutionStarted();
+		this.ui.requestRender();
+	}
+
+	private async onAgentEventAgentEnd(): Promise<void> {
+		if (this.settingsManager.getShowTerminalProgress()) {
+			this.ui.terminal.setProgress(false);
+		}
+		if (this.loadingAnimation) {
+			this.loadingAnimation.stop();
+			this.loadingAnimation = undefined;
+			this.statusContainer.clear();
+		}
+		if (this.streamingComponent) {
+			this.chatContainer.removeChild(this.streamingComponent);
+			this.streamingComponent = undefined;
+			this.streamingMessage = undefined;
+		}
+		this.pendingTools.clear();
+		await this.checkShutdownRequested();
+		this.ui.requestRender();
+	}
+
+	private onAgentEventCompactionStart(event: Extract<AgentSessionEvent, { type: "compaction_start" }>): void {
+		if (this.settingsManager.getShowTerminalProgress()) {
+			this.ui.terminal.setProgress(true);
+		}
+		this.autoCompactionEscapeHandler = this.defaultEditor.onEscape;
+		this.defaultEditor.onEscape = () => {
+			this.session.abortCompaction();
+		};
+		this.statusContainer.clear();
+		const cancelHint = `(${keyText("app.interrupt")} to cancel)`;
+		const label =
+			event.reason === "manual"
+				? `Compacting context... ${cancelHint}`
+				: `${event.reason === "overflow" ? "Context overflow detected, " : ""}Auto-compacting... ${cancelHint}`;
+		this.autoCompactionLoader = new Loader(
+			this.ui,
+			(spinner) => theme.fg("accent", spinner),
+			(text) => theme.fg("muted", text),
+			label,
+		);
+		this.statusContainer.addChild(this.autoCompactionLoader);
+		this.ui.requestRender();
+	}
+
+	private onAgentEventCompactionEnd(event: Extract<AgentSessionEvent, { type: "compaction_end" }>): void {
+		if (this.settingsManager.getShowTerminalProgress()) {
+			this.ui.terminal.setProgress(false);
+		}
+		if (this.autoCompactionEscapeHandler) {
+			this.defaultEditor.onEscape = this.autoCompactionEscapeHandler;
+			this.autoCompactionEscapeHandler = undefined;
+		}
+		if (this.autoCompactionLoader) {
+			this.autoCompactionLoader.stop();
+			this.autoCompactionLoader = undefined;
+			this.statusContainer.clear();
+		}
+		if (event.aborted) {
+			if (event.reason === "manual") {
+				this.showError("Compaction cancelled");
+			} else {
+				this.showStatus("Auto-compaction cancelled");
+			}
+		} else if (event.result) {
+			this.chatContainer.clear();
+			this.rebuildChatFromMessages();
+			this.addMessageToChat(
+				createCompactionSummaryMessage(event.result.summary, event.result.tokensBefore, new Date().toISOString()),
+			);
+			this.footer.invalidate();
+		} else if (event.errorMessage) {
+			if (event.reason === "manual") {
+				this.showError(event.errorMessage);
+			} else {
+				this.chatContainer.addChild(new Spacer(1));
+				this.chatContainer.addChild(new Text(theme.fg("error", event.errorMessage), 1, 0));
+			}
+		}
+		void this.flushCompactionQueue({ willRetry: event.willRetry });
+		this.ui.requestRender();
+	}
+
+	private onAgentEventAutoRetryStart(event: Extract<AgentSessionEvent, { type: "auto_retry_start" }>): void {
+		this.retryEscapeHandler = this.defaultEditor.onEscape;
+		this.defaultEditor.onEscape = () => {
+			this.session.abortRetry();
+		};
+		this.statusContainer.clear();
+		this.retryCountdown?.dispose();
+		const retryMessage = (seconds: number) =>
+			`Retrying (${event.attempt}/${event.maxAttempts}) in ${seconds}s... (${keyText("app.interrupt")} to cancel)`;
+		this.retryLoader = new Loader(
+			this.ui,
+			(spinner) => theme.fg("warning", spinner),
+			(text) => theme.fg("muted", text),
+			retryMessage(Math.ceil(event.delayMs / 1000)),
+		);
+		this.retryCountdown = new CountdownTimer(
+			event.delayMs,
+			this.ui,
+			(seconds) => {
+				this.retryLoader?.setMessage(retryMessage(seconds));
+			},
+			() => {
+				this.retryCountdown = undefined;
+			},
+		);
+		this.statusContainer.addChild(this.retryLoader);
+		this.ui.requestRender();
+	}
+
+	private onAgentEventAutoRetryEnd(event: Extract<AgentSessionEvent, { type: "auto_retry_end" }>): void {
+		if (this.retryEscapeHandler) {
+			this.defaultEditor.onEscape = this.retryEscapeHandler;
+			this.retryEscapeHandler = undefined;
+		}
+		if (this.retryCountdown) {
+			this.retryCountdown.dispose();
+			this.retryCountdown = undefined;
+		}
+		if (this.retryLoader) {
+			this.retryLoader.stop();
+			this.retryLoader = undefined;
+			this.statusContainer.clear();
+		}
+		if (!event.success) {
+			this.showError(`Retry failed after ${event.attempt} attempts: ${event.finalError || "Unknown error"}`);
+		}
+		this.ui.requestRender();
+	}
+
 	private async handleEvent(event: AgentSessionEvent): Promise<void> {
 		if (!this.isInitialized) {
 			await this.init();
@@ -2747,168 +2973,33 @@ export class InteractiveMode {
 
 		switch (event.type) {
 			case "agent_start":
-				this.pendingTools.clear();
-				if (this.settingsManager.getShowTerminalProgress()) {
-					this.ui.terminal.setProgress(true);
-				}
-				// Restore main escape handler if retry handler is still active
-				// (retry success event fires later, but we need main handler now)
-				if (this.retryEscapeHandler) {
-					this.defaultEditor.onEscape = this.retryEscapeHandler;
-					this.retryEscapeHandler = undefined;
-				}
-				if (this.retryCountdown) {
-					this.retryCountdown.dispose();
-					this.retryCountdown = undefined;
-				}
-				if (this.retryLoader) {
-					this.retryLoader.stop();
-					this.retryLoader = undefined;
-				}
-				this.stopWorkingLoader();
-				if (this.workingVisible) {
-					this.loadingAnimation = this.createWorkingLoader();
-					this.statusContainer.addChild(this.loadingAnimation);
-				}
-				this.ui.requestRender();
+				this.onAgentEventAgentStart();
 				break;
-
 			case "queue_update":
 				this.updatePendingMessagesDisplay();
 				this.ui.requestRender();
 				break;
-
 			case "session_info_changed":
 				this.updateTerminalTitle();
 				this.footer.invalidate();
 				this.ui.requestRender();
 				break;
-
 			case "thinking_level_changed":
 				this.footer.invalidate();
 				this.updateEditorBorderColor();
 				break;
-
 			case "message_start":
-				if (event.message.role === "custom") {
-					this.addMessageToChat(event.message);
-					this.ui.requestRender();
-				} else if (event.message.role === "user") {
-					this.addMessageToChat(event.message);
-					this.updatePendingMessagesDisplay();
-					this.ui.requestRender();
-				} else if (event.message.role === "assistant") {
-					this.streamingComponent = new AssistantMessageComponent(
-						undefined,
-						this.hideThinkingBlock,
-						this.getMarkdownThemeWithSettings(),
-						this.hiddenThinkingLabel,
-					);
-					this.streamingMessage = event.message;
-					this.chatContainer.addChild(this.streamingComponent);
-					this.streamingComponent.updateContent(this.streamingMessage);
-					this.ui.requestRender();
-				}
+				this.onAgentEventMessageStart(event);
 				break;
-
 			case "message_update":
-				if (this.streamingComponent && event.message.role === "assistant") {
-					this.streamingMessage = event.message;
-					this.streamingComponent.updateContent(this.streamingMessage);
-
-					for (const content of this.streamingMessage.content) {
-						if (content.type === "toolCall") {
-							if (!this.pendingTools.has(content.id)) {
-								const component = new ToolExecutionComponent(
-									content.name,
-									content.id,
-									content.arguments,
-									{
-										showImages: this.settingsManager.getShowImages(),
-										imageWidthCells: this.settingsManager.getImageWidthCells(),
-									},
-									this.getRegisteredToolDefinition(content.name),
-									this.ui,
-									this.sessionManager.getCwd(),
-								);
-								component.setExpanded(this.toolOutputExpanded);
-								this.chatContainer.addChild(component);
-								this.pendingTools.set(content.id, component);
-							} else {
-								const component = this.pendingTools.get(content.id);
-								if (component) {
-									component.updateArgs(content.arguments);
-								}
-							}
-						}
-					}
-					this.ui.requestRender();
-				}
+				this.onAgentEventMessageUpdate(event);
 				break;
-
 			case "message_end":
-				if (event.message.role === "user") break;
-				if (this.streamingComponent && event.message.role === "assistant") {
-					this.streamingMessage = event.message;
-					let errorMessage: string | undefined;
-					if (this.streamingMessage.stopReason === "aborted") {
-						const retryAttempt = this.session.retryAttempt;
-						errorMessage =
-							retryAttempt > 0
-								? `Aborted after ${retryAttempt} retry attempt${retryAttempt > 1 ? "s" : ""}`
-								: "Operation aborted";
-						this.streamingMessage.errorMessage = errorMessage;
-					}
-					this.streamingComponent.updateContent(this.streamingMessage);
-
-					if (this.streamingMessage.stopReason === "aborted" || this.streamingMessage.stopReason === "error") {
-						if (!errorMessage) {
-							errorMessage = this.streamingMessage.errorMessage || "Error";
-						}
-						for (const [, component] of this.pendingTools.entries()) {
-							component.updateResult({
-								content: [{ type: "text", text: errorMessage }],
-								isError: true,
-							});
-						}
-						this.pendingTools.clear();
-					} else {
-						// Args are now complete - trigger diff computation for edit tools
-						for (const [, component] of this.pendingTools.entries()) {
-							component.setArgsComplete();
-						}
-					}
-					this.streamingComponent = undefined;
-					this.streamingMessage = undefined;
-					this.footer.invalidate();
-				}
-				this.ui.requestRender();
+				this.onAgentEventMessageEnd(event);
 				break;
-
-			case "tool_execution_start": {
-				let component = this.pendingTools.get(event.toolCallId);
-				if (!component) {
-					component = new ToolExecutionComponent(
-						event.toolName,
-						event.toolCallId,
-						event.args,
-						{
-							showImages: this.settingsManager.getShowImages(),
-							imageWidthCells: this.settingsManager.getImageWidthCells(),
-						},
-						this.getRegisteredToolDefinition(event.toolName),
-						this.ui,
-						this.sessionManager.getCwd(),
-					);
-					component.setExpanded(this.toolOutputExpanded);
-					this.chatContainer.addChild(component);
-					this.pendingTools.set(event.toolCallId, component);
-				}
-				component.markExecutionStarted();
-				this.ui.requestRender();
+			case "tool_execution_start":
+				this.onAgentEventToolExecutionStart(event);
 				break;
-			}
-
 			case "tool_execution_update": {
 				const component = this.pendingTools.get(event.toolCallId);
 				if (component) {
@@ -2917,7 +3008,6 @@ export class InteractiveMode {
 				}
 				break;
 			}
-
 			case "tool_execution_end": {
 				const component = this.pendingTools.get(event.toolCallId);
 				if (component) {
@@ -2927,152 +3017,21 @@ export class InteractiveMode {
 				}
 				break;
 			}
-
 			case "agent_end":
-				if (this.settingsManager.getShowTerminalProgress()) {
-					this.ui.terminal.setProgress(false);
-				}
-				if (this.loadingAnimation) {
-					this.loadingAnimation.stop();
-					this.loadingAnimation = undefined;
-					this.statusContainer.clear();
-				}
-				if (this.streamingComponent) {
-					this.chatContainer.removeChild(this.streamingComponent);
-					this.streamingComponent = undefined;
-					this.streamingMessage = undefined;
-				}
-				this.pendingTools.clear();
-
-				await this.checkShutdownRequested();
-
-				this.ui.requestRender();
+				await this.onAgentEventAgentEnd();
 				break;
-
-			case "compaction_start": {
-				if (this.settingsManager.getShowTerminalProgress()) {
-					this.ui.terminal.setProgress(true);
-				}
-				// Keep editor active; submissions are queued during compaction.
-				this.autoCompactionEscapeHandler = this.defaultEditor.onEscape;
-				this.defaultEditor.onEscape = () => {
-					this.session.abortCompaction();
-				};
-				this.statusContainer.clear();
-				const cancelHint = `(${keyText("app.interrupt")} to cancel)`;
-				const label =
-					event.reason === "manual"
-						? `Compacting context... ${cancelHint}`
-						: `${event.reason === "overflow" ? "Context overflow detected, " : ""}Auto-compacting... ${cancelHint}`;
-				this.autoCompactionLoader = new Loader(
-					this.ui,
-					(spinner) => theme.fg("accent", spinner),
-					(text) => theme.fg("muted", text),
-					label,
-				);
-				this.statusContainer.addChild(this.autoCompactionLoader);
-				this.ui.requestRender();
+			case "compaction_start":
+				this.onAgentEventCompactionStart(event);
 				break;
-			}
-
-			case "compaction_end": {
-				if (this.settingsManager.getShowTerminalProgress()) {
-					this.ui.terminal.setProgress(false);
-				}
-				if (this.autoCompactionEscapeHandler) {
-					this.defaultEditor.onEscape = this.autoCompactionEscapeHandler;
-					this.autoCompactionEscapeHandler = undefined;
-				}
-				if (this.autoCompactionLoader) {
-					this.autoCompactionLoader.stop();
-					this.autoCompactionLoader = undefined;
-					this.statusContainer.clear();
-				}
-				if (event.aborted) {
-					if (event.reason === "manual") {
-						this.showError("Compaction cancelled");
-					} else {
-						this.showStatus("Auto-compaction cancelled");
-					}
-				} else if (event.result) {
-					this.chatContainer.clear();
-					this.rebuildChatFromMessages();
-					this.addMessageToChat(
-						createCompactionSummaryMessage(
-							event.result.summary,
-							event.result.tokensBefore,
-							new Date().toISOString(),
-						),
-					);
-					this.footer.invalidate();
-				} else if (event.errorMessage) {
-					if (event.reason === "manual") {
-						this.showError(event.errorMessage);
-					} else {
-						this.chatContainer.addChild(new Spacer(1));
-						this.chatContainer.addChild(new Text(theme.fg("error", event.errorMessage), 1, 0));
-					}
-				}
-				void this.flushCompactionQueue({ willRetry: event.willRetry });
-				this.ui.requestRender();
+			case "compaction_end":
+				this.onAgentEventCompactionEnd(event);
 				break;
-			}
-
-			case "auto_retry_start": {
-				// Set up escape to abort retry
-				this.retryEscapeHandler = this.defaultEditor.onEscape;
-				this.defaultEditor.onEscape = () => {
-					this.session.abortRetry();
-				};
-				// Show retry indicator
-				this.statusContainer.clear();
-				this.retryCountdown?.dispose();
-				const retryMessage = (seconds: number) =>
-					`Retrying (${event.attempt}/${event.maxAttempts}) in ${seconds}s... (${keyText("app.interrupt")} to cancel)`;
-				this.retryLoader = new Loader(
-					this.ui,
-					(spinner) => theme.fg("warning", spinner),
-					(text) => theme.fg("muted", text),
-					retryMessage(Math.ceil(event.delayMs / 1000)),
-				);
-				this.retryCountdown = new CountdownTimer(
-					event.delayMs,
-					this.ui,
-					(seconds) => {
-						this.retryLoader?.setMessage(retryMessage(seconds));
-					},
-					() => {
-						this.retryCountdown = undefined;
-					},
-				);
-				this.statusContainer.addChild(this.retryLoader);
-				this.ui.requestRender();
+			case "auto_retry_start":
+				this.onAgentEventAutoRetryStart(event);
 				break;
-			}
-
-			case "auto_retry_end": {
-				// Restore escape handler
-				if (this.retryEscapeHandler) {
-					this.defaultEditor.onEscape = this.retryEscapeHandler;
-					this.retryEscapeHandler = undefined;
-				}
-				if (this.retryCountdown) {
-					this.retryCountdown.dispose();
-					this.retryCountdown = undefined;
-				}
-				// Stop loader
-				if (this.retryLoader) {
-					this.retryLoader.stop();
-					this.retryLoader = undefined;
-					this.statusContainer.clear();
-				}
-				// Show error only on final failure (success shows normal response)
-				if (!event.success) {
-					this.showError(`Retry failed after ${event.attempt} attempts: ${event.finalError || "Unknown error"}`);
-				}
-				this.ui.requestRender();
+			case "auto_retry_end":
+				this.onAgentEventAutoRetryEnd(event);
 				break;
-			}
 		}
 	}
 
@@ -3112,22 +3071,52 @@ export class InteractiveMode {
 		this.ui.requestRender();
 	}
 
+	private addBashExecutionMessageToChat(message: Extract<AgentMessage, { role: "bashExecution" }>): void {
+		const component = new BashExecutionComponent(message.command, this.ui, message.excludeFromContext);
+		if (message.output) {
+			component.appendOutput(message.output);
+		}
+		component.setComplete(
+			message.exitCode,
+			message.cancelled,
+			message.truncated ? ({ truncated: true } as TruncationResult) : undefined,
+			message.fullOutputPath,
+		);
+		this.chatContainer.addChild(component);
+	}
+
+	private addUserMessageToChat(message: Extract<AgentMessage, { role: "user" }>, populateHistory?: boolean): void {
+		const textContent = this.getUserMessageText(message);
+		if (!textContent) {
+			return;
+		}
+		if (this.chatContainer.children.length > 0) {
+			this.chatContainer.addChild(new Spacer(1));
+		}
+		const skillBlock = parseSkillBlock(textContent);
+		if (skillBlock) {
+			const component = new SkillInvocationMessageComponent(skillBlock, this.getMarkdownThemeWithSettings());
+			component.setExpanded(this.toolOutputExpanded);
+			this.chatContainer.addChild(component);
+			if (skillBlock.userMessage) {
+				this.chatContainer.addChild(new Spacer(1));
+				const userComponent = new UserMessageComponent(skillBlock.userMessage, this.getMarkdownThemeWithSettings());
+				this.chatContainer.addChild(userComponent);
+			}
+		} else {
+			const userComponent = new UserMessageComponent(textContent, this.getMarkdownThemeWithSettings());
+			this.chatContainer.addChild(userComponent);
+		}
+		if (populateHistory) {
+			this.editor.addToHistory?.(textContent);
+		}
+	}
+
 	private addMessageToChat(message: AgentMessage, options?: { populateHistory?: boolean }): void {
 		switch (message.role) {
-			case "bashExecution": {
-				const component = new BashExecutionComponent(message.command, this.ui, message.excludeFromContext);
-				if (message.output) {
-					component.appendOutput(message.output);
-				}
-				component.setComplete(
-					message.exitCode,
-					message.cancelled,
-					message.truncated ? ({ truncated: true } as TruncationResult) : undefined,
-					message.fullOutputPath,
-				);
-				this.chatContainer.addChild(component);
+			case "bashExecution":
+				this.addBashExecutionMessageToChat(message);
 				break;
-			}
 			case "custom": {
 				if (message.display) {
 					const renderer = this.session.extensionRunner.getMessageRenderer(message.customType);
@@ -3151,40 +3140,9 @@ export class InteractiveMode {
 				this.chatContainer.addChild(component);
 				break;
 			}
-			case "user": {
-				const textContent = this.getUserMessageText(message);
-				if (textContent) {
-					if (this.chatContainer.children.length > 0) {
-						this.chatContainer.addChild(new Spacer(1));
-					}
-					const skillBlock = parseSkillBlock(textContent);
-					if (skillBlock) {
-						// Render skill block (collapsible)
-						const component = new SkillInvocationMessageComponent(
-							skillBlock,
-							this.getMarkdownThemeWithSettings(),
-						);
-						component.setExpanded(this.toolOutputExpanded);
-						this.chatContainer.addChild(component);
-						// Render user message separately if present
-						if (skillBlock.userMessage) {
-							this.chatContainer.addChild(new Spacer(1));
-							const userComponent = new UserMessageComponent(
-								skillBlock.userMessage,
-								this.getMarkdownThemeWithSettings(),
-							);
-							this.chatContainer.addChild(userComponent);
-						}
-					} else {
-						const userComponent = new UserMessageComponent(textContent, this.getMarkdownThemeWithSettings());
-						this.chatContainer.addChild(userComponent);
-					}
-					if (options?.populateHistory) {
-						this.editor.addToHistory?.(textContent);
-					}
-				}
+			case "user":
+				this.addUserMessageToChat(message, options?.populateHistory);
 				break;
-			}
 			case "assistant": {
 				const assistantComponent = new AssistantMessageComponent(
 					message,
@@ -3195,10 +3153,8 @@ export class InteractiveMode {
 				this.chatContainer.addChild(assistantComponent);
 				break;
 			}
-			case "toolResult": {
-				// Tool results are rendered inline with tool calls, handled separately
+			case "toolResult":
 				break;
-			}
 			default: {
 				const _exhaustive: never = message;
 			}

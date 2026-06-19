@@ -12,17 +12,12 @@ import { type Args, type Mode, parseArgs, printHelp } from "./cli/args.ts";
 import { processFileArguments } from "./cli/file-processor.ts";
 import { buildInitialMessage } from "./cli/initial-message.ts";
 import { listModels } from "./cli/list-models.ts";
-import { createProjectTrustContext } from "./cli/project-trust.ts";
+
 import { selectSession } from "./cli/session-picker.ts";
 import { shouldRunFirstTimeSetup, showFirstTimeSetup, showStartupSelector } from "./cli/startup-ui.ts";
 import { ENV_SESSION_DIR, expandTildePath, getAgentDir, getPackageDir, VERSION } from "./config.ts";
-import { type CreateAgentSessionRuntimeFactory, createAgentSessionRuntime } from "./core/agent-session-runtime.ts";
-import {
-	type AgentSessionRuntimeDiagnostic,
-	type AgentSessionServices,
-	createAgentSessionFromServices,
-	createAgentSessionServices,
-} from "./core/agent-session-services.ts";
+import { createAgentSessionRuntime } from "./core/agent-session-runtime.ts";
+import type { AgentSessionRuntimeDiagnostic } from "./core/agent-session-services.ts";
 import { formatNoModelsAvailableMessage } from "./core/auth-guidance.ts";
 import { AuthStorage } from "./core/auth-storage.ts";
 import { exportFromFile } from "./core/export-html/index.ts";
@@ -31,9 +26,9 @@ import { configureHttpDispatcher } from "./core/http-dispatcher.ts";
 import type { ModelRegistry } from "./core/model-registry.ts";
 import { resolveCliModel, resolveModelScope, type ScopedModel } from "./core/model-resolver.ts";
 import { restoreStdout, takeOverStdout } from "./core/output-guard.ts";
-import { type AppMode, resolveProjectTrusted } from "./core/project-trust.ts";
-import type { ResourceLoader } from "./core/resource-loader.ts";
+import type { AppMode } from "./core/project-trust.ts";
 import type { CreateAgentSessionOptions } from "./core/sdk.ts";
+import { buildCreateRuntime, type RuntimeFactoryContext } from "./main-runtime-factory.ts";
 import {
 	formatMissingSessionCwdPrompt,
 	getMissingSessionCwdIssue,
@@ -612,175 +607,6 @@ export async function main(args: string[], options?: MainOptions) {
 	}
 	time("createSessionManager");
 
-	function buildSessionDiagnostics(
-		services: AgentSessionServices,
-		settingsManager: SettingsManager,
-		resourceLoader: ResourceLoader,
-		projectTrustDiagnostics: AgentSessionRuntimeDiagnostic[],
-	): AgentSessionRuntimeDiagnostic[] {
-		return [
-			...projectTrustDiagnostics,
-			...services.diagnostics,
-			...collectSettingsDiagnostics(settingsManager, "runtime creation"),
-			...resourceLoader.getExtensions().errors.map(({ path, error }: { path: string; error: unknown }) => ({
-				type: "error" as const,
-				message: `Failed to load extension "${path}": ${String(error)}`,
-			})),
-		];
-	}
-
-	function applyRuntimeApiKey(
-		parsed: Args,
-		sessionOptions: CreateAgentSessionOptions,
-		authStorage: AuthStorage,
-		diagnostics: AgentSessionRuntimeDiagnostic[],
-	): void {
-		if (parsed.apiKey === undefined) return;
-		if (!sessionOptions.model) {
-			diagnostics.push({
-				type: "error",
-				message: "--api-key requires a model to be specified via --model, --provider/--model, or --models",
-			});
-			return;
-		}
-		authStorage.setRuntimeApiKey(sessionOptions.model.provider, parsed.apiKey);
-	}
-
-	function buildSessionAndApplyThinking(
-		created: Awaited<ReturnType<typeof createAgentSessionFromServices>>,
-		parsed: Args,
-		cliThinkingFromModel: boolean,
-	): void {
-		const cliThinkingOverride = parsed.thinking !== undefined || cliThinkingFromModel;
-		if (created.session.model && cliThinkingOverride) {
-			created.session.setThinkingLevel(created.session.thinkingLevel);
-		}
-	}
-
-	async function buildCreateRuntime(context: RuntimeFactoryContext): Promise<CreateAgentSessionRuntimeFactory> {
-		return async ({ cwd: runtimeCwd, agentDir, sessionManager, sessionStartEvent, projectTrustContext }) => {
-			const isInitialRuntime = sessionStartEvent === undefined;
-			const projectTrustDiagnostics: AgentSessionRuntimeDiagnostic[] = [];
-			const cachedProjectTrust = context.projectTrustByCwd.get(runtimeCwd);
-			const hasTrustRequiringResources = hasTrustRequiringProjectResources(runtimeCwd);
-			const shouldResolveProjectTrust =
-				context.parsed.projectTrustOverride === undefined &&
-				cachedProjectTrust === undefined &&
-				hasTrustRequiringResources;
-			const projectTrusted = shouldResolveProjectTrust
-				? false
-				: (cachedProjectTrust ??
-					context.parsed.projectTrustOverride ??
-					(!hasTrustRequiringResources || context.trustStore.get(runtimeCwd) === true));
-			const runtimeSettingsManager = SettingsManager.create(runtimeCwd, agentDir, { projectTrusted });
-			const services = await createAgentSessionServices({
-				cwd: runtimeCwd,
-				agentDir,
-				authStorage: context.authStorage,
-				settingsManager: runtimeSettingsManager,
-				extensionFlagValues: context.parsed.unknownFlags,
-				resourceLoaderReloadOptions: shouldResolveProjectTrust
-					? {
-							resolveProjectTrust: async ({ extensionsResult }) => {
-								const trusted = await resolveProjectTrusted({
-									cwd: runtimeCwd,
-									trustStore: context.trustStore,
-									trustOverride: context.parsed.projectTrustOverride,
-									defaultProjectTrust: context.startupSettingsManager.getDefaultProjectTrust(),
-									extensionsResult,
-									projectTrustContext:
-										projectTrustContext ??
-										createProjectTrustContext({
-											cwd: runtimeCwd,
-											mode: isInitialRuntime ? context.trustPromptMode : context.appMode,
-											settingsManager: context.startupSettingsManager,
-											hasUI: isInitialRuntime && context.trustPromptMode === "interactive",
-										}),
-									onExtensionError: (message) => projectTrustDiagnostics.push({ type: "warning", message }),
-								});
-								context.projectTrustByCwd.set(runtimeCwd, trusted);
-								return trusted;
-							},
-						}
-					: undefined,
-				resourceLoaderOptions: {
-					additionalExtensionPaths: context.resolvedExtensionPaths,
-					additionalSkillPaths: context.resolvedSkillPaths,
-					additionalPromptTemplatePaths: context.resolvedPromptTemplatePaths,
-					additionalThemePaths: context.resolvedThemePaths,
-					noExtensions: context.parsed.noExtensions,
-					noSkills: context.parsed.noSkills,
-					noPromptTemplates: context.parsed.noPromptTemplates,
-					noThemes: context.parsed.noThemes,
-					noContextFiles: context.parsed.noContextFiles,
-					systemPrompt: context.parsed.systemPrompt,
-					appendSystemPrompt: context.parsed.appendSystemPrompt,
-					extensionFactories: context.extensionFactories,
-				},
-			});
-			const { settingsManager, modelRegistry, resourceLoader } = services;
-			const diagnostics = buildSessionDiagnostics(
-				services,
-				settingsManager,
-				resourceLoader,
-				projectTrustDiagnostics,
-			);
-
-			const modelPatterns = context.parsed.models ?? settingsManager.getEnabledModels();
-			const scopedModels =
-				modelPatterns && modelPatterns.length > 0 ? await resolveModelScope(modelPatterns, modelRegistry) : [];
-			const {
-				options: sessionOptions,
-				cliThinkingFromModel,
-				diagnostics: sessionOptionDiagnostics,
-			} = buildSessionOptions(
-				context.parsed,
-				scopedModels,
-				sessionManager.buildSessionContext().messages.length > 0,
-				modelRegistry,
-				settingsManager,
-			);
-			diagnostics.push(...sessionOptionDiagnostics);
-
-			applyRuntimeApiKey(context.parsed, sessionOptions, context.authStorage, diagnostics);
-
-			const created = await createAgentSessionFromServices({
-				services,
-				sessionManager,
-				sessionStartEvent,
-				model: sessionOptions.model,
-				thinkingLevel: sessionOptions.thinkingLevel,
-				scopedModels: sessionOptions.scopedModels,
-				tools: sessionOptions.tools,
-				excludeTools: sessionOptions.excludeTools,
-				noTools: sessionOptions.noTools,
-				customTools: sessionOptions.customTools,
-			});
-			buildSessionAndApplyThinking(created, context.parsed, cliThinkingFromModel);
-
-			return {
-				...created,
-				services,
-				diagnostics,
-			};
-		};
-	}
-
-	interface RuntimeFactoryContext {
-		parsed: Args;
-		trustStore: ProjectTrustStore;
-		trustPromptMode: AppMode;
-		appMode: AppMode;
-		projectTrustByCwd: Map<string, boolean>;
-		resolvedExtensionPaths: string[];
-		resolvedSkillPaths: string[];
-		resolvedPromptTemplatePaths: string[];
-		resolvedThemePaths: string[];
-		authStorage: AuthStorage;
-		startupSettingsManager: SettingsManager;
-		extensionFactories: ExtensionFactory[] | undefined;
-	}
-
 	const trustStore = new ProjectTrustStore(agentDir);
 	const sessionCwd = sessionManager.getCwd();
 	const autoTrustOnReloadCwd =
@@ -795,7 +621,7 @@ export async function main(args: string[], options?: MainOptions) {
 	const resolvedPromptTemplatePaths = resolveCliPaths(cwd, parsed.promptTemplates) ?? [];
 	const resolvedThemePaths = resolveCliPaths(cwd, parsed.themes) ?? [];
 	const authStorage = AuthStorage.create();
-	const createRuntime = await buildCreateRuntime({
+	const factoryContext: RuntimeFactoryContext = {
 		parsed,
 		trustStore,
 		trustPromptMode,
@@ -808,7 +634,9 @@ export async function main(args: string[], options?: MainOptions) {
 		authStorage,
 		startupSettingsManager,
 		extensionFactories: options?.extensionFactories,
-	});
+		buildSessionOptions,
+	};
+	const createRuntime = await buildCreateRuntime(factoryContext, collectSettingsDiagnostics);
 	time("createRuntime");
 	const runtime = await createAgentSessionRuntime(createRuntime, {
 		cwd: sessionManager.getCwd(),

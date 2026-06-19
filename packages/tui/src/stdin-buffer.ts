@@ -189,6 +189,15 @@ function parseUnmodifiedKittyPrintableCodepoint(sequence: string): number | unde
 	return codepoint >= 32 ? codepoint : undefined;
 }
 
+function tryEmitSplitEscEsc(remaining: string, seqEnd: number): { emit: string; advance: number } | null {
+	if (remaining.slice(0, seqEnd) !== "\x1b\x1b") return null;
+	const nextChar = remaining[seqEnd];
+	if (nextChar !== "[" && nextChar !== "]" && nextChar !== "O" && nextChar !== "P" && nextChar !== "_") {
+		return null;
+	}
+	return { emit: ESC, advance: 1 };
+}
+
 function extractCompleteSequences(buffer: string): { sequences: string[]; remainder: string } {
 	const sequences: string[] = [];
 	let pos = 0;
@@ -214,19 +223,11 @@ function extractCompleteSequences(buffer: string): { sequences: string[]; remain
 					// plain text. If the character immediately following '\x1b\x1b'
 					// would begin a new escape sequence, emit only the first ESC and
 					// restart from the second.
-					if (candidate === "\x1b\x1b") {
-						const nextChar = remaining[seqEnd];
-						if (
-							nextChar === "[" || // CSI
-							nextChar === "]" || // OSC
-							nextChar === "O" || // SS3
-							nextChar === "P" || // DCS
-							nextChar === "_" // APC
-						) {
-							sequences.push(ESC);
-							pos += 1;
-							break;
-						}
+					const splitEsc = tryEmitSplitEscEsc(remaining, seqEnd);
+					if (splitEsc) {
+						sequences.push(splitEsc.emit);
+						pos += splitEsc.advance;
+						break;
 					}
 					sequences.push(candidate);
 					pos += seqEnd;
@@ -284,26 +285,36 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 		this.timeoutMs = options.timeout ?? 10;
 	}
 
+	private decodeIncomingChunk(data: string | Buffer): string {
+		if (Buffer.isBuffer(data)) {
+			if (data.length === 1 && data[0]! > 127) {
+				const byte = data[0]! - 128;
+				return `\x1b${String.fromCodePoint(byte)}`;
+			}
+			return data.toString();
+		}
+		return data;
+	}
+
+	private finishBracketedPaste(endIndex: number): void {
+		const pastedContent = this.pasteBuffer.slice(0, endIndex);
+		const remaining = this.pasteBuffer.slice(endIndex + BRACKETED_PASTE_END.length);
+		this.pasteMode = false;
+		this.pasteBuffer = "";
+		this.pendingKittyPrintableCodepoint = undefined;
+		this.emit("paste", pastedContent);
+		if (remaining.length > 0) {
+			this.process(remaining);
+		}
+	}
+
 	public process(data: string | Buffer): void {
-		// Clear any pending timeout
 		if (this.timeout) {
 			clearTimeout(this.timeout);
 			this.timeout = null;
 		}
 
-		// Handle high-byte conversion (for compatibility with parseKeypress)
-		// If buffer has single byte > 127, convert to ESC + (byte - 128)
-		let str: string;
-		if (Buffer.isBuffer(data)) {
-			if (data.length === 1 && data[0]! > 127) {
-				const byte = data[0]! - 128;
-				str = `\x1b${String.fromCodePoint(byte)}`;
-			} else {
-				str = data.toString();
-			}
-		} else {
-			str = data;
-		}
+		const str = this.decodeIncomingChunk(data);
 
 		if (str.length === 0 && this.buffer.length === 0) {
 			this.emitDataSequence("");
@@ -318,18 +329,7 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 
 			const endIndex = this.pasteBuffer.indexOf(BRACKETED_PASTE_END);
 			if (endIndex !== -1) {
-				const pastedContent = this.pasteBuffer.slice(0, endIndex);
-				const remaining = this.pasteBuffer.slice(endIndex + BRACKETED_PASTE_END.length);
-
-				this.pasteMode = false;
-				this.pasteBuffer = "";
-				this.pendingKittyPrintableCodepoint = undefined;
-
-				this.emit("paste", pastedContent);
-
-				if (remaining.length > 0) {
-					this.process(remaining);
-				}
+				this.finishBracketedPaste(endIndex);
 			}
 			return;
 		}
@@ -352,18 +352,7 @@ export class StdinBuffer extends EventEmitter<StdinBufferEventMap> {
 
 			const endIndex = this.pasteBuffer.indexOf(BRACKETED_PASTE_END);
 			if (endIndex !== -1) {
-				const pastedContent = this.pasteBuffer.slice(0, endIndex);
-				const remaining = this.pasteBuffer.slice(endIndex + BRACKETED_PASTE_END.length);
-
-				this.pasteMode = false;
-				this.pasteBuffer = "";
-				this.pendingKittyPrintableCodepoint = undefined;
-
-				this.emit("paste", pastedContent);
-
-				if (remaining.length > 0) {
-					this.process(remaining);
-				}
+				this.finishBracketedPaste(endIndex);
 			}
 			return;
 		}

@@ -621,45 +621,79 @@ function buildParams(
 		params.tool_choice = options.toolChoice;
 	}
 
-	if (compat.thinkingFormat === "zai" && model.reasoning) {
-		applyZaiThinking(params, options);
-	} else if (compat.thinkingFormat === "qwen" && model.reasoning) {
-		applyQwenThinking(params, options);
-	} else if (compat.thinkingFormat === "qwen-chat-template" && model.reasoning) {
-		applyQwenChatTemplateThinking(params, options);
-	} else if (compat.thinkingFormat === "deepseek" && model.reasoning) {
-		applyDeepseekThinking(params, model, compat, options);
-	} else if (compat.thinkingFormat === "openrouter" && model.reasoning) {
-		applyOpenRouterThinking(params, model, options);
-	} else if (compat.thinkingFormat === "ant-ling" && model.reasoning && options?.reasoningEffort) {
-		applyAntLingThinking(params, model, options);
-	} else if (compat.thinkingFormat === "together" && model.reasoning) {
-		applyTogetherThinking(params, model, compat, options);
-	} else if (compat.thinkingFormat === "string-thinking" && model.reasoning) {
-		applyStringThinking(params, model, options);
-	} else if (options?.reasoningEffort && model.reasoning && compat.supportsReasoningEffort) {
-		applyOpenAIReasoningEffort(params, model, options);
-	} else if (!options?.reasoningEffort && model.reasoning && compat.supportsReasoningEffort) {
-		applyOpenAIReasoningOff(params, model);
-	}
-
-	// OpenRouter provider routing preferences
-	if (model.compat?.openRouterRouting) {
-		(params as any).provider = model.compat.openRouterRouting;
-	}
-
-	// Vercel AI Gateway provider routing preferences
-	if (model.baseUrl.includes("ai-gateway.vercel.sh") && model.compat?.vercelGatewayRouting) {
-		const routing = model.compat.vercelGatewayRouting;
-		if (routing.only || routing.order) {
-			const gatewayOptions: Record<string, string[]> = {};
-			if (routing.only) gatewayOptions.only = routing.only;
-			if (routing.order) gatewayOptions.order = routing.order;
-			(params as any).providerOptions = { gateway: gatewayOptions };
-		}
-	}
+	applyCompletionsThinkingFormat(params, model, compat, options);
+	applyCompletionsProviderRouting(params, model);
 
 	return params;
+}
+
+function applyCompletionsProviderRouting(
+	params: OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming,
+	model: Model<"openai-completions">,
+): void {
+	if (model.compat?.openRouterRouting) {
+		(params as { provider?: unknown }).provider = model.compat.openRouterRouting;
+	}
+	if (!model.baseUrl.includes("ai-gateway.vercel.sh") || !model.compat?.vercelGatewayRouting) {
+		return;
+	}
+	const routing = model.compat.vercelGatewayRouting;
+	if (!routing.only && !routing.order) return;
+	const gatewayOptions: Record<string, string[]> = {};
+	if (routing.only) gatewayOptions.only = routing.only;
+	if (routing.order) gatewayOptions.order = routing.order;
+	(params as { providerOptions?: { gateway: Record<string, string[]> } }).providerOptions = {
+		gateway: gatewayOptions,
+	};
+}
+
+function applyCompletionsThinkingFormat(
+	params: OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming,
+	model: Model<"openai-completions">,
+	compat: ResolvedOpenAICompletionsCompat,
+	options?: OpenAICompletionsOptions,
+): void {
+	if (!model.reasoning) return;
+
+	const format = compat.thinkingFormat;
+	if (format === "zai") {
+		applyZaiThinking(params, options);
+		return;
+	}
+	if (format === "qwen") {
+		applyQwenThinking(params, options);
+		return;
+	}
+	if (format === "qwen-chat-template") {
+		applyQwenChatTemplateThinking(params, options);
+		return;
+	}
+	if (format === "deepseek") {
+		applyDeepseekThinking(params, model, compat, options);
+		return;
+	}
+	if (format === "openrouter") {
+		applyOpenRouterThinking(params, model, options);
+		return;
+	}
+	if (format === "ant-ling" && options?.reasoningEffort) {
+		applyAntLingThinking(params, model, options);
+		return;
+	}
+	if (format === "together") {
+		applyTogetherThinking(params, model, compat, options);
+		return;
+	}
+	if (format === "string-thinking") {
+		applyStringThinking(params, model, options);
+		return;
+	}
+	if (!compat.supportsReasoningEffort) return;
+	if (options?.reasoningEffort) {
+		applyOpenAIReasoningEffort(params, model, options);
+	} else {
+		applyOpenAIReasoningOff(params, model);
+	}
 }
 
 /**
@@ -1343,12 +1377,22 @@ function mapStopReason(reason: ChatCompletionChunk.Choice["finish_reason"] | str
 	}
 }
 
-/**
- * Detect compatibility settings from provider and baseUrl for known providers.
- * Provider takes precedence over URL-based detection since it's explicitly configured.
- * Returns a fully resolved OpenAICompletionsCompat object with all fields set.
- */
-function detectCompat(model: Model<"openai-completions">): ResolvedOpenAICompletionsCompat {
+interface CompletionsProviderFlags {
+	isZai: boolean;
+	isTogether: boolean;
+	isMoonshot: boolean;
+	isOpenRouter: boolean;
+	isCloudflareWorkersAI: boolean;
+	isCloudflareAiGateway: boolean;
+	isNvidia: boolean;
+	isAntLing: boolean;
+	isNonStandard: boolean;
+	useMaxTokens: boolean;
+	isGrok: boolean;
+	isDeepSeek: boolean;
+}
+
+function detectCompletionsProviderFlags(model: Model<"openai-completions">): CompletionsProviderFlags {
 	const provider = model.provider;
 	const baseUrl = model.baseUrl;
 
@@ -1385,47 +1429,78 @@ function detectCompat(model: Model<"openai-completions">): ResolvedOpenAIComplet
 
 	const useMaxTokens =
 		baseUrl.includes("chutes.ai") || isMoonshot || isCloudflareAiGateway || isTogether || isNvidia || isAntLing;
-
 	const isGrok = provider === "xai" || baseUrl.includes("api.x.ai");
 	const isDeepSeek = provider === "deepseek" || baseUrl.includes("deepseek.com");
-	const isOpenRouterDeveloperRoleModel =
-		isOpenRouter && (model.id.startsWith("anthropic/") || model.id.startsWith("openai/"));
-	const cacheControlFormat = provider === "openrouter" && model.id.startsWith("anthropic/") ? "anthropic" : undefined;
 
 	return {
-		supportsStore: !isNonStandard,
-		supportsDeveloperRole: isOpenRouterDeveloperRoleModel || (!isNonStandard && !isOpenRouter),
+		isZai,
+		isTogether,
+		isMoonshot,
+		isOpenRouter,
+		isCloudflareWorkersAI,
+		isCloudflareAiGateway,
+		isNvidia,
+		isAntLing,
+		isNonStandard,
+		useMaxTokens,
+		isGrok,
+		isDeepSeek,
+	};
+}
+
+function resolveCompletionsThinkingFormat(
+	flags: CompletionsProviderFlags,
+): ResolvedOpenAICompletionsCompat["thinkingFormat"] {
+	if (flags.isDeepSeek) return "deepseek";
+	if (flags.isZai) return "zai";
+	if (flags.isTogether) return "together";
+	if (flags.isAntLing) return "ant-ling";
+	if (flags.isOpenRouter) return "openrouter";
+	return "openai";
+}
+
+/**
+ * Detect compatibility settings from provider and baseUrl for known providers.
+ * Provider takes precedence over URL-based detection since it's explicitly configured.
+ * Returns a fully resolved OpenAICompletionsCompat object with all fields set.
+ */
+function detectCompat(model: Model<"openai-completions">): ResolvedOpenAICompletionsCompat {
+	const flags = detectCompletionsProviderFlags(model);
+	const isOpenRouterDeveloperRoleModel =
+		flags.isOpenRouter && (model.id.startsWith("anthropic/") || model.id.startsWith("openai/"));
+	const cacheControlFormat =
+		model.provider === "openrouter" && model.id.startsWith("anthropic/") ? "anthropic" : undefined;
+
+	return {
+		supportsStore: !flags.isNonStandard,
+		supportsDeveloperRole: isOpenRouterDeveloperRoleModel || (!flags.isNonStandard && !flags.isOpenRouter),
 		supportsReasoningEffort:
-			!isGrok && !isZai && !isMoonshot && !isTogether && !isCloudflareAiGateway && !isNvidia && !isAntLing,
+			!flags.isGrok &&
+			!flags.isZai &&
+			!flags.isMoonshot &&
+			!flags.isTogether &&
+			!flags.isCloudflareAiGateway &&
+			!flags.isNvidia &&
+			!flags.isAntLing,
 		supportsUsageInStreaming: true,
-		maxTokensField: useMaxTokens ? "max_tokens" : "max_completion_tokens",
+		maxTokensField: flags.useMaxTokens ? "max_tokens" : "max_completion_tokens",
 		requiresToolResultName: false,
 		requiresAssistantAfterToolResult: false,
 		requiresThinkingAsText: false,
-		requiresReasoningContentOnAssistantMessages: isDeepSeek,
-		thinkingFormat: isDeepSeek
-			? "deepseek"
-			: isZai
-				? "zai"
-				: isTogether
-					? "together"
-					: isAntLing
-						? "ant-ling"
-						: isOpenRouter
-							? "openrouter"
-							: "openai",
+		requiresReasoningContentOnAssistantMessages: flags.isDeepSeek,
+		thinkingFormat: resolveCompletionsThinkingFormat(flags),
 		openRouterRouting: {},
 		vercelGatewayRouting: {},
 		zaiToolStream: false,
-		supportsStrictMode: !isMoonshot && !isTogether && !isCloudflareAiGateway && !isNvidia,
+		supportsStrictMode: !flags.isMoonshot && !flags.isTogether && !flags.isCloudflareAiGateway && !flags.isNvidia,
 		cacheControlFormat,
 		sendSessionAffinityHeaders: false,
 		supportsLongCacheRetention: !(
-			isTogether ||
-			isCloudflareWorkersAI ||
-			isCloudflareAiGateway ||
-			isNvidia ||
-			isAntLing
+			flags.isTogether ||
+			flags.isCloudflareWorkersAI ||
+			flags.isCloudflareAiGateway ||
+			flags.isNvidia ||
+			flags.isAntLing
 		),
 	};
 }

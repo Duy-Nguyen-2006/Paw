@@ -783,42 +783,52 @@ export class ExtensionRunner {
 		this.emitError({ extensionPath, event, error: message, stack });
 	}
 
+	private async runMessageEndHandlers(
+		event: MessageEndEvent,
+		ctx: ExtensionContext,
+		ext: Extension,
+		currentMessage: AgentMessage,
+	): Promise<{ message: AgentMessage; modified: boolean }> {
+		const handlers = ext.handlers.get("message_end");
+		if (!handlers?.length) {
+			return { message: currentMessage, modified: false };
+		}
+		let message = currentMessage;
+		let modified = false;
+		for (const handler of handlers) {
+			try {
+				const currentEvent: MessageEndEvent = { ...event, message };
+				const handlerResult = (await handler(currentEvent, ctx)) as MessageEndEventResult | undefined;
+				if (!handlerResult?.message) {
+					continue;
+				}
+				if (handlerResult.message.role !== message.role) {
+					this.emitError({
+						extensionPath: ext.path,
+						event: "message_end",
+						error: "message_end handlers must return a message with the same role",
+					});
+					continue;
+				}
+				message = handlerResult.message;
+				modified = true;
+			} catch (err) {
+				this.reportHandlerError(ext.path, "message_end", err);
+			}
+		}
+		return { message, modified };
+	}
+
 	async emitMessageEnd(event: MessageEndEvent): Promise<AgentMessage | undefined> {
 		const ctx = this.createContext();
 		let currentMessage = event.message;
 		let modified = false;
 
 		for (const ext of this.extensions) {
-			const handlers = ext.handlers.get("message_end");
-			if (!handlers || handlers.length === 0) continue;
-
-			for (const handler of handlers) {
-				try {
-					const currentEvent: MessageEndEvent = { ...event, message: currentMessage };
-					const handlerResult = (await handler(currentEvent, ctx)) as MessageEndEventResult | undefined;
-					if (!handlerResult?.message) continue;
-
-					if (handlerResult.message.role !== currentMessage.role) {
-						this.emitError({
-							extensionPath: ext.path,
-							event: "message_end",
-							error: "message_end handlers must return a message with the same role",
-						});
-						continue;
-					}
-
-					currentMessage = handlerResult.message;
-					modified = true;
-				} catch (err) {
-					const message = err instanceof Error ? err.message : String(err);
-					const stack = err instanceof Error ? err.stack : undefined;
-					this.emitError({
-						extensionPath: ext.path,
-						event: "message_end",
-						error: message,
-						stack,
-					});
-				}
+			const result = await this.runMessageEndHandlers(event, ctx, ext, currentMessage);
+			currentMessage = result.message;
+			if (result.modified) {
+				modified = true;
 			}
 		}
 

@@ -401,6 +401,12 @@ async function tryCodexWebSocketStream(state: CodexTransportState): Promise<bool
  * Run the Codex SSE fetch with retry/backoff logic for rate limits and transient
  * errors. Returns the first successful Response.
  */
+function rethrowIfCodexFetchAborted(error: unknown): void {
+	if (error instanceof Error && (error.name === "AbortError" || error.message === "Request was aborted")) {
+		throw new Error("Request was aborted");
+	}
+}
+
 async function fetchCodexSseWithRetries(state: CodexTransportState): Promise<Response> {
 	const { options, model } = state;
 	const maxRetries = options?.maxRetries ?? DEFAULT_MAX_RETRIES;
@@ -428,13 +434,8 @@ async function fetchCodexSseWithRetries(state: CodexTransportState): Promise<Res
 			}
 			throw await buildFinalError(errorText, response);
 		} catch (error) {
-			if (error instanceof Error) {
-				if (error.name === "AbortError" || error.message === "Request was aborted") {
-					throw new Error("Request was aborted");
-				}
-			}
+			rethrowIfCodexFetchAborted(error);
 			lastError = error instanceof Error ? error : new Error(String(error));
-			// Network errors are retryable
 			if (attempt < maxRetries && !lastError.message.includes("usage limit")) {
 				await sleep(BASE_DELAY_MS * 2 ** attempt, options?.signal);
 				continue;
@@ -694,6 +695,41 @@ function normalizeCodexStatus(status: unknown): CodexResponseStatus | undefined 
 // SSE Parsing
 // ============================================================================
 
+function parseCodexSseDataPayload(data: string): Record<string, unknown> {
+	try {
+		return JSON.parse(data) as Record<string, unknown>;
+	} catch (cause) {
+		throw new CodexProtocolError(`Invalid Codex SSE JSON: ${formatThrownValue(cause)}`, {
+			cause,
+			payload: data,
+		});
+	}
+}
+
+function* yieldCodexSseEventsFromBuffer(
+	buffer: string,
+): Generator<{ events: Record<string, unknown>[]; rest: string }> {
+	let rest = buffer;
+	const events: Record<string, unknown>[] = [];
+	let idx = rest.indexOf("\n\n");
+	while (idx !== -1) {
+		const chunk = rest.slice(0, idx);
+		rest = rest.slice(idx + 2);
+		const dataLines = chunk
+			.split("\n")
+			.filter((l) => l.startsWith("data:"))
+			.map((l) => l.slice(5).trim());
+		if (dataLines.length > 0) {
+			const data = dataLines.join("\n").trim();
+			if (data && data !== "[DONE]") {
+				events.push(parseCodexSseDataPayload(data));
+			}
+		}
+		idx = rest.indexOf("\n\n");
+	}
+	yield { events, rest };
+}
+
 async function* parseSSE(response: Response, signal?: AbortSignal): AsyncGenerator<Record<string, unknown>> {
 	if (!response.body) return;
 
@@ -705,41 +741,22 @@ async function* parseSSE(response: Response, signal?: AbortSignal): AsyncGenerat
 	};
 	signal?.addEventListener("abort", onAbort, { once: true });
 
+	const assertNotAborted = () => {
+		if (signal?.aborted) throw new Error("Request was aborted");
+	};
+
 	try {
 		while (true) {
-			if (signal?.aborted) {
-				throw new Error("Request was aborted");
-			}
+			assertNotAborted();
 			const { done, value } = await reader.read();
-			if (signal?.aborted) {
-				throw new Error("Request was aborted");
-			}
+			assertNotAborted();
 			if (done) break;
 			buffer += decoder.decode(value, { stream: true });
-
-			let idx = buffer.indexOf("\n\n");
-			while (idx !== -1) {
-				const chunk = buffer.slice(0, idx);
-				buffer = buffer.slice(idx + 2);
-
-				const dataLines = chunk
-					.split("\n")
-					.filter((l) => l.startsWith("data:"))
-					.map((l) => l.slice(5).trim());
-				if (dataLines.length > 0) {
-					const data = dataLines.join("\n").trim();
-					if (data && data !== "[DONE]") {
-						try {
-							yield JSON.parse(data) as Record<string, unknown>;
-						} catch (cause) {
-							throw new CodexProtocolError(`Invalid Codex SSE JSON: ${formatThrownValue(cause)}`, {
-								cause,
-								payload: data,
-							});
-						}
-					}
+			for (const batch of yieldCodexSseEventsFromBuffer(buffer)) {
+				buffer = batch.rest;
+				for (const event of batch.events) {
+					yield event;
 				}
-				idx = buffer.indexOf("\n\n");
 			}
 		}
 	} finally {
@@ -1037,6 +1054,82 @@ async function connectWebSocket(
 	});
 }
 
+function makeEphemeralWebSocketRelease(socket: WebSocketLike): () => void {
+	return () => closeWebSocketSilently(socket);
+}
+
+function makeCachedWebSocketRelease(
+	sessionId: string,
+	cached: CachedWebSocketConnection,
+): (options?: { keep?: boolean }) => void {
+	return ({ keep } = {}) => {
+		if (!keep || !isWebSocketReusable(cached.socket)) {
+			closeWebSocketSilently(cached.socket);
+			websocketSessionCache.delete(sessionId);
+			return;
+		}
+		cached.busy = false;
+		scheduleSessionWebSocketExpiry(sessionId, cached);
+	};
+}
+
+function makeNewCachedWebSocketRelease(
+	sessionId: string,
+	entry: CachedWebSocketConnection,
+): (options?: { keep?: boolean }) => void {
+	return ({ keep } = {}) => {
+		if (!keep || !isWebSocketReusable(entry.socket)) {
+			closeWebSocketSilently(entry.socket);
+			if (entry.idleTimer) clearTimeout(entry.idleTimer);
+			if (websocketSessionCache.get(sessionId) === entry) {
+				websocketSessionCache.delete(sessionId);
+			}
+			return;
+		}
+		entry.busy = false;
+		scheduleSessionWebSocketExpiry(sessionId, entry);
+	};
+}
+
+async function tryReuseCachedWebSocket(
+	sessionId: string,
+	url: string,
+	headers: Headers,
+	signal?: AbortSignal,
+	connectTimeoutMs?: number,
+): Promise<{
+	socket: WebSocketLike;
+	entry?: CachedWebSocketConnection;
+	reused: boolean;
+	release: (options?: { keep?: boolean }) => void;
+} | null> {
+	const cached = websocketSessionCache.get(sessionId);
+	if (!cached) return null;
+
+	if (cached.idleTimer) {
+		clearTimeout(cached.idleTimer);
+		cached.idleTimer = undefined;
+	}
+	if (!cached.busy && isWebSocketReusable(cached.socket)) {
+		cached.busy = true;
+		return {
+			socket: cached.socket,
+			entry: cached,
+			reused: true,
+			release: makeCachedWebSocketRelease(sessionId, cached),
+		};
+	}
+	if (cached.busy) {
+		const socket = await connectWebSocket(url, headers, signal, connectTimeoutMs);
+		return { socket, reused: false, release: makeEphemeralWebSocketRelease(socket) };
+	}
+	if (!isWebSocketReusable(cached.socket)) {
+		closeWebSocketSilently(cached.socket);
+		websocketSessionCache.delete(sessionId);
+	}
+	return null;
+}
+
 async function acquireWebSocket(
 	url: string,
 	headers: Headers,
@@ -1051,51 +1144,11 @@ async function acquireWebSocket(
 }> {
 	if (!sessionId) {
 		const socket = await connectWebSocket(url, headers, signal, connectTimeoutMs);
-		return {
-			socket,
-			reused: false,
-			release: () => closeWebSocketSilently(socket),
-		};
+		return { socket, reused: false, release: makeEphemeralWebSocketRelease(socket) };
 	}
 
-	const cached = websocketSessionCache.get(sessionId);
-	if (cached) {
-		if (cached.idleTimer) {
-			clearTimeout(cached.idleTimer);
-			cached.idleTimer = undefined;
-		}
-		if (!cached.busy && isWebSocketReusable(cached.socket)) {
-			cached.busy = true;
-			return {
-				socket: cached.socket,
-				entry: cached,
-				reused: true,
-				release: ({ keep } = {}) => {
-					if (!keep || !isWebSocketReusable(cached.socket)) {
-						closeWebSocketSilently(cached.socket);
-						websocketSessionCache.delete(sessionId);
-						return;
-					}
-					cached.busy = false;
-					scheduleSessionWebSocketExpiry(sessionId, cached);
-				},
-			};
-		}
-		if (cached.busy) {
-			const socket = await connectWebSocket(url, headers, signal, connectTimeoutMs);
-			return {
-				socket,
-				reused: false,
-				release: () => {
-					closeWebSocketSilently(socket);
-				},
-			};
-		}
-		if (!isWebSocketReusable(cached.socket)) {
-			closeWebSocketSilently(cached.socket);
-			websocketSessionCache.delete(sessionId);
-		}
-	}
+	const reused = await tryReuseCachedWebSocket(sessionId, url, headers, signal, connectTimeoutMs);
+	if (reused) return reused;
 
 	const socket = await connectWebSocket(url, headers, signal, connectTimeoutMs);
 	const entry: CachedWebSocketConnection = { socket, busy: true };
@@ -1104,18 +1157,7 @@ async function acquireWebSocket(
 		socket,
 		entry,
 		reused: false,
-		release: ({ keep } = {}) => {
-			if (!keep || !isWebSocketReusable(entry.socket)) {
-				closeWebSocketSilently(entry.socket);
-				if (entry.idleTimer) clearTimeout(entry.idleTimer);
-				if (websocketSessionCache.get(sessionId) === entry) {
-					websocketSessionCache.delete(sessionId);
-				}
-				return;
-			}
-			entry.busy = false;
-			scheduleSessionWebSocketExpiry(sessionId, entry);
-		},
+		release: makeNewCachedWebSocketRelease(sessionId, entry),
 	};
 }
 

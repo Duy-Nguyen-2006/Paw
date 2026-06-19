@@ -1,7 +1,18 @@
 import { Marked, type Token, Tokenizer, type Tokens } from "marked";
-import { getCapabilities, hyperlink, isImageLine } from "../terminal-image.ts";
+import { isImageLine } from "../terminal-image.ts";
 import type { Component } from "../tui.ts";
 import { applyBackgroundToLine, visibleWidth, wrapTextWithAnsi } from "../utils.ts";
+import {
+	appendSpacingAfterBlock,
+	buildHeadingStyleFn,
+	computeMinColumnWidthsWhenTight,
+	appendRenderedLink,
+	type InlineStyleContext,
+	renderBlockquoteLines,
+	renderCodeBlockLines,
+	resolveTableColumnWidths,
+	shouldAddBlockSpacing,
+} from "./markdown-render-helpers.ts";
 
 const STRICT_STRIKETHROUGH_REGEX = /^(~~)(?=[^\s~])((?:\\.|[^\\])*?(?:\\.|[^\s~\\]))\1(?=[^~]|$)/;
 
@@ -73,11 +84,6 @@ export interface MarkdownTheme {
 export interface MarkdownOptions {
 	/** Preserve source list markers instead of normalizing them. */
 	preserveOrderedListMarkers?: boolean;
-}
-
-interface InlineStyleContext {
-	applyText: (text: string) => string;
-	stylePrefix: string;
 }
 
 export class Markdown implements Component {
@@ -308,36 +314,22 @@ export class Markdown implements Component {
 			case "heading": {
 				const headingLevel = token.depth;
 				const headingPrefix = `${"#".repeat(headingLevel)} `;
-
-				// Build a heading-specific style context so inline tokens (codespan, bold, etc.)
-				// restore heading styling after their own ANSI resets instead of falling back to
-				// the default text style.
-				let headingStyleFn: (text: string) => string;
-				if (headingLevel === 1) {
-					headingStyleFn = (text: string) => this.theme.heading(this.theme.bold(this.theme.underline(text)));
-				} else {
-					headingStyleFn = (text: string) => this.theme.heading(this.theme.bold(text));
-				}
-
+				const headingStyleFn = buildHeadingStyleFn(headingLevel, this.theme);
 				const headingStyleContext: InlineStyleContext = {
 					applyText: headingStyleFn,
 					stylePrefix: this.getStylePrefix(headingStyleFn),
 				};
-
 				const headingText = this.renderInlineTokens(token.tokens || [], headingStyleContext);
 				const styledHeading = headingLevel >= 3 ? headingStyleFn(headingPrefix) + headingText : headingText;
 				lines.push(styledHeading);
-				if (nextTokenType && nextTokenType !== "space") {
-					lines.push(""); // Add spacing after headings (unless space token follows)
-				}
+				appendSpacingAfterBlock(lines, nextTokenType);
 				break;
 			}
 
 			case "paragraph": {
 				const paragraphText = this.renderInlineTokens(token.tokens || [], styleContext);
 				lines.push(paragraphText);
-				// Don't add spacing if next token is space or list
-				if (nextTokenType && nextTokenType !== "list" && nextTokenType !== "space") {
+				if (shouldAddBlockSpacing(nextTokenType, ["list", "space"])) {
 					lines.push("");
 				}
 				break;
@@ -348,24 +340,8 @@ export class Markdown implements Component {
 				break;
 
 			case "code": {
-				const indent = this.theme.codeBlockIndent ?? "  ";
-				lines.push(this.theme.codeBlockBorder(`\`\`\`${token.lang || ""}`));
-				if (this.theme.highlightCode) {
-					const highlightedLines = this.theme.highlightCode(token.text, token.lang);
-					for (const hlLine of highlightedLines) {
-						lines.push(`${indent}${hlLine}`);
-					}
-				} else {
-					// Split code by newlines and style each line
-					const codeLines = token.text.split("\n");
-					for (const codeLine of codeLines) {
-						lines.push(`${indent}${this.theme.codeBlock(codeLine)}`);
-					}
-				}
-				lines.push(this.theme.codeBlockBorder("```"));
-				if (nextTokenType && nextTokenType !== "space") {
-					lines.push(""); // Add spacing after code blocks (unless space token follows)
-				}
+				lines.push(...renderCodeBlockLines(token as Tokens.Code, this.theme));
+				appendSpacingAfterBlock(lines, nextTokenType);
 				break;
 			}
 
@@ -384,59 +360,22 @@ export class Markdown implements Component {
 			}
 
 			case "blockquote": {
-				const quoteStyle = (text: string) => this.theme.quote(this.theme.italic(text));
-				const quoteStylePrefix = this.getStylePrefix(quoteStyle);
-				const applyQuoteStyle = (line: string): string => {
-					if (!quoteStylePrefix) {
-						return quoteStyle(line);
-					}
-					const lineWithReappliedStyle = line.replace(/\x1b\[0m/g, `\x1b[0m${quoteStylePrefix}`);
-					return quoteStyle(lineWithReappliedStyle);
-				};
-
-				// Calculate available width for quote content (subtract border "│ " = 2 chars)
-				const quoteContentWidth = Math.max(1, width - 2);
-
-				// Blockquotes contain block-level tokens (paragraph, list, code, etc.), so render
-				// children with renderToken() instead of renderInlineTokens().
-				// Default message style should not apply inside blockquotes.
-				const quoteInlineStyleContext: InlineStyleContext = {
-					applyText: (text: string) => text,
-					stylePrefix: quoteStylePrefix,
-				};
-				const quoteTokens = token.tokens || [];
-				const renderedQuoteLines: string[] = [];
-				for (let i = 0; i < quoteTokens.length; i++) {
-					const quoteToken = quoteTokens[i];
-					const nextQuoteToken = quoteTokens[i + 1];
-					renderedQuoteLines.push(
-						...this.renderToken(quoteToken, quoteContentWidth, nextQuoteToken?.type, quoteInlineStyleContext),
-					);
-				}
-
-				// Avoid rendering an extra empty quote line before the outer blockquote spacing.
-				while (renderedQuoteLines.length > 0 && renderedQuoteLines.at(-1) === "") {
-					renderedQuoteLines.pop();
-				}
-
-				for (const quoteLine of renderedQuoteLines) {
-					const styledLine = applyQuoteStyle(quoteLine);
-					const wrappedLines = wrapTextWithAnsi(styledLine, quoteContentWidth);
-					for (const wrappedLine of wrappedLines) {
-						lines.push(this.theme.quoteBorder("│ ") + wrappedLine);
-					}
-				}
-				if (nextTokenType && nextTokenType !== "space") {
-					lines.push(""); // Add spacing after blockquotes (unless space token follows)
-				}
+				lines.push(
+					...renderBlockquoteLines(
+						token as Tokens.Blockquote,
+						width,
+						nextTokenType,
+						this.theme,
+						(styleFn) => this.getStylePrefix(styleFn),
+						(t, w, next, ctx) => this.renderToken(t, w, next, ctx),
+					),
+				);
 				break;
 			}
 
 			case "hr":
 				lines.push(this.theme.hr("─".repeat(Math.min(width, 80))));
-				if (nextTokenType && nextTokenType !== "space") {
-					lines.push(""); // Add spacing after horizontal rules (unless space token follows)
-				}
+				appendSpacingAfterBlock(lines, nextTokenType);
 				break;
 
 			case "html":
@@ -505,22 +444,7 @@ export class Markdown implements Component {
 				case "link": {
 					const linkText = this.renderInlineTokens(token.tokens || [], resolvedStyleContext);
 					const styledLink = this.theme.link(this.theme.underline(linkText));
-					if (getCapabilities().hyperlinks) {
-						// OSC 8: render as a clickable hyperlink. The URL is not printed inline,
-						// so we always show only the link text regardless of whether it matches href.
-						result += hyperlink(styledLink, token.href) + stylePrefix;
-					} else {
-						// Fallback: print URL in parentheses when text differs from href.
-						// Compare raw token.text (not styled) against href for the equality check.
-						// For mailto: links strip the prefix (autolinked emails use text="foo@bar.com"
-						// but href="mailto:foo@bar.com").
-						const hrefForComparison = token.href.startsWith("mailto:") ? token.href.slice(7) : token.href;
-						if (token.text === token.href || token.text === hrefForComparison) {
-							result += styledLink + stylePrefix;
-						} else {
-							result += styledLink + this.theme.linkUrl(` (${token.href})`) + stylePrefix;
-						}
-					}
+					result = appendRenderedLink(result, token as Tokens.Link, styledLink, this.theme, stylePrefix);
 					break;
 				}
 
@@ -697,75 +621,14 @@ export class Markdown implements Component {
 			}
 		}
 
-		let minColumnWidths = minWordWidths;
-		let minCellsWidth = minColumnWidths.reduce((a, b) => a + b, 0);
-
-		if (minCellsWidth > availableForCells) {
-			minColumnWidths = new Array(numCols).fill(1);
-			const remaining = availableForCells - numCols;
-
-			if (remaining > 0) {
-				const totalWeight = minWordWidths.reduce((total, width) => total + Math.max(0, width - 1), 0);
-				const growth = minWordWidths.map((width) => {
-					const weight = Math.max(0, width - 1);
-					return totalWeight > 0 ? Math.floor((weight / totalWeight) * remaining) : 0;
-				});
-
-				for (let i = 0; i < numCols; i++) {
-					minColumnWidths[i] += growth[i] ?? 0;
-				}
-
-				const allocated = growth.reduce((total, width) => total + width, 0);
-				let leftover = remaining - allocated;
-				for (let i = 0; leftover > 0 && i < numCols; i++) {
-					minColumnWidths[i]++;
-					leftover--;
-				}
-			}
-
-			minCellsWidth = minColumnWidths.reduce((a, b) => a + b, 0);
-		}
-
-		// Calculate column widths that fit within available width
-		const totalNaturalWidth = naturalWidths.reduce((a, b) => a + b, 0) + borderOverhead;
-		let columnWidths: number[];
-
-		if (totalNaturalWidth <= availableWidth) {
-			// Everything fits naturally
-			columnWidths = naturalWidths.map((width, index) => Math.max(width, minColumnWidths[index]));
-		} else {
-			// Need to shrink columns to fit
-			const totalGrowPotential = naturalWidths.reduce((total, width, index) => {
-				return total + Math.max(0, width - minColumnWidths[index]);
-			}, 0);
-			const extraWidth = Math.max(0, availableForCells - minCellsWidth);
-			columnWidths = minColumnWidths.map((minWidth, index) => {
-				const naturalWidth = naturalWidths[index];
-				const minWidthDelta = Math.max(0, naturalWidth - minWidth);
-				let grow = 0;
-				if (totalGrowPotential > 0) {
-					grow = Math.floor((minWidthDelta / totalGrowPotential) * extraWidth);
-				}
-				return minWidth + grow;
-			});
-
-			// Adjust for rounding errors - distribute remaining space
-			const allocated = columnWidths.reduce((a, b) => a + b, 0);
-			let remaining = availableForCells - allocated;
-			while (remaining > 0) {
-				let grew = false;
-				for (let i = 0; i < numCols && remaining > 0; i++) {
-					if (columnWidths[i] < naturalWidths[i]) {
-						columnWidths[i]++;
-						remaining--;
-						grew = true;
-					}
-				}
-				if (!grew) {
-					break;
-				}
-			}
-		}
+		const columnWidths = resolveTableColumnWidths(
+			naturalWidths,
+			minWordWidths,
+			availableForCells,
+			availableWidth,
+			borderOverhead,
+			numCols,
+		);
 
 		// Render top border
 		const topBorderCells = columnWidths.map((w) => "─".repeat(w));

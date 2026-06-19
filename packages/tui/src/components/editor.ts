@@ -584,161 +584,181 @@ export class Editor implements Component, Focusable {
 		return result;
 	}
 
+	private tryHandleJumpModeInput(data: string, kb: ReturnType<typeof getKeybindings>): boolean {
+		if (this.jumpMode === null) {
+			return false;
+		}
+		if (kb.matches(data, "tui.editor.jumpForward") || kb.matches(data, "tui.editor.jumpBackward")) {
+			this.jumpMode = null;
+			return true;
+		}
+		const printable = decodePrintableKey(data) ?? (data.codePointAt(0)! >= 32 ? data : undefined);
+		if (printable !== undefined) {
+			const direction = this.jumpMode;
+			this.jumpMode = null;
+			this.jumpToChar(printable, direction);
+			return true;
+		}
+		this.jumpMode = null;
+		return false;
+	}
+
+	private tryHandleBracketedPasteInput(data: string): { handled: boolean; data: string } {
+		let next = data;
+		if (next.includes("\x1b[200~")) {
+			this.isInPaste = true;
+			this.pasteBuffer = "";
+			next = next.replace("\x1b[200~", "");
+		}
+		if (!this.isInPaste) {
+			return { handled: false, data: next };
+		}
+		this.pasteBuffer += next;
+		const endIndex = this.pasteBuffer.indexOf("\x1b[201~");
+		if (endIndex === -1) {
+			return { handled: true, data: next };
+		}
+		const pasteContent = this.pasteBuffer.substring(0, endIndex);
+		if (pasteContent.length > 0) {
+			this.handlePaste(pasteContent);
+		}
+		this.isInPaste = false;
+		const remaining = this.pasteBuffer.substring(endIndex + 6);
+		this.pasteBuffer = "";
+		if (remaining.length > 0) {
+			this.handleInput(remaining);
+		}
+		return { handled: true, data: next };
+	}
+
+	private applyAutocompleteSelection(fallThroughToSubmit: boolean): boolean {
+		const selected = this.autocompleteList?.getSelectedItem();
+		if (!selected || !this.autocompleteProvider) {
+			return false;
+		}
+		this.pushUndoSnapshot();
+		this.lastAction = null;
+		const result = this.autocompleteProvider.applyCompletion(
+			this.state.lines,
+			this.state.cursorLine,
+			this.state.cursorCol,
+			selected,
+			this.autocompletePrefix,
+		);
+		this.state.lines = result.lines;
+		this.state.cursorLine = result.cursorLine;
+		this.setCursorCol(result.cursorCol);
+		if (fallThroughToSubmit && this.autocompletePrefix.startsWith("/")) {
+			this.cancelAutocomplete();
+			return false;
+		}
+		this.cancelAutocomplete();
+		if (this.onChange) {
+			this.onChange(this.getText());
+		}
+		return true;
+	}
+
+	private tryHandleAutocompleteInput(data: string, kb: ReturnType<typeof getKeybindings>): boolean {
+		if (!this.autocompleteState || !this.autocompleteList) {
+			return false;
+		}
+		if (kb.matches(data, "tui.select.cancel")) {
+			this.cancelAutocomplete();
+			return true;
+		}
+		if (kb.matches(data, "tui.select.up") || kb.matches(data, "tui.select.down")) {
+			this.autocompleteList.handleInput(data);
+			return true;
+		}
+		if (kb.matches(data, "tui.input.tab")) {
+			this.applyAutocompleteSelection(false);
+			return true;
+		}
+		if (kb.matches(data, "tui.select.confirm")) {
+			return this.applyAutocompleteSelection(true);
+		}
+		return false;
+	}
+
+	private tryHandleDeletionInput(data: string, kb: ReturnType<typeof getKeybindings>): boolean {
+		if (kb.matches(data, "tui.editor.deleteToLineEnd")) {
+			this.deleteToEndOfLine();
+			return true;
+		}
+		if (kb.matches(data, "tui.editor.deleteToLineStart")) {
+			this.deleteToStartOfLine();
+			return true;
+		}
+		if (kb.matches(data, "tui.editor.deleteWordBackward")) {
+			this.deleteWordBackwards();
+			return true;
+		}
+		if (kb.matches(data, "tui.editor.deleteWordForward")) {
+			this.deleteWordForward();
+			return true;
+		}
+		if (kb.matches(data, "tui.editor.deleteCharBackward") || matchesKey(data, "shift+backspace")) {
+			this.handleBackspace();
+			return true;
+		}
+		if (kb.matches(data, "tui.editor.deleteCharForward") || matchesKey(data, "shift+delete")) {
+			this.handleForwardDelete();
+			return true;
+		}
+		return false;
+	}
+
+	private tryHandleCursorMovementInput(data: string, kb: ReturnType<typeof getKeybindings>): boolean {
+		if (kb.matches(data, "tui.editor.cursorLineStart")) {
+			this.moveToLineStart();
+			return true;
+		}
+		if (kb.matches(data, "tui.editor.cursorLineEnd")) {
+			this.moveToLineEnd();
+			return true;
+		}
+		if (kb.matches(data, "tui.editor.cursorWordLeft")) {
+			this.moveWordBackwards();
+			return true;
+		}
+		if (kb.matches(data, "tui.editor.cursorWordRight")) {
+			this.moveWordForwards();
+			return true;
+		}
+		return false;
+	}
+
 	handleInput(data: string): void {
 		const kb = getKeybindings();
 
-		// Handle character jump mode (awaiting next character to jump to)
-		if (this.jumpMode !== null) {
-			// Cancel if the hotkey is pressed again
-			if (kb.matches(data, "tui.editor.jumpForward") || kb.matches(data, "tui.editor.jumpBackward")) {
-				this.jumpMode = null;
-				return;
-			}
-
-			const printable = decodePrintableKey(data) ?? (data.codePointAt(0)! >= 32 ? data : undefined);
-			if (printable !== undefined) {
-				// Printable character - perform the jump
-				const direction = this.jumpMode;
-				this.jumpMode = null;
-				this.jumpToChar(printable, direction);
-				return;
-			}
-
-			// Control character - cancel and fall through to normal handling
-			this.jumpMode = null;
-		}
-
-		// Handle bracketed paste mode
-		if (data.includes("\x1b[200~")) {
-			this.isInPaste = true;
-			this.pasteBuffer = "";
-			data = data.replace("\x1b[200~", "");
-		}
-
-		if (this.isInPaste) {
-			this.pasteBuffer += data;
-			const endIndex = this.pasteBuffer.indexOf("\x1b[201~");
-			if (endIndex !== -1) {
-				const pasteContent = this.pasteBuffer.substring(0, endIndex);
-				if (pasteContent.length > 0) {
-					this.handlePaste(pasteContent);
-				}
-				this.isInPaste = false;
-				const remaining = this.pasteBuffer.substring(endIndex + 6);
-				this.pasteBuffer = "";
-				if (remaining.length > 0) {
-					this.handleInput(remaining);
-				}
-				return;
-			}
+		if (this.tryHandleJumpModeInput(data, kb)) {
 			return;
 		}
 
-		// Ctrl+C - let parent handle (exit/clear)
+		const pasteResult = this.tryHandleBracketedPasteInput(data);
+		if (pasteResult.handled) {
+			return;
+		}
+		data = pasteResult.data;
+
 		if (kb.matches(data, "tui.input.copy")) {
 			return;
 		}
-
-		// Undo
 		if (kb.matches(data, "tui.editor.undo")) {
 			this.undo();
 			return;
 		}
-
-		// Handle autocomplete mode
-		if (this.autocompleteState && this.autocompleteList) {
-			if (kb.matches(data, "tui.select.cancel")) {
-				this.cancelAutocomplete();
-				return;
-			}
-
-			if (kb.matches(data, "tui.select.up") || kb.matches(data, "tui.select.down")) {
-				this.autocompleteList.handleInput(data);
-				return;
-			}
-
-			if (kb.matches(data, "tui.input.tab")) {
-				const selected = this.autocompleteList.getSelectedItem();
-				if (selected && this.autocompleteProvider) {
-					this.pushUndoSnapshot();
-					this.lastAction = null;
-					const result = this.autocompleteProvider.applyCompletion(
-						this.state.lines,
-						this.state.cursorLine,
-						this.state.cursorCol,
-						selected,
-						this.autocompletePrefix,
-					);
-					this.state.lines = result.lines;
-					this.state.cursorLine = result.cursorLine;
-					this.setCursorCol(result.cursorCol);
-					this.cancelAutocomplete();
-					if (this.onChange) this.onChange(this.getText());
-				}
-				return;
-			}
-
-			if (kb.matches(data, "tui.select.confirm")) {
-				const selected = this.autocompleteList.getSelectedItem();
-				if (selected && this.autocompleteProvider) {
-					this.pushUndoSnapshot();
-					this.lastAction = null;
-					const result = this.autocompleteProvider.applyCompletion(
-						this.state.lines,
-						this.state.cursorLine,
-						this.state.cursorCol,
-						selected,
-						this.autocompletePrefix,
-					);
-					this.state.lines = result.lines;
-					this.state.cursorLine = result.cursorLine;
-					this.setCursorCol(result.cursorCol);
-
-					if (this.autocompletePrefix.startsWith("/")) {
-						this.cancelAutocomplete();
-						// Fall through to submit
-					} else {
-						this.cancelAutocomplete();
-						if (this.onChange) this.onChange(this.getText());
-						return;
-					}
-				}
-			}
+		if (this.tryHandleAutocompleteInput(data, kb)) {
+			return;
 		}
-
-		// Tab - trigger completion
 		if (kb.matches(data, "tui.input.tab") && !this.autocompleteState) {
 			this.handleTabCompletion();
 			return;
 		}
-
-		// Deletion actions
-		if (kb.matches(data, "tui.editor.deleteToLineEnd")) {
-			this.deleteToEndOfLine();
+		if (this.tryHandleDeletionInput(data, kb)) {
 			return;
 		}
-		if (kb.matches(data, "tui.editor.deleteToLineStart")) {
-			this.deleteToStartOfLine();
-			return;
-		}
-		if (kb.matches(data, "tui.editor.deleteWordBackward")) {
-			this.deleteWordBackwards();
-			return;
-		}
-		if (kb.matches(data, "tui.editor.deleteWordForward")) {
-			this.deleteWordForward();
-			return;
-		}
-		if (kb.matches(data, "tui.editor.deleteCharBackward") || matchesKey(data, "shift+backspace")) {
-			this.handleBackspace();
-			return;
-		}
-		if (kb.matches(data, "tui.editor.deleteCharForward") || matchesKey(data, "shift+delete")) {
-			this.handleForwardDelete();
-			return;
-		}
-
-		// Kill ring actions
 		if (kb.matches(data, "tui.editor.yank")) {
 			this.yank();
 			return;
@@ -747,22 +767,7 @@ export class Editor implements Component, Focusable {
 			this.yankPop();
 			return;
 		}
-
-		// Cursor movement actions
-		if (kb.matches(data, "tui.editor.cursorLineStart")) {
-			this.moveToLineStart();
-			return;
-		}
-		if (kb.matches(data, "tui.editor.cursorLineEnd")) {
-			this.moveToLineEnd();
-			return;
-		}
-		if (kb.matches(data, "tui.editor.cursorWordLeft")) {
-			this.moveWordBackwards();
-			return;
-		}
-		if (kb.matches(data, "tui.editor.cursorWordRight")) {
-			this.moveWordForwards();
+		if (this.tryHandleCursorMovementInput(data, kb)) {
 			return;
 		}
 

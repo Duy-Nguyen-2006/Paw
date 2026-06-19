@@ -1,6 +1,11 @@
 import { relative } from "node:path";
 import { APP_NAME } from "../config.ts";
-import { pawCliArgsShowHelp, pawCliParseRequiredSessionId, pawCliReadScalarOptionValue } from "./cli-arg-parsing.ts";
+import {
+	pawCliArgsShowHelp,
+	pawCliCollectRepeatableScalarOption,
+	pawCliParseRequiredSessionId,
+	pawCliReadScalarOptionValue,
+} from "./cli-arg-parsing.ts";
 import { formatPawCliValidationIssues, pawCliIsDirectory, pawCliIsFile } from "./cli-fs.ts";
 import type { PawValidationIssue } from "./contracts.ts";
 import { emitPawFinalReport, type PawFinalReportEmissionResult } from "./final-report-emission.ts";
@@ -104,6 +109,19 @@ export interface PawFinalizeCommandInvalidTransitionResult {
 
 const FINALIZE_COMMAND_LABEL = "paw finalize";
 
+function pawCliParseFinalizeSummaryOption(
+	args: readonly string[],
+): PawFinalizeParsedArgs | { summary: string; nextIndex: number } {
+	if (args.length < 2 || args[1] !== "--summary") {
+		return { kind: "error", message: `Missing required option for "${FINALIZE_COMMAND_LABEL}": --summary` };
+	}
+	const scalar = pawCliReadScalarOptionValue(FINALIZE_COMMAND_LABEL, "--summary", args, 1, new Set());
+	if ("kind" in scalar) {
+		return scalar;
+	}
+	return { summary: scalar.value, nextIndex: scalar.nextIndex };
+}
+
 export type PawFinalizeParsedArgs =
 	| { kind: "help" }
 	| { kind: "error"; message: string }
@@ -119,41 +137,20 @@ export function parsePawFinalizeArgs(args: string[]): PawFinalizeParsedArgs {
 		return sessionIdResult;
 	}
 
-	let summary: string | undefined;
-	const evidence: string[] = [];
-	const seenSummary = new Set<string>();
-
-	for (let index = 1; index < args.length; ) {
-		const arg = args[index];
-		if (arg === "--summary") {
-			const scalar = pawCliReadScalarOptionValue(FINALIZE_COMMAND_LABEL, arg, args, index, seenSummary);
-			if ("kind" in scalar) {
-				return scalar;
-			}
-			summary = scalar.value;
-			index = scalar.nextIndex;
-			continue;
-		}
-
-		if (arg === "--evidence") {
-			const scalar = pawCliReadScalarOptionValue(FINALIZE_COMMAND_LABEL, arg, args, index, new Set());
-			if ("kind" in scalar) {
-				return scalar;
-			}
-			evidence.push(scalar.value);
-			index = scalar.nextIndex;
-			continue;
-		}
-
-		if (arg.startsWith("-")) {
-			return { kind: "error", message: `Unknown option for "${FINALIZE_COMMAND_LABEL}": ${arg}` };
-		}
-
-		return { kind: "error", message: `Unknown option for "${FINALIZE_COMMAND_LABEL}": ${arg}` };
+	const summaryParse = pawCliParseFinalizeSummaryOption(args);
+	if ("kind" in summaryParse) {
+		return summaryParse;
 	}
+	const { summary, nextIndex } = summaryParse;
 
-	if (summary === undefined) {
-		return { kind: "error", message: `Missing required option for "${FINALIZE_COMMAND_LABEL}": --summary` };
+	const evidenceParse = pawCliCollectRepeatableScalarOption(FINALIZE_COMMAND_LABEL, "--evidence", args, nextIndex);
+	if ("kind" in evidenceParse) {
+		return evidenceParse;
+	}
+	const { values: evidence, nextIndex: afterEvidence } = evidenceParse;
+
+	if (afterEvidence < args.length) {
+		return { kind: "error", message: `Unknown option for "${FINALIZE_COMMAND_LABEL}": ${args[afterEvidence]}` };
 	}
 
 	return { kind: "ok", sessionId: sessionIdResult.sessionId, summary, evidence };

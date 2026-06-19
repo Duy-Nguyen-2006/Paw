@@ -265,6 +265,40 @@ function runPawBuildWorkerStep(
 	});
 }
 
+async function createPawBuildLoopEarlyExitResult(input: {
+	repoRoot: string;
+	sessionId: string;
+	input: Extract<PawBuildParsedInput, { maxSteps: number }>;
+	commandInput: PawBuildCommandInput;
+	stepResults: PawBuildStepResult[];
+	stopReason: PawBuildLoopStopReason;
+}): Promise<PawBuildLoopResult> {
+	const finalReport =
+		input.stopReason === "no_pending_slices"
+			? await emitPawBuildLoopFinalReport(
+					input.repoRoot,
+					input.sessionId,
+					input.input.maxSteps,
+					input.stepResults,
+					input.commandInput,
+				)
+			: null;
+	const finalStateName = await readPawSessionStateNameIfExists(input.repoRoot, input.sessionId);
+	return {
+		status:
+			input.stopReason === "no_pending_slices" && finalReport?.status === "completed"
+				? "loop_completed"
+				: "loop_stopped",
+		sessionId: input.sessionId,
+		stepsRun: input.stepResults.length,
+		maxSteps: input.input.maxSteps,
+		stopReason: input.stopReason,
+		finalStateName,
+		stepResults: input.stepResults,
+		finalReport,
+	};
+}
+
 async function createPawBuildLoopResult(
 	repoRoot: string,
 	sessionId: string,
@@ -286,24 +320,14 @@ async function createPawBuildLoopResult(
 
 		const stopReason = getPawBuildLoopStopReason(stepResult);
 		if (stopReason !== null) {
-			const finalReport =
-				stopReason === "no_pending_slices"
-					? await emitPawBuildLoopFinalReport(repoRoot, sessionId, input.maxSteps, stepResults, commandInput)
-					: null;
-			finalStateName = await readPawSessionStateNameIfExists(repoRoot, sessionId);
-			return {
-				status:
-					stopReason === "no_pending_slices" && finalReport?.status === "completed"
-						? "loop_completed"
-						: "loop_stopped",
+			return createPawBuildLoopEarlyExitResult({
+				repoRoot,
 				sessionId,
-				stepsRun: stepResults.length,
-				maxSteps: input.maxSteps,
-				stopReason,
-				finalStateName,
+				input,
+				commandInput,
 				stepResults,
-				finalReport,
-			};
+				stopReason,
+			});
 		}
 	}
 
