@@ -17,8 +17,8 @@ import { join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import chalk from "chalk";
 import { parseSessionEntries, type SessionMessageEntry } from "../packages/coding-agent/src/core/session-manager.ts";
-
-const MAX_CHARS_PER_FILE = 100_000; // ~20k tokens, leaving room for prompt + analysis + output
+import { handleJsonEventLine, type JsonEvent, parseTranscriptCliArgs } from "./session-transcripts-helpers.ts";
+import { splitTranscriptsIntoFiles } from "./session-transcripts-split-helpers.ts";
 
 function cwdToSessionDir(cwd: string): string {
 	const normalized = resolve(cwd).replace(/\//g, "-");
@@ -56,26 +56,6 @@ function parseSession(filePath: string): string[] {
 	return messages;
 }
 
-const MAX_DISPLAY_WIDTH = 100;
-
-function truncateLine(text: string, maxWidth: number): string {
-	const singleLine = text.replace(/\n/g, " ").replace(/\s+/g, " ").trim();
-	if (singleLine.length <= maxWidth) return singleLine;
-	return `${singleLine.slice(0, maxWidth - 3)}...`;
-}
-
-interface JsonEvent {
-	type: string;
-	assistantMessageEvent?: { type: string; delta?: string };
-	toolName?: string;
-	args?: {
-		path?: string;
-		offset?: number;
-		limit?: number;
-		content?: string;
-	};
-}
-
 function runSubagent(prompt: string, cwd: string): Promise<{ success: boolean }> {
 	return new Promise((resolve) => {
 		const child = spawn("pi", ["--mode", "json", "--tools", "read,write", "-p", prompt], {
@@ -83,44 +63,14 @@ function runSubagent(prompt: string, cwd: string): Promise<{ success: boolean }>
 			stdio: ["ignore", "pipe", "pipe"],
 		});
 
-		let textBuffer = "";
+		const state = { textBuffer: "" };
 
 		const rl = createInterface({ input: child.stdout });
 
 		rl.on("line", (line) => {
 			try {
 				const event: JsonEvent = JSON.parse(line);
-
-				if (event.type === "message_update" && event.assistantMessageEvent) {
-					const msgEvent = event.assistantMessageEvent;
-					if (msgEvent.type === "text_delta" && msgEvent.delta) {
-						textBuffer += msgEvent.delta;
-					}
-				} else if (event.type === "tool_execution_start" && event.toolName) {
-					// Print accumulated text before tool starts
-					if (textBuffer.trim()) {
-						console.log(chalk.dim(`  ${truncateLine(textBuffer, MAX_DISPLAY_WIDTH)}`));
-						textBuffer = "";
-					}
-					// Format tool call with args
-					let argsStr = "";
-					if (event.args) {
-						if (event.toolName === "read") {
-							argsStr = event.args.path || "";
-							if (event.args.offset) argsStr += ` offset=${event.args.offset}`;
-							if (event.args.limit) argsStr += ` limit=${event.args.limit}`;
-						} else if (event.toolName === "write") {
-							argsStr = event.args.path || "";
-						}
-					}
-					console.log(chalk.cyan(`  [${event.toolName}] ${argsStr}`));
-				} else if (event.type === "turn_end") {
-					// Print any remaining text at turn end
-					if (textBuffer.trim()) {
-						console.log(chalk.dim(`  ${truncateLine(textBuffer, MAX_DISPLAY_WIDTH)}`));
-					}
-					textBuffer = "";
-				}
+				handleJsonEventLine(event, state);
 			} catch {
 				// Ignore malformed JSON
 			}
@@ -143,24 +93,7 @@ function runSubagent(prompt: string, cwd: string): Promise<{ success: boolean }>
 
 async function main() {
 	const args = process.argv.slice(2);
-	const analyzeFlag = args.includes("--analyze");
-
-	// Parse --output <dir>
-	const outputIdx = args.indexOf("--output");
-	let outputDir = resolve("./session-transcripts");
-	if (outputIdx !== -1 && args[outputIdx + 1]) {
-		outputDir = resolve(args[outputIdx + 1]);
-	}
-
-	// Find cwd (positional arg that's not a flag or flag value)
-	const flagIndices = new Set<number>();
-	flagIndices.add(args.indexOf("--analyze"));
-	if (outputIdx !== -1) {
-		flagIndices.add(outputIdx);
-		flagIndices.add(outputIdx + 1);
-	}
-	const cwdArg = args.find((a, i) => !flagIndices.has(i) && !a.startsWith("--"));
-	const cwd = resolve(cwdArg || process.cwd());
+	const { analyzeFlag, outputDir, cwd } = parseTranscriptCliArgs(args);
 
 	mkdirSync(outputDir, { recursive: true });
 	const sessionsBase = join(homedir(), ".pi/agent/sessions");
@@ -194,53 +127,7 @@ async function main() {
 		process.exit(1);
 	}
 
-	// Split into files respecting MAX_CHARS_PER_FILE
-	const outputFiles: string[] = [];
-	let currentContent = "";
-	let fileIndex = 0;
-
-	for (const transcript of allTranscripts) {
-		// If adding this transcript would exceed limit, write current and start new
-		if (currentContent.length > 0 && currentContent.length + transcript.length + 2 > MAX_CHARS_PER_FILE) {
-			const filename = `session-transcripts-${String(fileIndex).padStart(3, "0")}.txt`;
-			writeFileSync(join(outputDir, filename), currentContent);
-			outputFiles.push(filename);
-			console.log(`Wrote ${filename} (${currentContent.length} chars)`);
-			currentContent = "";
-			fileIndex++;
-		}
-
-		// If this single transcript exceeds limit, write it to its own file
-		if (transcript.length > MAX_CHARS_PER_FILE) {
-			// Write any pending content first
-			if (currentContent.length > 0) {
-				const filename = `session-transcripts-${String(fileIndex).padStart(3, "0")}.txt`;
-				writeFileSync(join(outputDir, filename), currentContent);
-				outputFiles.push(filename);
-				console.log(`Wrote ${filename} (${currentContent.length} chars)`);
-				currentContent = "";
-				fileIndex++;
-			}
-			// Write the large transcript to its own file
-			const filename = `session-transcripts-${String(fileIndex).padStart(3, "0")}.txt`;
-			writeFileSync(join(outputDir, filename), transcript);
-			outputFiles.push(filename);
-			console.log(chalk.yellow(`Wrote ${filename} (${transcript.length} chars) - oversized`));
-			fileIndex++;
-			continue;
-		}
-
-		currentContent += (currentContent ? "\n\n" : "") + transcript;
-	}
-
-	// Write remaining content
-	if (currentContent.length > 0) {
-		const filename = `session-transcripts-${String(fileIndex).padStart(3, "0")}.txt`;
-		writeFileSync(join(outputDir, filename), currentContent);
-		outputFiles.push(filename);
-		console.log(`Wrote ${filename} (${currentContent.length} chars)`);
-	}
-
+	const outputFiles = splitTranscriptsIntoFiles(allTranscripts, outputDir);
 	console.log(`\nCreated ${outputFiles.length} transcript file(s) in ${outputDir}`);
 
 	if (!analyzeFlag) {

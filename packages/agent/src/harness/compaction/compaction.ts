@@ -10,6 +10,11 @@ import {
 import { buildSessionContext } from "../session/session.ts";
 import { type CompactionEntry, CompactionError, err, ok, type Result, type SessionTreeEntry } from "../types.ts";
 import {
+	adjustCutIndexToAllowedBoundary,
+	findValidCutPoints,
+	selectCutIndex,
+} from "./compaction-cut-helpers.ts";
+import {
 	computeFileLists,
 	createFileOps,
 	extractFileOpsFromMessage,
@@ -267,46 +272,6 @@ export function estimateTokens(message: AgentMessage): number {
 
 	return Math.ceil(chars / 4);
 }
-function findValidCutPoints(entries: SessionTreeEntry[], startIndex: number, endIndex: number): number[] {
-	const cutPoints: number[] = [];
-	for (let i = startIndex; i < endIndex; i++) {
-		const entry = entries[i];
-		switch (entry.type) {
-			case "message": {
-				const role = entry.message.role;
-				switch (role) {
-					case "bashExecution":
-					case "custom":
-					case "branchSummary":
-					case "compactionSummary":
-					case "user":
-					case "assistant":
-						cutPoints.push(i);
-						break;
-					case "toolResult":
-						break;
-				}
-				break;
-			}
-			case "thinking_level_change":
-			case "model_change":
-			case "active_tools_change":
-			case "compaction":
-			case "branch_summary":
-			case "custom":
-			case "custom_message":
-			case "label":
-			case "session_info":
-			case "leaf":
-				break;
-		}
-		if (entry.type === "branch_summary" || entry.type === "custom_message") {
-			cutPoints.push(i);
-		}
-	}
-	return cutPoints;
-}
-
 /** Find the user-visible message that starts the turn containing an entry. */
 export function findTurnStartIndex(entries: SessionTreeEntry[], entryIndex: number, startIndex: number): number {
 	for (let i = entryIndex; i >= startIndex; i--) {
@@ -346,7 +311,7 @@ export function findCutPoint(
 	if (cutPoints.length === 0) {
 		return { firstKeptEntryIndex: startIndex, turnStartIndex: -1, isSplitTurn: false };
 	}
-	const cutIndex = selectCutIndex(entries, startIndex, endIndex, cutPoints, keepRecentTokens);
+	const cutIndex = selectCutIndex(entries, startIndex, endIndex, cutPoints, keepRecentTokens, estimateTokens);
 	const adjustedCutIndex = adjustCutIndexToAllowedBoundary(entries, startIndex, cutIndex);
 	const cutEntry = entries[adjustedCutIndex];
 	const isUserMessage = cutEntry.type === "message" && cutEntry.message.role === "user";
@@ -357,59 +322,6 @@ export function findCutPoint(
 		turnStartIndex,
 		isSplitTurn: !isUserMessage && turnStartIndex !== -1,
 	};
-}
-
-/**
- * Walk entries backward from `endIndex - 1`, accumulating message tokens until
- * `keepRecentTokens` is reached, and return the smallest cut-point at or after
- * that index. Falls back to the first cut point if no messages contribute.
- */
-function selectCutIndex(
-	entries: SessionTreeEntry[],
-	startIndex: number,
-	endIndex: number,
-	cutPoints: number[],
-	keepRecentTokens: number,
-): number {
-	let accumulatedTokens = 0;
-	let cutIndex = cutPoints[0];
-
-	for (let i = endIndex - 1; i >= startIndex; i--) {
-		const entry = entries[i];
-		if (entry.type !== "message") continue;
-		const messageTokens = estimateTokens(entry.message);
-		accumulatedTokens += messageTokens;
-		if (accumulatedTokens >= keepRecentTokens) {
-			for (let c = 0; c < cutPoints.length; c++) {
-				if (cutPoints[c] >= i) {
-					cutIndex = cutPoints[c];
-					break;
-				}
-			}
-			break;
-		}
-	}
-	return cutIndex;
-}
-
-/**
- * Walk backwards from `cutIndex` while the previous entry is a non-message,
- * non-compaction record (e.g. thinking-level change), stopping at the first
- * message or compaction entry.
- */
-function adjustCutIndexToAllowedBoundary(entries: SessionTreeEntry[], startIndex: number, cutIndex: number): number {
-	let adjusted = cutIndex;
-	while (adjusted > startIndex) {
-		const prevEntry = entries[adjusted - 1];
-		if (prevEntry.type === "compaction") {
-			break;
-		}
-		if (prevEntry.type === "message") {
-			break;
-		}
-		adjusted--;
-	}
-	return adjusted;
 }
 
 export const SUMMARIZATION_SYSTEM_PROMPT = `You are a context summarization assistant. Your task is to read a conversation between a user and an AI assistant, then produce a structured summary following the exact format specified.

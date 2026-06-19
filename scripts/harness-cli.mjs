@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { runQuerySubcommand } from "./harness-cli-query-helpers.mjs";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -435,17 +436,15 @@ function propose(args) {
 function query(args) {
   migrateSilently();
   const sub = args[0];
-  if (sub === "matrix") return queryMatrix(args.slice(1));
-  if (sub === "backlog") return queryTable("backlog", args);
-  if (sub === "decisions") return queryTable("decision", args);
-  if (sub === "intakes") return queryTable("intake", args);
-  if (sub === "traces") return queryTable("trace", args);
-  if (sub === "friction") return queryFriction();
-  if (sub === "tools") return queryTable("tool", args);
-  if (sub === "interventions") return queryTable("intervention", args);
-  if (sub === "stats") return queryStats();
-  if (sub === "sql") return querySql(args.slice(1).join(" "));
-  die(`Unknown query command: ${sub ?? "(missing)"}`);
+  runQuerySubcommand(sub, args.slice(1), {
+    hasFlag,
+    die,
+    queryMatrix,
+    queryTable,
+    queryFriction,
+    queryStats,
+    querySql,
+  });
 }
 
 function queryMatrix(args) {
