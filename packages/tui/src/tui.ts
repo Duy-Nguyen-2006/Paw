@@ -11,63 +11,13 @@ import { resolveNextFocusForNonOverlayTarget, resolveNextFocusWhenClearing } fro
 import type { Terminal } from "./terminal.ts";
 import { isOsc11BackgroundColorResponse, parseOsc11BackgroundColor, type RgbColor } from "./terminal-colors.ts";
 import { deleteKittyImage, getCapabilities, isImageLine, setCellDimensions } from "./terminal-image.ts";
+import {
+	extractKittyImageIds,
+	getKittyImageReservedRows,
+	writeImageBlock,
+} from "./tui-kitty-image-helpers.ts";
+import { resolveOverlayLayoutFromOptions } from "./tui-overlay-layout-helpers.ts";
 import { extractSegments, normalizeTerminalOutput, sliceByColumn, sliceWithWidth, visibleWidth } from "./utils.ts";
-
-const KITTY_SEQUENCE_PREFIX = "\x1b_G";
-
-/**
- * Append the ANSI escape sequences that render a multi-row kitty image block to the buffer.
- * Extracted from {@link TUI.writeChangedLines} to keep that function under the cognitive
- * complexity budget.
- */
-function writeImageBlock(buffer: string, line: string, imageReservedRows: number): string {
-	let next = `${buffer}\x1b[2K`;
-	for (let row = 1; row < imageReservedRows; row++) {
-		next += "\r\n\x1b[2K";
-	}
-	next += `\x1b[${imageReservedRows - 1}A`;
-	next += line;
-	next += `\x1b[${imageReservedRows - 1}B`;
-	return next;
-}
-
-interface KittyImageHeader {
-	ids: number[];
-	rows: number;
-}
-
-function parseKittyImageHeader(line: string): KittyImageHeader | undefined {
-	const sequenceStart = line.indexOf(KITTY_SEQUENCE_PREFIX);
-	if (sequenceStart === -1) return undefined;
-
-	const paramsStart = sequenceStart + KITTY_SEQUENCE_PREFIX.length;
-	const paramsEnd = line.indexOf(";", paramsStart);
-	if (paramsEnd === -1) return undefined;
-
-	const ids: number[] = [];
-	let rows = 1;
-	const params = line.slice(paramsStart, paramsEnd);
-	for (const param of params.split(",")) {
-		const [key, value] = param.split("=", 2);
-		if (value === undefined) continue;
-		const numberValue = Number(value);
-		if (!Number.isInteger(numberValue) || numberValue <= 0 || numberValue > 0xffffffff) continue;
-		if (key === "i") {
-			ids.push(numberValue);
-		} else if (key === "r") {
-			rows = numberValue;
-		}
-	}
-	return { ids, rows };
-}
-
-function extractKittyImageIds(line: string): number[] {
-	return parseKittyImageHeader(line)?.ids ?? [];
-}
-
-function extractKittyImageRows(line: string): number {
-	return parseKittyImageHeader(line)?.rows ?? 1;
-}
 
 /**
  * Component interface - all components must implement this
@@ -158,18 +108,6 @@ export interface OverlayMargin {
 
 /** Value that can be absolute (number) or percentage (string like "50%") */
 export type SizeValue = number | `${number}%`;
-
-/** Parse a SizeValue into absolute value given a reference size */
-function parseSizeValue(value: SizeValue | undefined, referenceSize: number): number | undefined {
-	if (value === undefined) return undefined;
-	if (typeof value === "number") return value;
-	// Parse percentage string like "50%"
-	const match = /^(\d+(?:\.\d+)?)%$/.exec(value);
-	if (match) {
-		return Math.floor((referenceSize * Number.parseFloat(match[1])) / 100);
-	}
-	return undefined;
-}
 
 function isTermuxSession(): boolean {
 	return Boolean(process.env.TERMUX_VERSION);
@@ -866,132 +804,7 @@ export class TUI extends Container {
 		termWidth: number,
 		termHeight: number,
 	): { width: number; row: number; col: number; maxHeight: number | undefined } {
-		const opt = options ?? {};
-
-		// Parse margin (clamp to non-negative)
-		const margin =
-			typeof opt.margin === "number"
-				? { top: opt.margin, right: opt.margin, bottom: opt.margin, left: opt.margin }
-				: (opt.margin ?? {});
-		const marginTop = Math.max(0, margin.top ?? 0);
-		const marginRight = Math.max(0, margin.right ?? 0);
-		const marginBottom = Math.max(0, margin.bottom ?? 0);
-		const marginLeft = Math.max(0, margin.left ?? 0);
-
-		// Available space after margins
-		const availWidth = Math.max(1, termWidth - marginLeft - marginRight);
-		const availHeight = Math.max(1, termHeight - marginTop - marginBottom);
-
-		// === Resolve width ===
-		let width = parseSizeValue(opt.width, termWidth) ?? Math.min(80, availWidth);
-		// Apply minWidth
-		if (opt.minWidth !== undefined) {
-			width = Math.max(width, opt.minWidth);
-		}
-		// Clamp to available space
-		width = Math.max(1, Math.min(width, availWidth));
-
-		// === Resolve maxHeight ===
-		let maxHeight = parseSizeValue(opt.maxHeight, termHeight);
-		// Clamp to available space
-		if (maxHeight !== undefined) {
-			maxHeight = Math.max(1, Math.min(maxHeight, availHeight));
-		}
-
-		// Effective overlay height (may be clamped by maxHeight)
-		const effectiveHeight = maxHeight !== undefined ? Math.min(overlayHeight, maxHeight) : overlayHeight;
-
-		// === Resolve position ===
-		let row: number;
-		let col: number;
-
-		if (opt.row !== undefined) {
-			if (typeof opt.row === "string") {
-				// Percentage: 0% = top, 100% = bottom (overlay stays within bounds)
-				const match = /^(\d+(?:\.\d+)?)%$/.exec(opt.row);
-				if (match) {
-					const maxRow = Math.max(0, availHeight - effectiveHeight);
-					const percent = Number.parseFloat(match[1]) / 100;
-					row = marginTop + Math.floor(maxRow * percent);
-				} else {
-					// Invalid format, fall back to center
-					row = this.resolveAnchorRow("center", effectiveHeight, availHeight, marginTop);
-				}
-			} else {
-				// Absolute row position
-				row = opt.row;
-			}
-		} else {
-			// Anchor-based (default: center)
-			const anchor = opt.anchor ?? "center";
-			row = this.resolveAnchorRow(anchor, effectiveHeight, availHeight, marginTop);
-		}
-
-		if (opt.col !== undefined) {
-			if (typeof opt.col === "string") {
-				// Percentage: 0% = left, 100% = right (overlay stays within bounds)
-				const match = /^(\d+(?:\.\d+)?)%$/.exec(opt.col);
-				if (match) {
-					const maxCol = Math.max(0, availWidth - width);
-					const percent = Number.parseFloat(match[1]) / 100;
-					col = marginLeft + Math.floor(maxCol * percent);
-				} else {
-					// Invalid format, fall back to center
-					col = this.resolveAnchorCol("center", width, availWidth, marginLeft);
-				}
-			} else {
-				// Absolute column position
-				col = opt.col;
-			}
-		} else {
-			// Anchor-based (default: center)
-			const anchor = opt.anchor ?? "center";
-			col = this.resolveAnchorCol(anchor, width, availWidth, marginLeft);
-		}
-
-		// Apply offsets
-		if (opt.offsetY !== undefined) row += opt.offsetY;
-		if (opt.offsetX !== undefined) col += opt.offsetX;
-
-		// Clamp to terminal bounds (respecting margins)
-		row = Math.max(marginTop, Math.min(row, termHeight - marginBottom - effectiveHeight));
-		col = Math.max(marginLeft, Math.min(col, termWidth - marginRight - width));
-
-		return { width, row, col, maxHeight };
-	}
-
-	private resolveAnchorRow(anchor: OverlayAnchor, height: number, availHeight: number, marginTop: number): number {
-		switch (anchor) {
-			case "top-left":
-			case "top-center":
-			case "top-right":
-				return marginTop;
-			case "bottom-left":
-			case "bottom-center":
-			case "bottom-right":
-				return marginTop + availHeight - height;
-			case "left-center":
-			case "center":
-			case "right-center":
-				return marginTop + Math.floor((availHeight - height) / 2);
-		}
-	}
-
-	private resolveAnchorCol(anchor: OverlayAnchor, width: number, availWidth: number, marginLeft: number): number {
-		switch (anchor) {
-			case "top-left":
-			case "left-center":
-			case "bottom-left":
-				return marginLeft;
-			case "top-right":
-			case "right-center":
-			case "bottom-right":
-				return marginLeft + availWidth - width;
-			case "top-center":
-			case "center":
-			case "bottom-center":
-				return marginLeft + Math.floor((availWidth - width) / 2);
-		}
+		return resolveOverlayLayoutFromOptions(options, overlayHeight, termWidth, termHeight);
 	}
 
 	/** Composite all overlays into content lines (sorted by focusOrder, higher = on top). */
@@ -1088,17 +901,7 @@ export class TUI extends Container {
 	}
 
 	private getKittyImageReservedRows(lines: string[], index: number, maxIndex = lines.length - 1): number {
-		const rows = extractKittyImageRows(lines[index] ?? "");
-		if (rows <= 1) return 1;
-
-		const maxRows = Math.min(rows, maxIndex - index + 1, lines.length - index);
-		let reservedRows = 1;
-		while (reservedRows < maxRows) {
-			const line = lines[index + reservedRows] ?? "";
-			if (isImageLine(line) || visibleWidth(line) > 0) break;
-			reservedRows++;
-		}
-		return reservedRows;
+		return getKittyImageReservedRows(lines, index, maxIndex, visibleWidth);
 	}
 
 	private expandChangedRangeForKittyImages(

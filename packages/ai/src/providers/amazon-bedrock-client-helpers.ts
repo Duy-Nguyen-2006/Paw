@@ -127,5 +127,7 @@ function applyBedrockNodeRuntimeConfig(
 	}
 
 	config.region =
-		ctx.configuredRegion || (ctx.endpointRegion && ctx.useExplicitEndpoint ? ctx.endpointRegion : undefined) || "us-east-1";
+		ctx.configuredRegion ||
+		(ctx.endpointRegion && ctx.useExplicitEndpoint ? ctx.endpointRegion : undefined) ||
+		"us-east-1";
 }

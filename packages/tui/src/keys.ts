@@ -1,3 +1,11 @@
+import { parseLegacyPlainKey } from "./keys-legacy-parse-helpers.ts";
+import { matchTabKey } from "./keys-match-tab-helpers.ts";
+import {
+	buildModifierBitmask,
+	isDigitKey,
+	matchPrintableKeyWithModifiers,
+	parseKeyId,
+} from "./keys-parse-helpers.ts";
 import {
 	FUNCTIONAL_CODEPOINTS as MATCH_FUNCTIONAL_CODEPOINTS,
 	matchArrowKey,
@@ -432,67 +440,6 @@ const LEGACY_CTRL_SEQUENCES = {
 	end: ["\x1b[8^"],
 } as const;
 
-const LEGACY_SEQUENCE_KEY_IDS: Record<string, KeyId> = {
-	"\x1bOA": "up",
-	"\x1bOB": "down",
-	"\x1bOC": "right",
-	"\x1bOD": "left",
-	"\x1bOH": "home",
-	"\x1bOF": "end",
-	"\x1b[E": "clear",
-	"\x1bOE": "clear",
-	"\x1bOe": "ctrl+clear",
-	"\x1b[e": "shift+clear",
-	"\x1b[2~": "insert",
-	"\x1b[2$": "shift+insert",
-	"\x1b[2^": "ctrl+insert",
-	"\x1b[3$": "shift+delete",
-	"\x1b[3^": "ctrl+delete",
-	"\x1b[[5~": "pageUp",
-	"\x1b[[6~": "pageDown",
-	"\x1b[a": "shift+up",
-	"\x1b[b": "shift+down",
-	"\x1b[c": "shift+right",
-	"\x1b[d": "shift+left",
-	"\x1bOa": "ctrl+up",
-	"\x1bOb": "ctrl+down",
-	"\x1bOc": "ctrl+right",
-	"\x1bOd": "ctrl+left",
-	"\x1b[5$": "shift+pageUp",
-	"\x1b[6$": "shift+pageDown",
-	"\x1b[7$": "shift+home",
-	"\x1b[8$": "shift+end",
-	"\x1b[5^": "ctrl+pageUp",
-	"\x1b[6^": "ctrl+pageDown",
-	"\x1b[7^": "ctrl+home",
-	"\x1b[8^": "ctrl+end",
-	"\x1bOP": "f1",
-	"\x1bOQ": "f2",
-	"\x1bOR": "f3",
-	"\x1bOS": "f4",
-	"\x1b[11~": "f1",
-	"\x1b[12~": "f2",
-	"\x1b[13~": "f3",
-	"\x1b[14~": "f4",
-	"\x1b[[A": "f1",
-	"\x1b[[B": "f2",
-	"\x1b[[C": "f3",
-	"\x1b[[D": "f4",
-	"\x1b[[E": "f5",
-	"\x1b[15~": "f5",
-	"\x1b[17~": "f6",
-	"\x1b[18~": "f7",
-	"\x1b[19~": "f8",
-	"\x1b[20~": "f9",
-	"\x1b[21~": "f10",
-	"\x1b[23~": "f11",
-	"\x1b[24~": "f12",
-	"\x1bb": "alt+left",
-	"\x1bf": "alt+right",
-	"\x1bp": "alt+up",
-	"\x1bn": "alt+down",
-} as const;
-
 type LegacyModifierKey = keyof typeof LEGACY_SHIFT_SEQUENCES;
 
 const matchesLegacySequence = (data: string, sequences: readonly string[]): boolean => sequences.includes(data);
@@ -766,23 +713,6 @@ function matchesRawBackspace(data: string, expectedModifier: number): boolean {
  * - Symbols [\]_ → 27, 28, 29, 31
  * - Also maps - to same as _ (same physical key on US keyboards)
  */
-function rawCtrlChar(key: string): string | null {
-	const char = key.toLowerCase();
-	const code = char.codePointAt(0)!;
-	if ((code >= 97 && code <= 122) || char === "[" || char === "\\" || char === "]" || char === "_") {
-		return String.fromCodePoint(code & 0x1f);
-	}
-	// Handle - as _ (same physical key on US keyboards)
-	if (char === "-") {
-		return String.fromCodePoint(31); // Same as Ctrl+_
-	}
-	return null;
-}
-
-function isDigitKey(key: string): boolean {
-	return key >= "0" && key <= "9";
-}
-
 function matchesPrintableModifyOtherKeys(data: string, expectedKeycode: number, expectedModifier: number): boolean {
 	if (expectedModifier === 0) return false;
 	const parsed = parseModifyOtherKeysSequence(data);
@@ -803,21 +733,6 @@ function formatKeyNameWithModifiers(keyName: string, modifier: number): string |
 	if (effectiveMod & MODIFIERS.alt) mods.push("alt");
 	if (effectiveMod & MODIFIERS.super) mods.push("super");
 	return mods.length > 0 ? `${mods.join("+")}+${keyName}` : keyName;
-}
-
-function parseKeyId(
-	keyId: string,
-): { key: string; ctrl: boolean; shift: boolean; alt: boolean; super: boolean } | null {
-	const parts = keyId.toLowerCase().split("+");
-	const key = parts[parts.length - 1];
-	if (!key) return null;
-	return {
-		key,
-		ctrl: parts.includes("ctrl"),
-		shift: parts.includes("shift"),
-		alt: parts.includes("alt"),
-		super: parts.includes("super"),
-	};
 }
 
 /**
@@ -841,12 +756,8 @@ export function matchesKey(data: string, keyId: KeyId): boolean {
 	const parsed = parseKeyId(keyId);
 	if (!parsed) return false;
 
-	const { key, ctrl, shift, alt, super: superModifier } = parsed;
-	let modifier = 0;
-	if (shift) modifier |= MODIFIERS.shift;
-	if (alt) modifier |= MODIFIERS.alt;
-	if (ctrl) modifier |= MODIFIERS.ctrl;
-	if (superModifier) modifier |= MODIFIERS.super;
+	const modifier = buildModifierBitmask(parsed);
+	const { key } = parsed;
 
 	const deps = createKeyMatchDeps();
 
@@ -859,20 +770,7 @@ export function matchesKey(data: string, keyId: KeyId): boolean {
 			return matchSpaceKey(data, modifier, deps);
 
 		case "tab":
-			if (modifier === MODIFIERS.shift) {
-				return (
-					data === "\x1b[Z" ||
-					matchesKittySequence(data, CODEPOINTS.tab, MODIFIERS.shift) ||
-					matchesModifyOtherKeys(data, CODEPOINTS.tab, MODIFIERS.shift)
-				);
-			}
-			if (modifier === 0) {
-				return data === "\t" || matchesKittySequence(data, CODEPOINTS.tab, 0);
-			}
-			return (
-				matchesKittySequence(data, CODEPOINTS.tab, modifier) ||
-				matchesModifyOtherKeys(data, CODEPOINTS.tab, modifier)
-			);
+			return matchTabKey(data, modifier, { matchesKittySequence, matchesModifyOtherKeys });
 
 		case "enter":
 		case "return":
@@ -937,59 +835,12 @@ export function matchesKey(data: string, keyId: KeyId): boolean {
 		}
 	}
 
-	// Handle single letter/digit keys and symbols
 	if (key.length === 1 && ((key >= "a" && key <= "z") || isDigitKey(key) || SYMBOL_KEYS.has(key))) {
-		const codepoint = key.codePointAt(0)!;
-		const rawCtrl = rawCtrlChar(key);
-		const isLetter = key >= "a" && key <= "z";
-		const isDigit = isDigitKey(key);
-
-		if (modifier === MODIFIERS.ctrl + MODIFIERS.alt && !_kittyProtocolActive && rawCtrl) {
-			// Legacy: ctrl+alt+key is ESC followed by the control character.
-			// If that legacy form does not match, continue so CSI-u and
-			// modifyOtherKeys sequences from tmux can still be recognized.
-			if (data === `\x1b${rawCtrl}`) return true;
-		}
-
-		if (modifier === MODIFIERS.alt && !_kittyProtocolActive && (isLetter || isDigit)) {
-			// Legacy: alt+letter/digit is ESC followed by the key
-			if (data === `\x1b${key}`) return true;
-		}
-
-		if (modifier === MODIFIERS.ctrl) {
-			// Legacy: ctrl+key sends the control character
-			if (rawCtrl && data === rawCtrl) return true;
-			return (
-				matchesKittySequence(data, codepoint, MODIFIERS.ctrl) ||
-				matchesPrintableModifyOtherKeys(data, codepoint, MODIFIERS.ctrl)
-			);
-		}
-
-		if (modifier === MODIFIERS.shift + MODIFIERS.ctrl) {
-			return (
-				matchesKittySequence(data, codepoint, MODIFIERS.shift + MODIFIERS.ctrl) ||
-				matchesPrintableModifyOtherKeys(data, codepoint, MODIFIERS.shift + MODIFIERS.ctrl)
-			);
-		}
-
-		if (modifier === MODIFIERS.shift) {
-			// Legacy: shift+letter produces uppercase
-			if (isLetter && data === key.toUpperCase()) return true;
-			return (
-				matchesKittySequence(data, codepoint, MODIFIERS.shift) ||
-				matchesPrintableModifyOtherKeys(data, codepoint, MODIFIERS.shift)
-			);
-		}
-
-		if (modifier !== 0) {
-			return (
-				matchesKittySequence(data, codepoint, modifier) ||
-				matchesPrintableModifyOtherKeys(data, codepoint, modifier)
-			);
-		}
-
-		// Check both raw char and Kitty sequence (needed for release events)
-		return data === key || matchesKittySequence(data, codepoint, 0);
+		return matchPrintableKeyWithModifiers(data, key, modifier, {
+			kittyProtocolActive: _kittyProtocolActive,
+			matchesKittySequence,
+			matchesPrintableModifyOtherKeys,
+		});
 	}
 
 	return false;
@@ -1052,70 +903,7 @@ export function parseKey(data: string): string | undefined {
 		return formatParsedKey(modifyOtherKeys.codepoint, modifyOtherKeys.modifier);
 	}
 
-	// Mode-aware legacy sequences
-	// When Kitty protocol is active, ambiguous sequences are interpreted as custom terminal mappings:
-	// - \x1b\r = shift+enter (Kitty mapping), not alt+enter
-	// - \n = shift+enter (Ghostty mapping)
-	if (_kittyProtocolActive) {
-		if (data === "\x1b\r" || data === "\n") return "shift+enter";
-	}
-
-	const legacySequenceKeyId = LEGACY_SEQUENCE_KEY_IDS[data];
-	if (legacySequenceKeyId) return legacySequenceKeyId;
-
-	// Legacy sequences (used when Kitty protocol is not active, or for unambiguous sequences)
-	if (data === "\x1b") return "escape";
-	if (data === "\x1c") return "ctrl+\\";
-	if (data === "\x1d") return "ctrl+]";
-	if (data === "\x1f") return "ctrl+-";
-	if (data === "\x1b\x1b") return "ctrl+alt+[";
-	if (data === "\x1b\x1c") return "ctrl+alt+\\";
-	if (data === "\x1b\x1d") return "ctrl+alt+]";
-	if (data === "\x1b\x1f") return "ctrl+alt+-";
-	if (data === "\t") return "tab";
-	if (data === "\r" || (!_kittyProtocolActive && data === "\n") || data === "\x1bOM") return "enter";
-	if (data === "\x00") return "ctrl+space";
-	if (data === " ") return "space";
-	if (data === "\x7f") return "backspace";
-	if (data === "\x08") return isWindowsTerminalSession() ? "ctrl+backspace" : "backspace";
-	if (data === "\x1b[Z") return "shift+tab";
-	if (!_kittyProtocolActive && data === "\x1b\r") return "alt+enter";
-	if (!_kittyProtocolActive && data === "\x1b ") return "alt+space";
-	if (data === "\x1b\x7f" || data === "\x1b\b") return "alt+backspace";
-	if (!_kittyProtocolActive && data === "\x1bB") return "alt+left";
-	if (!_kittyProtocolActive && data === "\x1bF") return "alt+right";
-	if (!_kittyProtocolActive && data.length === 2 && data.startsWith("\x1b")) {
-		const code = data.codePointAt(1)!;
-		if (code >= 1 && code <= 26) {
-			return `ctrl+alt+${String.fromCodePoint(code + 96)}`;
-		}
-		// Legacy alt+letter/digit (ESC followed by the key)
-		if ((code >= 97 && code <= 122) || (code >= 48 && code <= 57)) {
-			return `alt+${String.fromCodePoint(code)}`;
-		}
-	}
-	if (data === "\x1b[A") return "up";
-	if (data === "\x1b[B") return "down";
-	if (data === "\x1b[C") return "right";
-	if (data === "\x1b[D") return "left";
-	if (data === "\x1b[H" || data === "\x1bOH") return "home";
-	if (data === "\x1b[F" || data === "\x1bOF") return "end";
-	if (data === "\x1b[3~") return "delete";
-	if (data === "\x1b[5~") return "pageUp";
-	if (data === "\x1b[6~") return "pageDown";
-
-	// Raw Ctrl+letter
-	if (data.length === 1) {
-		const code = data.codePointAt(0)!;
-		if (code >= 1 && code <= 26) {
-			return `ctrl+${String.fromCodePoint(code + 96)}`;
-		}
-		if (code >= 32 && code <= 126) {
-			return data;
-		}
-	}
-
-	return undefined;
+	return parseLegacyPlainKey(data, _kittyProtocolActive, isWindowsTerminalSession);
 }
 
 // =============================================================================

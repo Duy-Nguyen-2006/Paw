@@ -39,12 +39,9 @@ import {
 } from "../utils/diagnostics.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { headersToRecord } from "../utils/headers.ts";
+import { createInitialCodexOutput, pushCodexStreamError } from "./openai-codex-stream-helpers.ts";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.ts";
 import { convertResponsesMessages, convertResponsesTools, processResponsesStream } from "./openai-responses-shared.ts";
-import {
-	createInitialCodexOutput,
-	pushCodexStreamError,
-} from "./openai-codex-stream-helpers.ts";
 import { buildBaseOptions } from "./simple-options.ts";
 
 // ============================================================================

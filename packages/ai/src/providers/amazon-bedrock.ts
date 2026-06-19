@@ -20,7 +20,6 @@ import {
 	ToolResultStatus,
 } from "@aws-sdk/client-bedrock-runtime";
 import type { BuildMiddleware, DocumentType, MetadataBearer } from "@smithy/types";
-import { createBedrockRuntimeClient, getConfiguredBedrockRegion } from "./amazon-bedrock-client-helpers.ts";
 import { calculateCost } from "../models.ts";
 import type {
 	Api,
@@ -46,6 +45,7 @@ import type {
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { parseStreamingJson } from "../utils/json-parse.ts";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.ts";
+import { createBedrockRuntimeClient, getConfiguredBedrockRegion } from "./amazon-bedrock-client-helpers.ts";
 import { adjustMaxTokensForThinking, buildBaseOptions, clampReasoning } from "./simple-options.ts";
 import { transformMessages } from "./transform-messages.ts";
 
