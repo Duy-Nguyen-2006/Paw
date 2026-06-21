@@ -2,8 +2,8 @@
  * Word-wrap helpers extracted from utils.ts (S3776).
  */
 
-import { extractAnsiCode } from "./utils-ansi.ts";
 import { visibleWidth } from "./utils.ts";
+import { extractAnsiCode } from "./utils-ansi.ts";
 
 export type WrapAnsiTracker = {
 	getLineEndReset(): string;
@@ -18,11 +18,7 @@ export type WrapLineState = {
 	currentVisibleLength: number;
 };
 
-export function flushWrapLineWithReset(
-	state: WrapLineState,
-	tracker: WrapAnsiTracker,
-	wrapped: string[],
-): void {
+export function flushWrapLineWithReset(state: WrapLineState, tracker: WrapAnsiTracker, wrapped: string[]): void {
 	if (!state.currentLine) {
 		return;
 	}
@@ -56,7 +52,7 @@ export function applyWrapTokenOverflow(
 	token: string,
 	tokenVisibleLength: number,
 	isWhitespace: boolean,
-	width: number,
+	_width: number,
 	tracker: WrapAnsiTracker,
 	wrapped: string[],
 	state: WrapLineState,

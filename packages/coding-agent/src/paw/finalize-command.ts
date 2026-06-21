@@ -286,7 +286,12 @@ function mapPawFinalizeEmissionResult(
 				lockReleased,
 			};
 		case "not_locked":
-			return mapPawNotLockedCommandFields(sessionId, emission.reason, lockReleased, emission.staleReason);
+			return mapPawNotLockedCommandFields(
+				sessionId,
+				emission.reason,
+				lockReleased,
+				emission.reason === "stale" ? emission.staleReason : undefined,
+			);
 		case "locked_by_other":
 			return {
 				status: "locked",

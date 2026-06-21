@@ -1,7 +1,7 @@
 import type { Tokens } from "marked";
 import { visibleWidth, wrapTextWithAnsi } from "../utils.ts";
-import type { InlineStyleContext } from "./markdown-render-helpers.ts";
 import type { MarkdownOptions, MarkdownTheme } from "./markdown.ts";
+import type { InlineStyleContext } from "./markdown-render-helpers.ts";
 
 export function getOrderedListMarker(item: Tokens.ListItem): string | undefined {
 	const match = /^(?: {0,3})(\d{1,9}[.)])[ \t]+/.exec(item.raw);

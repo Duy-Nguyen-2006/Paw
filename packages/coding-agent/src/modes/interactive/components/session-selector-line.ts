@@ -4,7 +4,7 @@
 
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { theme } from "../theme/theme.ts";
-import { formatSessionDate, shortenPath, type FlatSessionNode } from "./session-selector-tree.ts";
+import { type FlatSessionNode, formatSessionDate, shortenPath } from "./session-selector-tree.ts";
 
 export function buildSessionTreePrefix(node: FlatSessionNode): string {
 	if (node.depth === 0) {

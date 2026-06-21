@@ -2,16 +2,16 @@
  * One-time migrations that run on startup.
  */
 
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import chalk from "chalk";
 import { getAgentDir } from "./config.ts";
 import {
 	EXTENSIONS_DOC_URL,
+	MIGRATION_GUIDE_URL,
 	migrateExtensionSystem,
 	migrateKeybindingsConfigFile,
 	migrateToolsToBin,
-	MIGRATION_GUIDE_URL,
 } from "./migrations-helpers.ts";
 
 /**

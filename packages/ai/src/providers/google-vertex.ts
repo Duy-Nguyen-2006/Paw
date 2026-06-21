@@ -102,7 +102,7 @@ export const streamGoogleVertex: StreamFunction<"google-vertex", GoogleVertexOpt
 			finalizeOpenGoogleStreamBlock(stream, output, processState);
 			assertGoogleStreamCompleted(output, options?.signal);
 
-			stream.push({ type: "done", reason: output.stopReason, message: output });
+			stream.push({ type: "done", reason: output.stopReason as "stop" | "length" | "toolUse", message: output });
 			stream.end();
 		} catch (error) {
 			handleGoogleStreamError(stream, output, error, options?.signal);

@@ -1,4 +1,5 @@
 import {
+	type BedrockRuntimeClient,
 	BedrockRuntimeServiceException,
 	StopReason as BedrockStopReason,
 	type Tool as BedrockTool,
@@ -115,11 +116,17 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOpt
 			await notifyBedrockResponseMetadata(options, response, model);
 
 			for await (const item of response.stream!) {
-				dispatchBedrockStreamItem(item, blocks, output, stream, model);
+				dispatchBedrockStreamItem(
+					item as unknown as Parameters<typeof dispatchBedrockStreamItem>[0],
+					blocks,
+					output,
+					stream,
+					model,
+				);
 			}
 
 			assertBedrockStreamSuccess(options, output);
-			stream.push({ type: "done", reason: output.stopReason, message: output });
+			stream.push({ type: "done", reason: output.stopReason as "stop" | "length" | "toolUse", message: output });
 			stream.end();
 		} catch (error) {
 			reportBedrockStreamError(stream, output, options, error);
@@ -460,7 +467,7 @@ function ensureBedrockThinkingBlock(
 }
 
 function applyBedrockReasoningDelta(
-	reasoningContent: NonNullable<ContentBlockDeltaEvent["delta"]>["reasoningContent"],
+	reasoningContent: NonNullable<NonNullable<ContentBlockDeltaEvent["delta"]>["reasoningContent"]>,
 	contentBlockIndex: number,
 	blocks: Block[],
 	output: AssistantMessage,
@@ -483,8 +490,8 @@ function applyBedrockReasoningDelta(
 }
 
 function applyBedrockReasoningText(
-	thinkingBlock: Block,
-	reasoningContent: NonNullable<ContentBlockDeltaEvent["delta"]>["reasoningContent"],
+	thinkingBlock: ThinkingContent,
+	reasoningContent: NonNullable<NonNullable<ContentBlockDeltaEvent["delta"]>["reasoningContent"]>,
 	thinkingIndex: number,
 	output: AssistantMessage,
 	stream: AssistantMessageEventStream,
@@ -500,8 +507,8 @@ function applyBedrockReasoningText(
 }
 
 function applyBedrockReasoningSignature(
-	thinkingBlock: Block,
-	reasoningContent: NonNullable<ContentBlockDeltaEvent["delta"]>["reasoningContent"],
+	thinkingBlock: ThinkingContent,
+	reasoningContent: NonNullable<NonNullable<ContentBlockDeltaEvent["delta"]>["reasoningContent"]>,
 ): void {
 	if (!reasoningContent.signature) return;
 	thinkingBlock.thinkingSignature = (thinkingBlock.thinkingSignature || "") + reasoningContent.signature;

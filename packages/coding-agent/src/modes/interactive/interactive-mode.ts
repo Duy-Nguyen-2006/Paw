@@ -13,7 +13,6 @@ import {
 	type AssistantMessage,
 	getProviders,
 	type ImageContent,
-	type Message,
 	type Model,
 	type OAuthProviderId,
 	type OAuthSelectPrompt,
@@ -79,7 +78,6 @@ import { createCompactionSummaryMessage } from "../../core/messages.ts";
 import { defaultModelPerProvider, findExactModelReferenceMatch, resolveModelScope } from "../../core/model-resolver.ts";
 import { DefaultPackageManager } from "../../core/package-manager.ts";
 import { BUILT_IN_PROVIDER_DISPLAY_NAMES } from "../../core/provider-display-names.ts";
-import type { ResourceDiagnostic } from "../../core/resource-loader.ts";
 import { formatMissingSessionCwdPrompt, MissingSessionCwdError } from "../../core/session-cwd.ts";
 import { type SessionContext, SessionManager } from "../../core/session-manager.ts";
 import { BUILTIN_SLASH_COMMANDS } from "../../core/slash-commands.ts";
@@ -125,24 +123,6 @@ import { dispatchInteractiveAgentEvent } from "./interactive-agent-events.ts";
 import { buildInteractiveBuiltinSlashActions } from "./interactive-builtin-slash-actions.ts";
 import { addAgentMessageToChat } from "./interactive-chat-messages.ts";
 import { showLoadedResourcesInChat } from "./interactive-loaded-resources.ts";
-import {
-	buildScopeGroups,
-	formatContextPath,
-	formatDiagnostics,
-	formatDisplayPath,
-	formatExtensionDisplayPath,
-	formatScopeGroups,
-	getCompactDisplayPathSegments,
-	getCompactExtensionLabel,
-	getCompactExtensionLabels,
-	getCompactNonPackageExtensionLabel,
-	getCompactPackageSourceLabel,
-	getCompactPathLabel,
-	getScopeGroup,
-	getShortPath,
-	isPackageSource,
-	resolveLocalSourceInfo,
-} from "./interactive-resource-display.ts";
 import { renderInteractiveSessionContext } from "./interactive-session-context-render.ts";
 import { buildSettingsSelectorCallbacks, buildSettingsSelectorConfig } from "./interactive-settings-selector.ts";
 import { matchBuiltinSlashCommand, runSlashCommandAction } from "./interactive-slash-dispatch.ts";
@@ -160,7 +140,6 @@ import {
 	setThemeInstance,
 	stopThemeWatcher,
 	Theme,
-	type ThemeColor,
 	theme,
 } from "./theme/theme.ts";
 
@@ -975,82 +954,8 @@ export class InteractiveMode {
 		};
 	}
 
-	// =========================================================================
-	// Extension System
-	// =========================================================================
-
-	private formatDisplayPath(p: string): string {
-		return formatDisplayPath(p);
-	}
-
-	private formatExtensionDisplayPath(resourcePath: string): string {
-		return formatExtensionDisplayPath(resourcePath);
-	}
-
-	private formatContextPath(p: string): string {
-		return formatContextPath(this.sessionManager.getCwd(), p);
-	}
-
 	private getStartupExpansionState(): boolean {
 		return this.options.verbose || this.toolOutputExpanded;
-	}
-
-	private getShortPath(fullPath: string, sourceInfo?: SourceInfo): string {
-		return getShortPath(fullPath, sourceInfo);
-	}
-
-	private getCompactPathLabel(resourcePath: string, sourceInfo?: SourceInfo): string {
-		return getCompactPathLabel(resourcePath, sourceInfo);
-	}
-
-	private getCompactPackageSourceLabel(sourceInfo?: SourceInfo): string {
-		return getCompactPackageSourceLabel(sourceInfo);
-	}
-
-	private getCompactExtensionLabel(resourcePath: string, sourceInfo?: SourceInfo): string {
-		return getCompactExtensionLabel(resourcePath, sourceInfo);
-	}
-
-	private getCompactDisplayPathSegments(resourcePath: string): string[] {
-		return getCompactDisplayPathSegments(resourcePath);
-	}
-
-	private getCompactNonPackageExtensionLabel(
-		resourcePath: string,
-		index: number,
-		allPaths: Array<{ path: string; segments: string[] }>,
-	): string {
-		return getCompactNonPackageExtensionLabel(resourcePath, index, allPaths);
-	}
-
-	private getCompactExtensionLabels(extensions: Array<{ path: string; sourceInfo?: SourceInfo }>): string[] {
-		return getCompactExtensionLabels(extensions);
-	}
-
-	private getScopeGroup(sourceInfo?: SourceInfo): "user" | "project" | "path" {
-		return getScopeGroup(sourceInfo);
-	}
-
-	private isPackageSource(sourceInfo?: SourceInfo): boolean {
-		return isPackageSource(sourceInfo);
-	}
-
-	private buildScopeGroups(items: Array<{ path: string; sourceInfo?: SourceInfo }>) {
-		return buildScopeGroups(items);
-	}
-
-	private formatScopeGroups(
-		groups: ReturnType<typeof buildScopeGroups>,
-		options: {
-			formatPath: (item: { path: string; sourceInfo?: SourceInfo }) => string;
-			formatPackagePath: (item: { path: string; sourceInfo?: SourceInfo }, source: string) => string;
-		},
-	): string {
-		return formatScopeGroups(groups, options);
-	}
-
-	private formatDiagnostics(diagnostics: readonly ResourceDiagnostic[], sourceInfos: Map<string, SourceInfo>): string {
-		return formatDiagnostics(diagnostics, sourceInfos);
 	}
 
 	private showLoadedResources(options?: {

@@ -104,6 +104,14 @@ export interface ExtensionWidgetOptions {
 
 /** Raw terminal input listener for extensions. */
 export type TerminalInputHandler = (data: string) => { consume?: boolean; data?: string } | undefined;
+export type {
+	ForkHandler,
+	NavigateTreeHandler,
+	NewSessionHandler,
+	ReloadHandler,
+	ShutdownHandler,
+	SwitchSessionHandler,
+} from "./runner.ts";
 
 /** Working indicator configuration for the interactive streaming loader. */
 export interface WorkingIndicatorOptions {

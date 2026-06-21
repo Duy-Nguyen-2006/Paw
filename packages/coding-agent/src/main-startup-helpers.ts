@@ -4,8 +4,8 @@
 
 import chalk from "chalk";
 import type { Args, Mode } from "./cli/args.ts";
-import type { AppMode } from "./core/project-trust.ts";
 import { exportFromFile } from "./core/export-html/index.ts";
+import type { AppMode } from "./core/project-trust.ts";
 
 export function isTruthyEnvFlag(value: string | undefined): boolean {
 	if (!value) return false;
@@ -40,7 +40,9 @@ export function applyOfflineMode(args: string[]): void {
 	process.env.PI_SKIP_VERSION_CHECK = "1";
 }
 
-export function reportDiagnosticsAndMaybeExit(diagnostics: Array<{ type: "warning" | "error"; message: string }>): boolean {
+export function reportDiagnosticsAndMaybeExit(
+	diagnostics: Array<{ type: "warning" | "error"; message: string }>,
+): boolean {
 	for (const d of diagnostics) {
 		const color = d.type === "error" ? chalk.red : chalk.yellow;
 		console.error(color(`${d.type === "error" ? "Error" : "Warning"}: ${d.message}`));

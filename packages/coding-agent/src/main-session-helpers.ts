@@ -6,8 +6,8 @@ import { createInterface } from "node:readline";
 import chalk from "chalk";
 import type { Args } from "./cli/args.ts";
 import { selectSession } from "./cli/session-picker.ts";
-import type { SettingsManager } from "./core/settings-manager.ts";
 import { assertValidSessionId, SessionManager } from "./core/session-manager.ts";
+import type { SettingsManager } from "./core/settings-manager.ts";
 import { initTheme, stopThemeWatcher } from "./modes/interactive/theme/theme.ts";
 import { resolvePath } from "./utils/paths.ts";
 
@@ -28,7 +28,11 @@ export async function findLocalSessionByExactId(
 	return localMatch ? { type: "local", path: localMatch.path } : undefined;
 }
 
-export async function resolveSessionPath(sessionArg: string, cwd: string, sessionDir?: string): Promise<ResolvedSession> {
+export async function resolveSessionPath(
+	sessionArg: string,
+	cwd: string,
+	sessionDir?: string,
+): Promise<ResolvedSession> {
 	if (sessionArg.includes("/") || sessionArg.includes("\\") || sessionArg.endsWith(".jsonl")) {
 		return { type: "path", path: resolvePath(sessionArg, cwd) };
 	}
@@ -99,7 +103,12 @@ export function validateSessionIdFlags(parsed: Args): void {
 	}
 }
 
-export function forkSessionOrExit(sourcePath: string, cwd: string, sessionDir?: string, sessionId?: string): SessionManager {
+export function forkSessionOrExit(
+	sourcePath: string,
+	cwd: string,
+	sessionDir?: string,
+	sessionId?: string,
+): SessionManager {
 	try {
 		return SessionManager.forkFrom(sourcePath, cwd, sessionDir, { id: sessionId });
 	} catch (error: unknown) {

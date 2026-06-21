@@ -18,7 +18,11 @@ export function isPrintableAscii(str: string): boolean {
 	return true;
 }
 
-export function truncateFragmentGraphemeOnly(text: string, maxWidth: number, graphemeWidth: (s: string) => number): TruncateFragmentResult {
+export function truncateFragmentGraphemeOnly(
+	text: string,
+	maxWidth: number,
+	graphemeWidth: (s: string) => number,
+): TruncateFragmentResult {
 	let result = "";
 	let width = 0;
 	for (const { segment } of graphemeSegmenter.segment(text)) {

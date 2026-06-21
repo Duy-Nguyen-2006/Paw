@@ -1,6 +1,6 @@
 import type { Token, Tokens } from "marked";
-import { wrapTextWithAnsi } from "../utils.ts";
 import { getCapabilities, hyperlink } from "../terminal-image.ts";
+import { wrapTextWithAnsi } from "../utils.ts";
 import type { MarkdownTheme } from "./markdown.ts";
 
 export interface InlineStyleContext {
@@ -18,20 +18,14 @@ export function appendSpacingAfterBlock(lines: string[], nextTokenType: string |
 	}
 }
 
-export function buildHeadingStyleFn(
-	headingLevel: number,
-	theme: MarkdownTheme,
-): (text: string) => string {
+export function buildHeadingStyleFn(headingLevel: number, theme: MarkdownTheme): (text: string) => string {
 	if (headingLevel === 1) {
 		return (text: string) => theme.heading(theme.bold(theme.underline(text)));
 	}
 	return (text: string) => theme.heading(theme.bold(text));
 }
 
-export function renderCodeBlockLines(
-	token: Tokens.Code,
-	theme: MarkdownTheme,
-): string[] {
+export function renderCodeBlockLines(token: Tokens.Code, theme: MarkdownTheme): string[] {
 	const indent = theme.codeBlockIndent ?? "  ";
 	const lines: string[] = [];
 	lines.push(theme.codeBlockBorder(`\`\`\`${token.lang || ""}`));

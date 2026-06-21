@@ -7,7 +7,7 @@
  * cancellation short-circuit.
  */
 
-import type { EmitErrorFn, EmitDispatchFn } from "./runner-emit-helpers.ts";
+import type { EmitDispatchFn, EmitErrorFn } from "./runner-emit-helpers.ts";
 import { processSessionBeforeHandlersForExtension } from "./runner-emit-helpers.ts";
 import type { RunnerEmitEvent, RunnerEmitResult, SessionBeforeEventResult } from "./runner-types.ts";
 import type { Extension, ExtensionContext, SessionShutdownEvent } from "./types.ts";
@@ -43,7 +43,7 @@ export async function emitRunnerEventAcrossExtensions<TEvent extends RunnerEmitE
 }
 
 async function processExtensionHandlersForEvent<TEvent extends RunnerEmitEvent>(
-	extensions: Extension[],
+	_extensions: Extension[],
 	ctx: ExtensionContext,
 	event: TEvent,
 	ext: Extension,

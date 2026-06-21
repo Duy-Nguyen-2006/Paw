@@ -384,7 +384,12 @@ function mapPawCompleteVerificationResult(
 				lockReleased,
 			};
 		case "not_locked":
-			return mapPawNotLockedCommandFields(sessionId, completion.reason, lockReleased, completion.staleReason);
+			return mapPawNotLockedCommandFields(
+				sessionId,
+				completion.reason,
+				lockReleased,
+				completion.reason === "stale" ? completion.staleReason : undefined,
+			);
 		case "locked_by_other":
 			return {
 				status: "locked_by_other",

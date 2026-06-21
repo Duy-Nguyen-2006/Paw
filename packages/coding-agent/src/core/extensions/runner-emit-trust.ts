@@ -72,4 +72,3 @@ export async function emitProjectTrustEvent(
 ): Promise<ProjectTrustEmitResult> {
 	return emitProjectTrustAcrossExtensions(extensionsResult.extensions, event, ctx);
 }
-

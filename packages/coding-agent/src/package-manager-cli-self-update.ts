@@ -14,14 +14,14 @@ import {
 	type SelfUpdateCommand,
 	VERSION,
 } from "./config.ts";
+import type { UpdateTarget } from "./package-manager-cli-parse.ts";
+import { updateTargetIncludesSelf } from "./package-manager-cli-parse.ts";
 import { spawnProcess } from "./utils/child-process.ts";
 import { getLatestPiRelease, isNewerPackageVersion } from "./utils/version-check.ts";
 import {
 	cleanupWindowsSelfUpdateQuarantine,
 	quarantineWindowsNativeDependencies,
 } from "./utils/windows-self-update.ts";
-import type { UpdateTarget } from "./package-manager-cli-parse.ts";
-import { updateTargetIncludesSelf } from "./package-manager-cli-parse.ts";
 
 const SELF_UPDATE_NOTE_MARKDOWN_THEME: MarkdownTheme = {
 	heading: (text) => chalk.bold(chalk.yellow(text)),

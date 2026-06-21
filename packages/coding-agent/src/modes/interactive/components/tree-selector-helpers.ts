@@ -50,18 +50,12 @@ function isSettingsEntryType(entry: SessionEntry): boolean {
 	);
 }
 
-export function entryPassesTreeFilterMode(
-	entry: SessionEntry,
-	filterMode: FilterMode,
-	hasLabel: boolean,
-): boolean {
+export function entryPassesTreeFilterMode(entry: SessionEntry, filterMode: FilterMode, hasLabel: boolean): boolean {
 	switch (filterMode) {
 		case "user-only":
 			return entry.type === "message" && entry.message.role === "user";
 		case "no-tools":
-			return (
-				!isSettingsEntryType(entry) && !(entry.type === "message" && entry.message.role === "toolResult")
-			);
+			return !isSettingsEntryType(entry) && !(entry.type === "message" && entry.message.role === "toolResult");
 		case "labeled-only":
 			return hasLabel;
 		case "all":
@@ -71,10 +65,7 @@ export function entryPassesTreeFilterMode(
 	}
 }
 
-export function shouldHideToolOnlyAssistant(
-	entry: SessionEntry,
-	currentLeafId: string | null,
-): boolean {
+export function shouldHideToolOnlyAssistant(entry: SessionEntry, currentLeafId: string | null): boolean {
 	if (entry.type !== "message" || entry.message.role !== "assistant") {
 		return false;
 	}
@@ -87,10 +78,7 @@ export function shouldHideToolOnlyAssistant(
 	return !hasText && !isErrorOrAborted;
 }
 
-export function collectFoldDescendantSkipIds(
-	flatNodes: TreeFlatNode[],
-	foldedNodes: Set<string>,
-): Set<string> {
+export function collectFoldDescendantSkipIds(flatNodes: TreeFlatNode[], foldedNodes: Set<string>): Set<string> {
 	const skipSet = new Set<string>();
 	for (const flatNode of flatNodes) {
 		const { id, parentId } = flatNode.node.entry;
@@ -129,11 +117,7 @@ export function buildContainsActiveMap(
 	return containsActive;
 }
 
-export function computeChildIndent(
-	indent: number,
-	multipleChildren: boolean,
-	justBranched: boolean,
-): number {
+export function computeChildIndent(indent: number, multipleChildren: boolean, justBranched: boolean): number {
 	if (multipleChildren) {
 		return indent + 1;
 	}

@@ -34,7 +34,18 @@ const FUNCTIONAL_CODEPOINTS = {
 	end: -15,
 } as const;
 
-type LegacyModifierKey = "up" | "down" | "left" | "right" | "clear" | "insert" | "delete" | "pageUp" | "pageDown" | "home" | "end";
+type LegacyModifierKey =
+	| "up"
+	| "down"
+	| "left"
+	| "right"
+	| "clear"
+	| "insert"
+	| "delete"
+	| "pageUp"
+	| "pageDown"
+	| "home"
+	| "end";
 
 export type KeyMatchDeps = {
 	kittyProtocolActive: boolean;

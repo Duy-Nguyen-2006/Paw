@@ -58,10 +58,7 @@ export interface WordWrapOverflowResult {
 	newChunk?: { text: string; startIndex: number; endIndex: number };
 }
 
-export function resolveWordWrapOverflow(
-	ctx: WordWrapOverflowContext,
-	graphemeWidth: number,
-): WordWrapOverflowResult {
+export function resolveWordWrapOverflow(ctx: WordWrapOverflowContext, graphemeWidth: number): WordWrapOverflowResult {
 	const { line, chunkStart, charIndex, currentWidth, wrapOppIndex, wrapOppWidth, maxWidth } = ctx;
 	if (wrapOppIndex >= 0 && currentWidth - wrapOppWidth + graphemeWidth <= maxWidth) {
 		return {

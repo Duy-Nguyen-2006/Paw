@@ -1,14 +1,14 @@
 import type { Token, Tokens } from "marked";
+import type { MarkdownTheme } from "./markdown.ts";
+import type { RenderTokenFn } from "./markdown-render-helpers.ts";
 import {
 	appendSpacingAfterBlock,
 	buildHeadingStyleFn,
+	type InlineStyleContext,
 	renderBlockquoteLines,
 	renderCodeBlockLines,
 	shouldAddBlockSpacing,
-	type InlineStyleContext,
 } from "./markdown-render-helpers.ts";
-import type { MarkdownTheme } from "./markdown.ts";
-import type { RenderTokenFn } from "./markdown-render-helpers.ts";
 
 export function renderBlockToken(
 	token: Token,

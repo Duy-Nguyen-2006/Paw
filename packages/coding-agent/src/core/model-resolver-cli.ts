@@ -6,7 +6,7 @@ import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { type Api, type Model, modelsAreEqual } from "@earendil-works/pi-ai";
 import { isValidThinkingLevel } from "../cli/args.ts";
 import type { ModelRegistry } from "./model-registry.ts";
-import { buildFallbackModel, parseModelPattern, type ParsedModelResult } from "./model-resolver.ts";
+import { buildFallbackModel, type ParsedModelResult, parseModelPattern } from "./model-resolver.ts";
 
 export function buildProviderMap(availableModels: Model<Api>[]): Map<string, string> {
 	const providerMap = new Map<string, string>();
@@ -18,9 +18,7 @@ export function buildProviderMap(availableModels: Model<Api>[]): Map<string, str
 
 export function tryExactCliModelMatch(cliModel: string, availableModels: Model<Api>[]): Model<Api> | undefined {
 	const lower = cliModel.toLowerCase();
-	return availableModels.find(
-		(m) => m.id.toLowerCase() === lower || `${m.provider}/${m.id}`.toLowerCase() === lower,
-	);
+	return availableModels.find((m) => m.id.toLowerCase() === lower || `${m.provider}/${m.id}`.toLowerCase() === lower);
 }
 
 export function inferProviderFromSlash(

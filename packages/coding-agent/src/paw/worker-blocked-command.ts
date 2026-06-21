@@ -397,7 +397,12 @@ function mapPawBlockWorkerResult(
 				lockReleased,
 			};
 		case "not_locked":
-			return mapPawNotLockedCommandFields(sessionId, blocked.reason, lockReleased, blocked.staleReason);
+			return mapPawNotLockedCommandFields(
+				sessionId,
+				blocked.reason,
+				lockReleased,
+				blocked.reason === "stale" ? blocked.staleReason : undefined,
+			);
 		case "locked_by_other":
 			return {
 				status: "locked_by_other",

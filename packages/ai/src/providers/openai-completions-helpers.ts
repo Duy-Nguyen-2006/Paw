@@ -327,11 +327,7 @@ export function createCompletionStreamProcessor(deps: CompletionStreamProcessorD
 
 	const applyChoiceDelta = (choice: ChatCompletionChunk.Choice): void => {
 		if (!choice.delta) return;
-		if (
-			choice.delta.content !== null &&
-			choice.delta.content !== undefined &&
-			choice.delta.content.length > 0
-		) {
+		if (choice.delta.content !== null && choice.delta.content !== undefined && choice.delta.content.length > 0) {
 			applyTextDelta(choice.delta.content);
 		}
 		applyReasoningDelta(choice);
@@ -347,7 +343,10 @@ export function createCompletionStreamProcessor(deps: CompletionStreamProcessorD
 		const choice = Array.isArray(chunk.choices) ? chunk.choices[0] : undefined;
 		if (!choice) return;
 		if (!chunk.usage && (choice as { usage?: unknown }).usage) {
-			output.usage = parseChunkUsage((choice as { usage: Parameters<typeof parseChunkUsage>[0] }).usage, model);
+			output.usage = parseChunkUsage(
+				(choice as unknown as { usage: Parameters<typeof parseChunkUsage>[0] }).usage,
+				model,
+			);
 		}
 		if (choice.finish_reason) {
 			const finishReasonResult = mapStopReason(choice.finish_reason);
@@ -430,7 +429,10 @@ export function stripCompletionStreamScratchFields(output: AssistantMessage): vo
 	}
 }
 
-export function formatCompletionStreamError(error: unknown, options?: Pick<StreamOptions, "signal">): {
+export function formatCompletionStreamError(
+	error: unknown,
+	options?: Pick<StreamOptions, "signal">,
+): {
 	stopReason: AssistantMessage["stopReason"];
 	errorMessage: string;
 } {

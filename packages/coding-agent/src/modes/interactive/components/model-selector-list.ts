@@ -2,21 +2,21 @@
  * Model selector list rendering (reduces ModelSelectorComponent.updateList complexity).
  */
 
-import { Text } from "@earendil-works/pi-tui";
-import type { Model } from "@earendil-works/pi-ai";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import { modelsAreEqual } from "@earendil-works/pi-ai";
+import { Text } from "@earendil-works/pi-tui";
 import { theme } from "../theme/theme.ts";
 
 export interface ModelListItem {
 	provider: string;
 	id: string;
-	model: Model<unknown>;
+	model: Model<Api>;
 }
 
 export function formatModelSelectorLine(
 	item: ModelListItem,
 	isSelected: boolean,
-	currentModel: Model<unknown> | undefined,
+	currentModel: Model<Api> | undefined,
 ): string {
 	const isCurrent = modelsAreEqual(currentModel, item.model);
 	if (isSelected) {
@@ -37,10 +37,7 @@ export function computeModelListVisibleRange(
 	totalCount: number,
 	maxVisible = 10,
 ): { startIndex: number; endIndex: number } {
-	const startIndex = Math.max(
-		0,
-		Math.min(selectedIndex - Math.floor(maxVisible / 2), totalCount - maxVisible),
-	);
+	const startIndex = Math.max(0, Math.min(selectedIndex - Math.floor(maxVisible / 2), totalCount - maxVisible));
 	const endIndex = Math.min(startIndex + maxVisible, totalCount);
 	return { startIndex, endIndex };
 }

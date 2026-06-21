@@ -2,22 +2,14 @@ import { Marked, type Token, Tokenizer, type Tokens } from "marked";
 import type { Component } from "../tui.ts";
 import { wrapTextWithAnsi } from "../utils.ts";
 import { renderSingleInlineToken, stripTrailingStylePrefixes } from "./markdown-inline-helpers.ts";
-import {
-	renderListItemLines,
-	resolveListBullet,
-	type RenderListFn,
-} from "./markdown-list-helpers.ts";
+import { type RenderListFn, renderListItemLines, resolveListBullet } from "./markdown-list-helpers.ts";
+import { appendRenderedLink, type InlineStyleContext, resolveTableColumnWidths } from "./markdown-render-helpers.ts";
 import {
 	applyHorizontalPaddingAndBackground,
 	buildVerticalPaddingLines,
 	wrapRenderedContentLines,
 } from "./markdown-render-output-helpers.ts";
-import { appendRenderedLink, type InlineStyleContext, resolveTableColumnWidths } from "./markdown-render-helpers.ts";
-import {
-	applyDefaultTextStyle,
-	computeDefaultStylePrefix,
-	getStylePrefixFromFn,
-} from "./markdown-style-helpers.ts";
+import { applyDefaultTextStyle, computeDefaultStylePrefix, getStylePrefixFromFn } from "./markdown-style-helpers.ts";
 import {
 	computeTableNaturalAndMinWidths,
 	renderTableDataRows,
@@ -320,7 +312,16 @@ export class Markdown implements Component {
 		lines.push(...this.buildTableHeaderLines(token, columnWidths, styleContext));
 		const separatorLine = buildTableBorderLine(columnWidths, "├", "┤", "─┼─");
 		lines.push(separatorLine);
-		lines.push(...renderTableDataRows(token.rows, columnWidths, (cells, ctx) => this.renderInlineTokens(cells, ctx), styleContext, wrapCellText, separatorLine));
+		lines.push(
+			...renderTableDataRows(
+				token.rows,
+				columnWidths,
+				(cells, ctx) => this.renderInlineTokens(cells, ctx),
+				styleContext,
+				wrapCellText,
+				separatorLine,
+			),
+		);
 		lines.push(buildTableBorderLine(columnWidths, "└", "┘", "─┴─"));
 
 		if (nextTokenType && nextTokenType !== "space") {
@@ -345,11 +346,22 @@ export class Markdown implements Component {
 			styleContext,
 			maxUnbrokenWordWidth,
 		);
-		return resolveTableColumnWidths(naturalWidths, minWordWidths, availableWidth - borderOverhead, availableWidth, borderOverhead, numCols);
+		return resolveTableColumnWidths(
+			naturalWidths,
+			minWordWidths,
+			availableWidth - borderOverhead,
+			availableWidth,
+			borderOverhead,
+			numCols,
+		);
 	}
 
 	/** Render the header rows of a table to a list of already-wrapped strings. */
-	private buildTableHeaderLines(token: Tokens.Table, columnWidths: number[], styleContext: InlineStyleContext | undefined): string[] {
+	private buildTableHeaderLines(
+		token: Tokens.Table,
+		columnWidths: number[],
+		styleContext: InlineStyleContext | undefined,
+	): string[] {
 		const headerCellLines: string[][] = token.header.map((cell, i) => {
 			const text = this.renderInlineTokens(cell.tokens || [], styleContext);
 			return wrapCellText(text, columnWidths[i]!);

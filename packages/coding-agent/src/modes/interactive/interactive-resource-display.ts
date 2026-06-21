@@ -164,9 +164,7 @@ export function getCompactNonPackageExtensionLabel(
 	return segments.join("/");
 }
 
-export function getCompactExtensionLabels(
-	extensions: Array<{ path: string; sourceInfo?: SourceInfo }>,
-): string[] {
+export function getCompactExtensionLabels(extensions: Array<{ path: string; sourceInfo?: SourceInfo }>): string[] {
 	const nonPackageExtensions = extensions
 		.map((extension) => {
 			const segments = getCompactDisplayPathSegments(extension.path);

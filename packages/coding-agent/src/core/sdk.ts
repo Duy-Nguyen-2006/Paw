@@ -9,14 +9,14 @@ import { AuthStorage } from "./auth-storage.ts";
 
 import type { ExtensionRunner, LoadExtensionsResult, SessionStartEvent, ToolDefinition } from "./extensions/index.ts";
 import { ModelRegistry } from "./model-registry.ts";
+import { mergeProviderAttributionHeaders } from "./provider-attribution.ts";
+import type { ResourceLoader } from "./resource-loader.ts";
+import { DefaultResourceLoader } from "./resource-loader.ts";
 import {
 	createConvertToLlmWithBlockImages,
 	resolveInitialActiveToolNames,
 	resolveModelAndThinkingForSession,
 } from "./sdk-session-helpers.ts";
-import { mergeProviderAttributionHeaders } from "./provider-attribution.ts";
-import type { ResourceLoader } from "./resource-loader.ts";
-import { DefaultResourceLoader } from "./resource-loader.ts";
 import { getDefaultSessionDir, SessionManager } from "./session-manager.ts";
 import { SettingsManager } from "./settings-manager.ts";
 import { time } from "./timings.ts";
@@ -185,19 +185,14 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		time("resourceLoader.reload");
 	}
 
-	const {
-		model,
-		thinkingLevel,
-		modelFallbackMessage,
-		hasExistingSession,
-		hasThinkingEntry,
-	} = await resolveModelAndThinkingForSession({
-		optionsModel: options.model,
-		optionsThinkingLevel: options.thinkingLevel,
-		sessionManager,
-		settingsManager,
-		modelRegistry,
-	});
+	const { model, thinkingLevel, modelFallbackMessage, hasExistingSession, hasThinkingEntry } =
+		await resolveModelAndThinkingForSession({
+			optionsModel: options.model,
+			optionsThinkingLevel: options.thinkingLevel,
+			sessionManager,
+			settingsManager,
+			modelRegistry,
+		});
 
 	const allowedToolNames = options.tools ?? (options.noTools === "all" ? [] : undefined);
 	const excludedToolNames = options.excludeTools;

@@ -2,7 +2,9 @@ import type { Component } from "./tui.ts";
 
 export type OverlayFocusRestorePolicy = "clear" | "preserve";
 
-export type OverlayBlockedFocusResume = { status: "restore-overlay" } | { status: "focus-target"; target: Component | null };
+export type OverlayBlockedFocusResume =
+	| { status: "restore-overlay" }
+	| { status: "focus-target"; target: Component | null };
 
 /** Minimal overlay fields needed for focus-restore logic (full stack entry may include options, hidden, focusOrder). */
 export type OverlayFocusEntry = {

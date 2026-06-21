@@ -1,6 +1,6 @@
 import type { Token } from "marked";
-import type { InlineStyleContext } from "./markdown-render-helpers.ts";
 import type { MarkdownTheme } from "./markdown.ts";
+import type { InlineStyleContext } from "./markdown-render-helpers.ts";
 
 export type RenderInlineTokensFn = (tokens: Token[], styleContext?: InlineStyleContext) => string;
 

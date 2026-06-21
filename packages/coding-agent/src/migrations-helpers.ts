@@ -3,7 +3,7 @@
  */
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import chalk from "chalk";
 import { CONFIG_DIR_NAME, getAgentDir, getBinDir } from "./config.ts";
 import { migrateKeybindingsConfig } from "./core/keybindings.ts";
@@ -106,9 +106,7 @@ export function checkDeprecatedExtensionDirs(baseDir: string, label: string): st
 			const entries = readdirSync(toolsDir);
 			const customTools = entries.filter((e) => {
 				const lower = e.toLowerCase();
-				return (
-					lower !== "fd" && lower !== "rg" && lower !== "fd.exe" && lower !== "rg.exe" && !e.startsWith(".")
-				);
+				return lower !== "fd" && lower !== "rg" && lower !== "fd.exe" && lower !== "rg.exe" && !e.startsWith(".");
 			});
 			if (customTools.length > 0) {
 				warnings.push(
@@ -130,8 +128,5 @@ export function migrateExtensionSystem(cwd: string): string[] {
 	migrateCommandsToPrompts(agentDir, "Global");
 	migrateCommandsToPrompts(projectDir, "Project");
 
-	return [
-		...checkDeprecatedExtensionDirs(agentDir, "Global"),
-		...checkDeprecatedExtensionDirs(projectDir, "Project"),
-	];
+	return [...checkDeprecatedExtensionDirs(agentDir, "Global"), ...checkDeprecatedExtensionDirs(projectDir, "Project")];
 }

@@ -21,11 +21,10 @@ import { AuthStorage } from "./core/auth-storage.ts";
 import type { ExtensionFactory } from "./core/extensions/types.ts";
 import { configureHttpDispatcher } from "./core/http-dispatcher.ts";
 import type { ModelRegistry } from "./core/model-registry.ts";
-import { resolveCliModel, resolveModelScope, type ScopedModel } from "./core/model-resolver.ts";
+import { resolveCliModel, type ScopedModel } from "./core/model-resolver.ts";
 import { restoreStdout, takeOverStdout } from "./core/output-guard.ts";
 import type { AppMode } from "./core/project-trust.ts";
 import type { CreateAgentSessionOptions } from "./core/sdk.ts";
-import { buildCreateRuntime, type RuntimeFactoryContext } from "./main-runtime-factory.ts";
 import {
 	formatMissingSessionCwdPrompt,
 	getMissingSessionCwdIssue,
@@ -36,12 +35,7 @@ import { SessionManager } from "./core/session-manager.ts";
 import { SettingsManager } from "./core/settings-manager.ts";
 import { printTimings, resetTimings, time } from "./core/timings.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./core/trust-manager.ts";
-import { runMigrations, showDeprecationWarnings } from "./migrations.ts";
-import { InteractiveMode, runPrintMode, runRpcMode } from "./modes/index.ts";
-import { initTheme, stopThemeWatcher } from "./modes/interactive/theme/theme.ts";
-import { handleConfigCommand, handlePackageCommand } from "./package-manager-cli.ts";
-import { handlePawCommand } from "./paw/init-command.ts";
-import { isLocalPath, normalizePath, resolvePath } from "./utils/paths.ts";
+import { buildCreateRuntime, type RuntimeFactoryContext } from "./main-runtime-factory.ts";
 import { createSessionManager, validateForkFlags, validateSessionIdFlags } from "./main-session-helpers.ts";
 import {
 	applyOfflineMode,
@@ -53,6 +47,12 @@ import {
 	shouldRunFirstTimeSetupCheck,
 	toPrintOutputMode,
 } from "./main-startup-helpers.ts";
+import { runMigrations, showDeprecationWarnings } from "./migrations.ts";
+import { InteractiveMode, runPrintMode, runRpcMode } from "./modes/index.ts";
+import { initTheme, stopThemeWatcher } from "./modes/interactive/theme/theme.ts";
+import { handleConfigCommand, handlePackageCommand } from "./package-manager-cli.ts";
+import { handlePawCommand } from "./paw/init-command.ts";
+import { isLocalPath, normalizePath, resolvePath } from "./utils/paths.ts";
 import { cleanupWindowsSelfUpdateQuarantine } from "./utils/windows-self-update.ts";
 
 /**

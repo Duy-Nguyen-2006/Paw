@@ -54,11 +54,7 @@ export function getTopLevelResourceBaseDir(cwd: string, agentDir: string, scope:
 	return scope === "project" ? join(cwd, CONFIG_DIR_NAME) : agentDir;
 }
 
-export function getTopLevelResourcePattern(
-	item: ConfigToggleResourceItem,
-	cwd: string,
-	agentDir: string,
-): string {
+export function getTopLevelResourcePattern(item: ConfigToggleResourceItem, cwd: string, agentDir: string): string {
 	const scope = item.metadata.scope as "user" | "project";
 	const baseDir = item.metadata.baseDir ?? getTopLevelResourceBaseDir(cwd, agentDir, scope);
 	return relative(baseDir, item.path);
@@ -77,8 +73,7 @@ export function toggleTopLevelResourceInSettings(
 	agentDir: string,
 ): void {
 	const scope = item.metadata.scope as "user" | "project";
-	const settings =
-		scope === "project" ? settingsManager.getProjectSettings() : settingsManager.getGlobalSettings();
+	const settings = scope === "project" ? settingsManager.getProjectSettings() : settingsManager.getGlobalSettings();
 	const arrayKey = item.resourceType;
 	const current = settings[arrayKey] ?? [];
 	const pattern = getTopLevelResourcePattern(item, cwd, agentDir);
@@ -92,8 +87,7 @@ export function togglePackageResourceInSettings(
 	enabled: boolean,
 ): void {
 	const scope = item.metadata.scope as "user" | "project";
-	const settings =
-		scope === "project" ? settingsManager.getProjectSettings() : settingsManager.getGlobalSettings();
+	const settings = scope === "project" ? settingsManager.getProjectSettings() : settingsManager.getGlobalSettings();
 
 	const packages = [...(settings.packages ?? [])] as PackageSource[];
 	const pkgIndex = packages.findIndex((pkg) => {

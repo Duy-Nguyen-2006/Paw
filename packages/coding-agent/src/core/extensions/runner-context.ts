@@ -17,7 +17,6 @@ import type {
 	NavigateTreeHandler,
 	NewSessionHandler,
 	ReloadHandler,
-	ShutdownHandler,
 	SwitchSessionHandler,
 } from "./types.ts";
 

@@ -7,15 +7,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { performance } from "node:perf_hooks";
 import { isKeyRelease, matchesKey } from "./keys.ts";
-import { resolveNextFocusForNonOverlayTarget, resolveNextFocusWhenClearing } from "./tui-focus-helpers.ts";
 import type { Terminal } from "./terminal.ts";
 import { isOsc11BackgroundColorResponse, parseOsc11BackgroundColor, type RgbColor } from "./terminal-colors.ts";
 import { deleteKittyImage, getCapabilities, isImageLine, setCellDimensions } from "./terminal-image.ts";
-import {
-	extractKittyImageIds,
-	getKittyImageReservedRows,
-	writeImageBlock,
-} from "./tui-kitty-image-helpers.ts";
+import { resolveNextFocusForNonOverlayTarget, resolveNextFocusWhenClearing } from "./tui-focus-helpers.ts";
+import { extractKittyImageIds, getKittyImageReservedRows, writeImageBlock } from "./tui-kitty-image-helpers.ts";
 import { resolveOverlayLayoutFromOptions } from "./tui-overlay-layout-helpers.ts";
 import { extractSegments, normalizeTerminalOutput, sliceByColumn, sliceWithWidth, visibleWidth } from "./utils.ts";
 

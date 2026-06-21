@@ -2,8 +2,8 @@
  * Shared compaction orchestration for manual and auto paths (reduces AgentSession S3776).
  */
 
-import type { Agent, ThinkingLevel } from "@earendil-works/pi-agent-core";
-import type { AssistantMessage, Model, StreamFn } from "@earendil-works/pi-ai";
+import type { Agent, StreamFn, ThinkingLevel } from "@earendil-works/pi-agent-core";
+import type { AssistantMessage, Model } from "@earendil-works/pi-ai";
 import { streamSimple } from "@earendil-works/pi-ai";
 import { applyCompactionToSession, emitCompactionExtensionEvents } from "./agent-session-compaction-apply.ts";
 import {

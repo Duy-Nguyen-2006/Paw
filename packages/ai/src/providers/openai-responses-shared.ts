@@ -171,11 +171,7 @@ function appendResponsesTextBlock(
 	} satisfies ResponseOutputMessage);
 }
 
-function appendResponsesToolCallBlock(
-	output: ResponseInput,
-	block: ToolCall,
-	isDifferentModel: boolean,
-): void {
+function appendResponsesToolCallBlock(output: ResponseInput, block: ToolCall, isDifferentModel: boolean): void {
 	const toolCall = block as ToolCall;
 	const [callId, itemIdRaw] = toolCall.id.split("|");
 	let itemId: string | undefined = itemIdRaw;

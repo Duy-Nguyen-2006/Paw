@@ -1,6 +1,6 @@
 import type { Token, Tokens } from "marked";
 import { visibleWidth, wrapTextWithAnsi } from "../utils.ts";
-import { resolveTableColumnWidths, type InlineStyleContext } from "./markdown-render-helpers.ts";
+import type { InlineStyleContext } from "./markdown-render-helpers.ts";
 
 export function getLongestWordWidth(text: string, maxWidth?: number): number {
 	const words = text.split(/\s+/).filter((word) => word.length > 0);
@@ -36,10 +36,7 @@ export function computeTableNaturalAndMinWidths(
 		for (let i = 0; i < row.length; i++) {
 			const cellText = renderInlineTokens(row[i].tokens || [], styleContext);
 			naturalWidths[i] = Math.max(naturalWidths[i] || 0, visibleWidth(cellText));
-			minWordWidths[i] = Math.max(
-				minWordWidths[i] || 1,
-				getLongestWordWidth(cellText, maxUnbrokenWordWidth),
-			);
+			minWordWidths[i] = Math.max(minWordWidths[i] || 1, getLongestWordWidth(cellText, maxUnbrokenWordWidth));
 		}
 	}
 	return { naturalWidths, minWordWidths };

@@ -26,12 +26,7 @@ export function parseKeyId(
 	};
 }
 
-export function buildModifierBitmask(parsed: {
-	ctrl: boolean;
-	shift: boolean;
-	alt: boolean;
-	super: boolean;
-}): number {
+export function buildModifierBitmask(parsed: { ctrl: boolean; shift: boolean; alt: boolean; super: boolean }): number {
 	let modifier = 0;
 	if (parsed.shift) modifier |= MODIFIERS.shift;
 	if (parsed.alt) modifier |= MODIFIERS.alt;

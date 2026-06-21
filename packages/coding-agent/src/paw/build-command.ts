@@ -458,8 +458,12 @@ type PawBuildStepFormatInput = Exclude<
 >;
 
 function formatPawBuildStepResult(result: PawBuildStepFormatInput): string {
-	const formatter = PAW_BUILD_STEP_FORMATTERS[result.status];
-	return formatter(result as never);
+	const formatters = PAW_BUILD_STEP_FORMATTERS as unknown as Record<
+		string,
+		(result: PawBuildStepFormatInput) => string
+	>;
+	const formatter = formatters[result.status];
+	return formatter(result);
 }
 
 const PAW_BUILD_STEP_FORMATTERS: {

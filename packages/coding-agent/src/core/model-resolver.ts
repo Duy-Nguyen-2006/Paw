@@ -3,11 +3,11 @@
  */
 
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
-import { type Api, type KnownProvider, type Model } from "@earendil-works/pi-ai";
+import type { Api, KnownProvider, Model } from "@earendil-works/pi-ai";
 import chalk from "chalk";
 import { isValidThinkingLevel } from "../cli/args.ts";
-import { resolveModelScopeFromPatterns } from "./model-resolver-scope.ts";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.ts";
+import type { ModelRegistry } from "./model-registry.ts";
 import {
 	buildProviderFallbackResult,
 	buildProviderMap,
@@ -17,7 +17,7 @@ import {
 	tryExactCliModelMatch,
 	tryInferredProviderFallback,
 } from "./model-resolver-cli.ts";
-import type { ModelRegistry } from "./model-registry.ts";
+import { resolveModelScopeFromPatterns } from "./model-resolver-scope.ts";
 
 /** Default model IDs for each known provider */
 export const defaultModelPerProvider: Record<KnownProvider, string> = {
@@ -169,7 +169,11 @@ export interface ParsedModelResult {
 	warning: string | undefined;
 }
 
-export function buildFallbackModel(provider: string, modelId: string, availableModels: Model<Api>[]): Model<Api> | undefined {
+export function buildFallbackModel(
+	provider: string,
+	modelId: string,
+	availableModels: Model<Api>[],
+): Model<Api> | undefined {
 	const providerModels = availableModels.filter((m) => m.provider === provider);
 	if (providerModels.length === 0) return undefined;
 
@@ -375,13 +379,7 @@ export function resolveCliModel(options: {
 	}
 
 	if (provider) {
-		const providerFallback = buildProviderFallbackResult(
-			provider,
-			pattern,
-			availableModels,
-			cliThinking,
-			warning,
-		);
+		const providerFallback = buildProviderFallbackResult(provider, pattern, availableModels, cliThinking, warning);
 		if (providerFallback) {
 			return {
 				model: providerFallback.model,

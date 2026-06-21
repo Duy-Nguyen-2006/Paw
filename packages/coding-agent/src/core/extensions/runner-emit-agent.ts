@@ -10,10 +10,7 @@
 
 import type { ImageContent } from "@earendil-works/pi-ai";
 import type { BuildSystemPromptOptions } from "../system-prompt.ts";
-import {
-	type EmitErrorFn,
-	emitBeforeAgentStartAcrossExtensions,
-} from "./runner-emit-helpers.ts";
+import { type EmitErrorFn, emitBeforeAgentStartAcrossExtensions } from "./runner-emit-helpers.ts";
 import type { BeforeAgentStartCombinedResult } from "./runner-types.ts";
 import type { Extension, ExtensionContext } from "./types.ts";
 
@@ -45,10 +42,7 @@ function cloneContextWithSystemPrompt(
 	systemPromptState: { value: string },
 	assertActive: () => void,
 ): ExtensionContext {
-	const cloned = Object.defineProperties(
-		{},
-		Object.getOwnPropertyDescriptors(baseCtx),
-	) as ExtensionContext;
+	const cloned = Object.defineProperties({}, Object.getOwnPropertyDescriptors(baseCtx)) as ExtensionContext;
 	cloned.getSystemPrompt = () => {
 		assertActive();
 		return systemPromptState.value;

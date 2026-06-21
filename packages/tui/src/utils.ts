@@ -1,20 +1,19 @@
 import { eastAsianWidth } from "get-east-asian-width";
+import { extractAnsiCode } from "./utils-ansi.ts";
 import {
 	accumulateTruncateSegment,
 	finalizeTruncatedResult,
 	isPrintableAscii,
+	type TruncateAccumState,
 	truncateFragmentAnsiAndTabs,
 	truncateFragmentGraphemeOnly,
 	truncateGraphemeSimple,
 	truncateWhenEllipsisTooWide,
-	type TruncateAccumState,
 } from "./utils-helpers.ts";
-import { extractAnsiCode } from "./utils-ansi.ts";
 import {
 	appendLongTokenToWrap,
 	applyWrapTokenOverflow,
 	collectWordBreakSegments,
-	flushWrapLineWithReset,
 	type WrapLineState,
 } from "./utils-wrap-helpers.ts";
 
@@ -640,7 +639,9 @@ function wrapSingleLine(line: string, width: number): string[] {
 		const isWhitespace = token.trim() === "";
 
 		if (tokenVisibleLength > width && !isWhitespace) {
-			appendLongTokenToWrap(token, width, tracker, wrapped, state, (w, wd, tr) => breakLongWord(w, wd, tr as AnsiCodeTracker));
+			appendLongTokenToWrap(token, width, tracker, wrapped, state, (w, wd, tr) =>
+				breakLongWord(w, wd, tr as AnsiCodeTracker),
+			);
 			continue;
 		}
 

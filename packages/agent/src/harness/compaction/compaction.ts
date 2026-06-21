@@ -9,11 +9,7 @@ import {
 } from "../messages.ts";
 import { buildSessionContext } from "../session/session.ts";
 import { type CompactionEntry, CompactionError, err, ok, type Result, type SessionTreeEntry } from "../types.ts";
-import {
-	adjustCutIndexToAllowedBoundary,
-	findValidCutPoints,
-	selectCutIndex,
-} from "./compaction-cut-helpers.ts";
+import { adjustCutIndexToAllowedBoundary, findValidCutPoints, selectCutIndex } from "./compaction-cut-helpers.ts";
 import {
 	computeFileLists,
 	createFileOps,

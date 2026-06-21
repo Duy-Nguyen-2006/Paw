@@ -19,7 +19,7 @@ import type { AppMode } from "./core/project-trust.ts";
 import { resolveProjectTrusted } from "./core/project-trust.ts";
 import type { ResourceLoader } from "./core/resource-loader.ts";
 import type { CreateAgentSessionOptions } from "./core/sdk.ts";
-import type { SettingsManager } from "./core/settings-manager.ts";
+import { SettingsManager } from "./core/settings-manager.ts";
 import { hasTrustRequiringProjectResources, type ProjectTrustStore } from "./core/trust-manager.ts";
 
 export interface RuntimeFactoryContext {

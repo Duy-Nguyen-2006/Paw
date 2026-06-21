@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { lstat, mkdir, readdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { basename, dirname, relative, resolve } from "node:path";
 import { APP_NAME } from "../config.ts";
 import {
@@ -513,7 +513,7 @@ async function findLatestPawCheckpointName(repoRoot: string, sessionId: string):
 			directories.push(entry);
 		}
 	}
-	return directories.toSorted((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" })).at(-1) ?? null;
+	return [...directories].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" })).at(-1) ?? null;
 }
 
 function formatRollbackInspectionLines(

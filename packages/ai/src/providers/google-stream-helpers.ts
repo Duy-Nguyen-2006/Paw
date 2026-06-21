@@ -4,15 +4,9 @@
 
 import type { Part } from "@google/genai";
 import { calculateCost } from "../models.ts";
-import type {
-	AssistantMessage,
-	Model,
-	TextContent,
-	ThinkingContent,
-	ToolCall,
-} from "../types.ts";
+import type { Api, AssistantMessage, Model, TextContent, ThinkingContent, ToolCall } from "../types.ts";
 import type { AssistantMessageEventStream } from "../utils/event-stream.ts";
-import { isThinkingPart, mapStopReason, retainThoughtSignature } from "./google-shared.ts";
+import { isThinkingPart, mapStopReasonString, retainThoughtSignature } from "./google-shared.ts";
 
 export type GoogleStreamChunk = {
 	responseId?: string;
@@ -168,8 +162,7 @@ function processFunctionCallPart(
 	}
 
 	const providedId = part.functionCall.id;
-	const needsNewId =
-		!providedId || output.content.some((b) => b.type === "toolCall" && b.id === providedId);
+	const needsNewId = !providedId || output.content.some((b) => b.type === "toolCall" && b.id === providedId);
 	const toolCallId = needsNewId
 		? `${part.functionCall.name}_${Date.now()}_${++state.toolCallCounter.value}`
 		: providedId;
@@ -207,14 +200,14 @@ function processCandidateParts(
 }
 
 function applyFinishReason(output: AssistantMessage, finishReason: string): void {
-	output.stopReason = mapStopReason(finishReason);
+	output.stopReason = mapStopReasonString(finishReason);
 	if (output.content.some((b) => b.type === "toolCall")) {
 		output.stopReason = "toolUse";
 	}
 }
 
-function applyUsageMetadata(
-	model: Model,
+function applyUsageMetadata<TApi extends Api>(
+	model: Model<TApi>,
 	output: AssistantMessage,
 	usageMetadata: NonNullable<GoogleStreamChunk["usageMetadata"]>,
 ): void {
@@ -238,11 +231,11 @@ function applyUsageMetadata(
 /**
  * Process one chunk from generateContentStream.
  */
-export function processGoogleStreamChunk(
+export function processGoogleStreamChunk<TApi extends Api>(
 	stream: AssistantMessageEventStream,
 	output: AssistantMessage,
 	state: GoogleStreamProcessState,
-	model: Model,
+	model: Model<TApi>,
 	chunk: GoogleStreamChunk,
 ): void {
 	output.responseId ||= chunk.responseId;
@@ -272,10 +265,7 @@ export function finalizeOpenGoogleStreamBlock(
 	endCurrentTextOrThinkingBlock(stream, output, state.currentBlock);
 }
 
-export function assertGoogleStreamCompleted(
-	output: AssistantMessage,
-	signal: AbortSignal | undefined,
-): void {
+export function assertGoogleStreamCompleted(output: AssistantMessage, signal: AbortSignal | undefined): void {
 	if (signal?.aborted) {
 		throw new Error("Request was aborted");
 	}

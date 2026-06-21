@@ -19,6 +19,7 @@
 
 import { EventEmitter } from "node:events";
 import { ESC, isCompleteEscapeSequence } from "./stdin-buffer-escape-helpers.ts";
+
 const BRACKETED_PASTE_START = "\x1b[200~";
 const BRACKETED_PASTE_END = "\x1b[201~";
 
@@ -69,10 +70,7 @@ function extractCompleteSequences(buffer: string): { sequences: string[]; remain
  * to `sequences`. Returns the number of characters consumed, plus an optional
  * `remainder` string when the buffer is exhausted mid-sequence.
  */
-function extractOneEscapeSequence(
-	remaining: string,
-	sequences: string[],
-): { consumed: number; remainder?: string } {
+function extractOneEscapeSequence(remaining: string, sequences: string[]): { consumed: number; remainder?: string } {
 	let seqEnd = 1;
 	while (seqEnd <= remaining.length) {
 		const candidate = remaining.slice(0, seqEnd);

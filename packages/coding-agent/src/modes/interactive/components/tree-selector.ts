@@ -24,13 +24,13 @@ import {
 	computeChildIndent,
 	entryPassesTreeFilterMode,
 	extractAssistantToolCalls,
-	formatTreeLabelTimestamp,
-	getTreeSearchableText,
 	type FilterMode,
+	formatTreeLabelTimestamp,
 	type GutterInfo,
+	getTreeSearchableText,
+	shouldHideToolOnlyAssistant,
 	type ToolCallInfo,
 	type TreeFlatNode,
-	shouldHideToolOnlyAssistant,
 } from "./tree-selector-helpers.ts";
 
 export type { FilterMode } from "./tree-selector-helpers.ts";

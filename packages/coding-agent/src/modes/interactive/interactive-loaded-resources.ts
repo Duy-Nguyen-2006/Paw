@@ -2,11 +2,11 @@
  * Startup loaded-resources UI (reduces showLoadedResources cognitive complexity).
  */
 
-import { Container, Spacer, Text } from "@earendil-works/pi-tui";
+import { type Component, type Container, Spacer, Text } from "@earendil-works/pi-tui";
 import type { AgentSession } from "../../core/agent-session.ts";
 import type { ResourceDiagnostic } from "../../core/resource-loader.ts";
-import type { SourceInfo } from "../../core/source-info.ts";
 import type { SettingsManager } from "../../core/settings-manager.ts";
+import type { SourceInfo } from "../../core/source-info.ts";
 import {
 	buildScopeGroups,
 	formatContextPath,
@@ -19,7 +19,7 @@ import {
 	getCompactPathLabel,
 	getShortPath,
 } from "./interactive-resource-display.ts";
-import { theme, type ThemeColor } from "./theme/theme.ts";
+import { type ThemeColor, theme } from "./theme/theme.ts";
 
 export interface ExpandableTextLike {
 	new (
@@ -28,7 +28,7 @@ export interface ExpandableTextLike {
 		expanded: boolean,
 		paddingX: number,
 		paddingY: number,
-	): { setExpanded(expanded: boolean): void };
+	): Component & { setExpanded(expanded: boolean): void };
 }
 
 export interface ShowLoadedResourcesParams {
@@ -75,14 +75,8 @@ function collectSourceInfos(
 	return sourceInfos;
 }
 
-function appendListingSections(params: ShowLoadedResourcesParams, sourceInfos: Map<string, SourceInfo>): void {
-	const {
-		chatContainer,
-		session,
-		cwd,
-		getStartupExpansionState,
-		ExpandableText,
-	} = params;
+function appendListingSections(params: ShowLoadedResourcesParams, _sourceInfos: Map<string, SourceInfo>): void {
+	const { chatContainer, session, cwd, getStartupExpansionState, ExpandableText } = params;
 
 	const sectionHeader = (name: string, color: ThemeColor = "mdHeading") => theme.fg(color, `[${name}]`);
 	const formatCompactList = (items: string[], listOptions?: { sort?: boolean }): string => {
@@ -222,8 +216,7 @@ function appendDiagnosticsSections(params: ShowLoadedResourcesParams, sourceInfo
 }
 
 export function showLoadedResourcesInChat(params: ShowLoadedResourcesParams): void {
-	const showListing =
-		params.force || params.options.verbose || !params.settingsManager.getQuietStartup();
+	const showListing = params.force || params.options.verbose || !params.settingsManager.getQuietStartup();
 	const showDiagnostics = showListing || params.showDiagnosticsWhenQuiet === true;
 	if (!showListing && !showDiagnostics) {
 		return;
@@ -238,12 +231,7 @@ export function showLoadedResourcesInChat(params: ShowLoadedResourcesParams): vo
 			path: extension.path,
 			sourceInfo: extension.sourceInfo,
 		}));
-	const sourceInfos = collectSourceInfos(
-		extensions,
-		skillsResult.skills,
-		promptsResult.prompts,
-		themesResult.themes,
-	);
+	const sourceInfos = collectSourceInfos(extensions, skillsResult.skills, promptsResult.prompts, themesResult.themes);
 
 	if (showListing) {
 		appendListingSections(params, sourceInfos);

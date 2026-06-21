@@ -22,7 +22,6 @@ if (process !== undefined && (process.versions?.node || process.versions?.bun)) 
 import { clampThinkingLevel } from "../models.ts";
 import { registerSessionResourceCleanup } from "../session-resources.ts";
 import type {
-	Api,
 	AssistantMessage,
 	Context,
 	Model,
@@ -671,9 +670,7 @@ function throwCodexEventError(event: Record<string, unknown>, type: string): nev
 
 function mapCodexResponseCompletedEvent(event: Record<string, unknown>): ResponseStreamEvent {
 	const response = (event as { response?: { status?: unknown } }).response;
-	const normalizedResponse = response
-		? { ...response, status: normalizeCodexStatus(response.status) }
-		: response;
+	const normalizedResponse = response ? { ...response, status: normalizeCodexStatus(response.status) } : response;
 	return { ...event, type: "response.completed", response: normalizedResponse } as ResponseStreamEvent;
 }
 

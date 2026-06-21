@@ -1,4 +1,4 @@
-import OpenAI from "openai";
+import type OpenAI from "openai";
 import type {
 	ChatCompletionAssistantMessageParam,
 	ChatCompletionChunk,
@@ -22,7 +22,6 @@ import type {
 	SimpleStreamOptions,
 	StopReason,
 	StreamFunction,
-	StreamOptions,
 	TextContent,
 	ThinkingContent,
 	Tool,
@@ -31,7 +30,6 @@ import type {
 } from "../types.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.ts";
-import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.ts";
 import {
 	assertCompletionStreamFinished,
 	buildCompletionRequestOptions,
@@ -42,11 +40,12 @@ import {
 	createOpenAICompletionsClient,
 	formatCompletionStreamError,
 	notifyCompletionOnResponse,
-	stripCompletionStreamScratchFields,
 	type OpenAICompletionsOptions,
 	type ResolvedOpenAICompletionsCompat,
 	type StreamingBlock,
+	stripCompletionStreamScratchFields,
 } from "./openai-completions-helpers.ts";
+import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.ts";
 import { buildBaseOptions } from "./simple-options.ts";
 import { transformMessages } from "./transform-messages.ts";
 
@@ -130,14 +129,7 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 			const compat = getCompat(model);
 			const cacheRetention = resolveCacheRetention(options?.cacheRetention);
 			const cacheSessionId = cacheRetention === "none" ? undefined : options?.sessionId;
-			const client = createOpenAICompletionsClient(
-				model,
-				context,
-				apiKey,
-				options?.headers,
-				cacheSessionId,
-				compat,
-			);
+			const client = createOpenAICompletionsClient(model, context, apiKey, options?.headers, cacheSessionId, compat);
 			let params = buildParams(model, context, options, compat, cacheRetention);
 			const nextParams = await options?.onPayload?.(params, model);
 			if (nextParams !== undefined) {
@@ -168,14 +160,14 @@ export const streamOpenAICompletions: StreamFunction<"openai-completions", OpenA
 			}
 			assertCompletionStreamFinished(output, state, options);
 
-			stream.push({ type: "done", reason: output.stopReason, message: output });
+			stream.push({ type: "done", reason: output.stopReason as "stop" | "length" | "toolUse", message: output });
 			stream.end();
 		} catch (error) {
 			stripCompletionStreamScratchFields(output);
 			const formatted = formatCompletionStreamError(error, options);
 			output.stopReason = formatted.stopReason;
 			output.errorMessage = formatted.errorMessage;
-			stream.push({ type: "error", reason: output.stopReason, error: output });
+			stream.push({ type: "error", reason: output.stopReason as "aborted" | "error", error: output });
 			stream.end();
 		}
 	})();

@@ -2,7 +2,7 @@
  * Tool execution display helpers (reduces ToolExecutionComponent.updateDisplay complexity).
  */
 
-import { Box, type Component, Container, getCapabilities, Image, Spacer, Text } from "@earendil-works/pi-tui";
+import { Box, type Component, type Container, getCapabilities, Image, Spacer } from "@earendil-works/pi-tui";
 import type { ToolDefinition, ToolRenderContext } from "../../../core/extensions/types.ts";
 import { getTextOutput as getRenderedTextOutput } from "../../../core/tools/render-utils.ts";
 import { theme } from "../theme/theme.ts";
@@ -28,8 +28,8 @@ export interface ToolRendererShellState {
 	rendererState: unknown;
 	callRendererComponent?: Component;
 	resultRendererComponent?: Component;
-	getCallRenderer: () => ToolDefinition<unknown, unknown>["renderCall"] | undefined;
-	getResultRenderer: () => ToolDefinition<unknown, unknown>["renderResult"] | undefined;
+	getCallRenderer: () => ToolDefinition["renderCall"] | undefined;
+	getResultRenderer: () => ToolDefinition["renderResult"] | undefined;
 	getRenderShell: () => "default" | "self";
 	getRenderContext: (lastComponent: Component | undefined) => ToolRenderContext;
 	createCallFallback: () => Component;
@@ -111,7 +111,12 @@ export function renderToolResultInShell(state: ToolRendererShellState, renderCon
 	}
 }
 
-export function formatGenericToolExecution(toolName: string, args: unknown, result: ToolResultContent | undefined, showImages: boolean): string {
+export function formatGenericToolExecution(
+	toolName: string,
+	args: unknown,
+	result: ToolResultContent | undefined,
+	showImages: boolean,
+): string {
 	let text = theme.fg("toolTitle", theme.bold(toolName));
 	const content = JSON.stringify(args, null, 2);
 	if (content) {

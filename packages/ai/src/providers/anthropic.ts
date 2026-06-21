@@ -578,8 +578,6 @@ function finalizeAnthropicContentBlock(
 }
 
 function dispatchAnthropicStreamEvent(ctx: AnthropicStreamDispatchContext, event: RawMessageStreamEvent): void {
-	const { model } = ctx;
-
 	if (event.type === "message_start") {
 		applyAnthropicMessageStart(ctx, event);
 		return;
@@ -671,7 +669,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 			await consumeAnthropicResponse(response, dispatchCtx, options);
 
 			assertAnthropicStreamNotAborted(options, output);
-			stream.push({ type: "done", reason: output.stopReason, message: output });
+			stream.push({ type: "done", reason: output.stopReason as "stop" | "length" | "toolUse", message: output });
 			stream.end();
 		} catch (error) {
 			reportAnthropicStreamError(stream, output, options, error);
@@ -718,7 +716,7 @@ async function resolveAnthropicClient(
 	const dynamicHeaders = buildCopilotDynamicHeadersForModel(model, context);
 	const cacheRetention = options?.cacheRetention ?? resolveCacheRetention();
 	const cacheSessionId = cacheRetention === "none" ? undefined : options?.sessionId;
-	return createClient(
+	const created = createClient(
 		model,
 		apiKey,
 		options?.interleavedThinking ?? true,
@@ -727,6 +725,7 @@ async function resolveAnthropicClient(
 		dynamicHeaders,
 		cacheSessionId,
 	);
+	return { client: created.client, isOAuth: created.isOAuthToken };
 }
 
 function buildCopilotDynamicHeadersForModel(
@@ -1121,9 +1120,7 @@ function applyAnthropicAdaptiveThinking(
 		// The Anthropic SDK types can lag newly supported effort values such as "xhigh".
 		params.output_config =
 			options.effort === "xhigh"
-				? ({ effort: options.effort } as unknown as NonNullable<
-						MessageCreateParamsStreaming["output_config"]
-					>)
+				? ({ effort: options.effort } as unknown as NonNullable<MessageCreateParamsStreaming["output_config"]>)
 				: { effort: options.effort };
 	}
 }
@@ -1141,10 +1138,7 @@ function applyAnthropicBudgetThinking(
 	};
 }
 
-function applyAnthropicMetadata(
-	params: MessageCreateParamsStreaming,
-	options: AnthropicOptions | undefined,
-): void {
+function applyAnthropicMetadata(params: MessageCreateParamsStreaming, options: AnthropicOptions | undefined): void {
 	if (!options?.metadata) return;
 	const userId = options.metadata.user_id;
 	if (typeof userId === "string") {
@@ -1152,10 +1146,7 @@ function applyAnthropicMetadata(
 	}
 }
 
-function applyAnthropicToolChoice(
-	params: MessageCreateParamsStreaming,
-	options: AnthropicOptions | undefined,
-): void {
+function applyAnthropicToolChoice(params: MessageCreateParamsStreaming, options: AnthropicOptions | undefined): void {
 	if (!options?.toolChoice) return;
 	if (typeof options.toolChoice === "string") {
 		params.tool_choice = { type: options.toolChoice };

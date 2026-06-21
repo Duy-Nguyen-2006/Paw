@@ -1,16 +1,4 @@
 import type { AutocompleteProvider, AutocompleteSuggestions } from "../autocomplete.ts";
-import { getKeybindings } from "../keybindings.ts";
-import { decodePrintableKey, matchesKey } from "../keys.ts";
-import { KillRing } from "../kill-ring.ts";
-import { type Component, CURSOR_MARKER, type Focusable, type TUI } from "../tui.ts";
-import { UndoStack } from "../undo-stack.ts";
-import {
-	getGraphemeSegmenter,
-	getWordSegmenter,
-	isWhitespaceChar,
-	truncateToWidth,
-	visibleWidth,
-} from "../utils.ts";
 import {
 	buildDisplayLineWithCursor,
 	buildPasteMarker,
@@ -25,6 +13,12 @@ import {
 	resolveCursorInChunk,
 	resolveWordWrapOverflow,
 } from "../editor-helpers.ts";
+import { getKeybindings } from "../keybindings.ts";
+import { decodePrintableKey, matchesKey } from "../keys.ts";
+import { KillRing } from "../kill-ring.ts";
+import { type Component, CURSOR_MARKER, type Focusable, type TUI } from "../tui.ts";
+import { UndoStack } from "../undo-stack.ts";
+import { getGraphemeSegmenter, getWordSegmenter, isWhitespaceChar, truncateToWidth, visibleWidth } from "../utils.ts";
 import { findWordBackward, findWordForward } from "../word-navigation.ts";
 import { SelectList, type SelectListLayoutOptions, type SelectListTheme } from "./select-list.ts";
 
@@ -450,7 +444,9 @@ export class Editor implements Component, Focusable {
 		// autocomplete (e.g. slash-command menu) is visible.
 		const emitCursorMarker = this.focused;
 		for (const layoutLine of visibleLines) {
-			result.push(this.renderLayoutLine(layoutLine, contentWidth, paddingX, leftPadding, rightPadding, emitCursorMarker));
+			result.push(
+				this.renderLayoutLine(layoutLine, contentWidth, paddingX, leftPadding, rightPadding, emitCursorMarker),
+			);
 		}
 
 		result.push(this.renderBottomBorder(width, horizontal, layoutLines.length, visibleLines.length));
@@ -510,7 +506,12 @@ export class Editor implements Component, Focusable {
 	}
 
 	/** Build the bottom border line, with a `↓ N more` indicator when more content follows. */
-	private renderBottomBorder(width: number, horizontal: string, totalLayoutLines: number, visibleLineCount: number): string {
+	private renderBottomBorder(
+		width: number,
+		horizontal: string,
+		totalLayoutLines: number,
+		visibleLineCount: number,
+	): string {
 		const linesBelow = totalLayoutLines - (this.scrollOffset + visibleLineCount);
 		if (linesBelow === 0) {
 			return horizontal.repeat(width);
@@ -546,7 +547,7 @@ export class Editor implements Component, Focusable {
 	/** Append rendered autocomplete lines, if any, into the result buffer. */
 	private appendAutocompleteIfActive(
 		contentWidth: number,
-		paddingX: number,
+		_paddingX: number,
 		leftPadding: string,
 		rightPadding: string,
 		result: string[],
@@ -1111,7 +1112,12 @@ export class Editor implements Component, Focusable {
 		const decodedText = decodeCsiUPasteContent(pastedText);
 		const cleanText = this.normalizeText(decodedText);
 		const filteredText = filterNonPrintableKeepingNewlines(cleanText);
-		const withPathSpacing = prependSpaceBeforeFilePath(filteredText, this.state.lines, this.state.cursorLine, this.state.cursorCol);
+		const withPathSpacing = prependSpaceBeforeFilePath(
+			filteredText,
+			this.state.lines,
+			this.state.cursorLine,
+			this.state.cursorCol,
+		);
 
 		const pastedLines = withPathSpacing.split("\n");
 		const totalChars = withPathSpacing.length;

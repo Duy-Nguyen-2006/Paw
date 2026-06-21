@@ -9,7 +9,11 @@ export function extractCsiAnsiCode(str: string, pos: number): { code: string; le
 	return null;
 }
 
-export function extractDelimitedAnsiCode(str: string, pos: number, opener: string): { code: string; length: number } | null {
+export function extractDelimitedAnsiCode(
+	str: string,
+	pos: number,
+	opener: string,
+): { code: string; length: number } | null {
 	if (str[pos + 1] !== opener) return null;
 	let j = pos + 2;
 	while (j < str.length) {

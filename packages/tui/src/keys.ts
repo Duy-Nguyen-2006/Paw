@@ -1,12 +1,6 @@
 import { parseLegacyPlainKey } from "./keys-legacy-parse-helpers.ts";
-import { matchTabKey } from "./keys-match-tab-helpers.ts";
 import {
-	buildModifierBitmask,
-	isDigitKey,
-	matchPrintableKeyWithModifiers,
-	parseKeyId,
-} from "./keys-parse-helpers.ts";
-import {
+	type KeyMatchDeps,
 	FUNCTIONAL_CODEPOINTS as MATCH_FUNCTIONAL_CODEPOINTS,
 	matchArrowKey,
 	matchBackspaceKey,
@@ -16,8 +10,9 @@ import {
 	matchLeftArrowKey,
 	matchRightArrowKey,
 	matchSpaceKey,
-	type KeyMatchDeps,
 } from "./keys-match-helpers.ts";
+import { matchTabKey } from "./keys-match-tab-helpers.ts";
+import { buildModifierBitmask, isDigitKey, matchPrintableKeyWithModifiers, parseKeyId } from "./keys-parse-helpers.ts";
 
 /**
  * Keyboard input handling for terminal applications.

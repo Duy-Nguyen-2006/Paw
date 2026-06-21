@@ -2,7 +2,8 @@
  * Tree navigation helpers (reduces AgentSession.navigateTree S3776).
  */
 
-import type { Model, StreamFn } from "@earendil-works/pi-ai";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
+import type { Model } from "@earendil-works/pi-ai";
 import { generateBranchSummary } from "./compaction/index.ts";
 import type { ExtensionRunner, SessionBeforeTreeResult, TreePreparation } from "./extensions/index.ts";
 import type { BranchSummaryEntry, SessionEntry, SessionManager } from "./session-manager.ts";

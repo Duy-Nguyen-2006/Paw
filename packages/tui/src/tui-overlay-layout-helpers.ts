@@ -36,12 +36,7 @@ export function resolveAnchorRow(
 	}
 }
 
-export function resolveAnchorCol(
-	anchor: OverlayAnchor,
-	width: number,
-	availWidth: number,
-	marginLeft: number,
-): number {
+export function resolveAnchorCol(anchor: OverlayAnchor, width: number, availWidth: number, marginLeft: number): number {
 	switch (anchor) {
 		case "top-left":
 		case "left-center":
@@ -58,7 +53,12 @@ export function resolveAnchorCol(
 	}
 }
 
-export function resolvePercentRow(optRow: string, effectiveHeight: number, availHeight: number, marginTop: number): number {
+export function resolvePercentRow(
+	optRow: string,
+	effectiveHeight: number,
+	availHeight: number,
+	marginTop: number,
+): number {
 	const match = /^(\d+(?:\.\d+)?)%$/.exec(optRow);
 	if (!match) {
 		return resolveAnchorRow("center", effectiveHeight, availHeight, marginTop);
